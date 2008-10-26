@@ -4,6 +4,8 @@ INCLUDES = -I$(top_srcdir)/include
 
 lib_LTLIBRARIES = libvcl.la
 
+libvcl_la_LDFLAGS = -version-info 1:0:0
+
 libvcl_la_SOURCES = \
 	vcc_priv.h \
 	vcc_compile.h \
@@ -22,3 +24,15 @@ libvcl_la_SOURCES = \
 	vcc_token.c \
 	vcc_var.c \
 	vcc_xref.c
+
+EXTRA_DIST = vcc_gen_obj.tcl \
+	vcc_gen_fixed_token.tcl
+
+$(srcdir)/vcc_obj.c: $(srcdir)/vcc_gen_obj.tcl
+	cd $(srcdir) && @TCLSH@ vcc_gen_obj.tcl
+
+$(srcdir)/vcc_fixed_token.c: $(srcdir)/vcc_gen_fixed_token.tcl $(top_srcdir)/include/vcl.h $(top_srcdir)/include/vrt.h $(top_srcdir)/include/vrt_obj.h
+	cd $(srcdir) && @TCLSH@ vcc_gen_fixed_token.tcl
+
+$(srcdir)/vcc_token_defs.h: $(srcdir)/vcc_gen_fixed_token.tcl $(top_srcdir)/include/vcl.h $(top_srcdir)/include/vrt.h $(top_srcdir)/include/vrt_obj.h
+	cd $(srcdir) && @TCLSH@ vcc_gen_fixed_token.tcl

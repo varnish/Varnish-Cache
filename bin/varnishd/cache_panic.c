@@ -35,208 +35,303 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
+#include "config.h"
 #include "cache.h"
+#include "cache_backend.h"
 #include "vcl.h"
 
-#ifndef WITHOUT_ASSERTS
-
 /*
- * The panic string is constructed in memory, then printed to stderr.  It
- * can be extracted post-mortem from a core dump using gdb:
+ * The panic string is constructed in memory, then copied to the
+ * shared memory.
+ *
+ * It can be extracted post-mortem from a core dump using gdb:
  *
  * (gdb) printf "%s", panicstr
  */
+
 char panicstr[65536];
-static char *pstr = panicstr;
+static struct vsb vsps, *vsp;
 
-#define fp(...)							\
-	do {							\
-		pstr += snprintf(pstr,				\
-		    (panicstr + sizeof panicstr) - pstr,	\
-		    __VA_ARGS__);				\
-	} while (0)
+/*--------------------------------------------------------------------*/
 
-#define vfp(fmt, ap)						\
-	do {							\
-		pstr += vsnprintf(pstr,				\
-		    (panicstr + sizeof panicstr) - pstr,	\
-		    (fmt), (ap));				\
-	} while (0)
-
-/* step names */
-static const char *steps[] = {
-#define STEP(l, u) "STP_" #u,
-#include "steps.h"
-#undef STEP
-};
-static int nsteps = sizeof steps / sizeof *steps;
-
-/* dump a struct VCL_conf */
 static void
-dump_vcl(const struct VCL_conf *vcl)
+pan_ws(const struct ws *ws, int indent)
 {
-	int i;
 
-	fp("    vcl = {\n");
-	fp("      srcname = {\n");
-	for (i = 0; i < vcl->nsrc; ++i)
-		fp("        \"%s\",\n", vcl->srcname[i]);
-	fp("      },\n");
-	fp("    },\n");
+	vsb_printf(vsp, "%*sws = %p { %s\n", indent, "",
+	    ws, ws->overflow ? "overflow" : "");
+	vsb_printf(vsp, "%*sid = \"%s\",\n", indent + 2, "", ws->id);
+	vsb_printf(vsp, "%*s{s,f,r,e} = {%p,", indent + 2, "", ws->s);
+	if (ws->f > ws->s) 
+		vsb_printf(vsp, ",+%d", ws->f - ws->s);
+	else
+		vsb_printf(vsp, ",%p", ws->f);
+	if (ws->r > ws->s) 
+		vsb_printf(vsp, ",+%d", ws->r - ws->s);
+	else
+		vsb_printf(vsp, ",%p", ws->r);
+	if (ws->e > ws->s) 
+		vsb_printf(vsp, ",+%d", ws->e - ws->s);
+	else
+		vsb_printf(vsp, ",%p", ws->e);
+	vsb_printf(vsp, "},\n");
+	vsb_printf(vsp, "%*s},\n", indent, "" );
 }
 
-/* dump a struct storage */
+/*--------------------------------------------------------------------*/
+
 static void
-dump_storage(const struct storage *st)
+pan_vbe(const struct vbe_conn *vbe)
+{
+
+	struct backend *be;
+
+	be = vbe->backend;
+
+	vsb_printf(vsp, "  backend = %p fd = %d {\n", be, vbe->fd);
+	vsb_printf(vsp, "    vcl_name = \"%s\",\n", be->vcl_name);
+	vsb_printf(vsp, "  },\n");
+}
+
+/*--------------------------------------------------------------------*/
+
+static void
+pan_storage(const struct storage *st)
 {
 	int i, j;
 
 #define MAX_BYTES (4*16)
 #define show(ch) (((ch) > 31 && (ch) < 127) ? (ch) : '.')
 
-	fp("      %u {\n", st->len);
+	vsb_printf(vsp, "      %u {\n", st->len);
 	for (i = 0; i < MAX_BYTES && i < st->len; i += 16) {
-		fp("        ");
+		vsb_printf(vsp, "        ");
 		for (j = 0; j < 16; ++j) {
 			if (i + j < st->len)
-				fp("%02x ", st->ptr[i + j]);
+				vsb_printf(vsp, "%02x ", st->ptr[i + j]);
 			else
-				fp("   ");
+				vsb_printf(vsp, "   ");
 		}
-		fp("|");
+		vsb_printf(vsp, "|");
 		for (j = 0; j < 16; ++j)
 			if (i + j < st->len)
-				fp("%c", show(st->ptr[i + j]));
-		fp("|\n");
+				vsb_printf(vsp, "%c", show(st->ptr[i + j]));
+		vsb_printf(vsp, "|\n");
 	}
 	if (st->len > MAX_BYTES)
-		fp("        [%u more]\n", st->len - MAX_BYTES);
-	fp("      },\n");
+		vsb_printf(vsp, "        [%u more]\n", st->len - MAX_BYTES);
+	vsb_printf(vsp, "      },\n");
 
 #undef show
 #undef MAX_BYTES
 }
 
-/* dump a struct http */
+/*--------------------------------------------------------------------*/
+
 static void
-dump_http(const struct http *h)
+pan_http(const struct http *h)
 {
 	int i;
 
-	fp("    http = {\n");
+	vsb_printf(vsp, "    http = {\n");
+	pan_ws(h->ws, 6);
 	if (h->nhd > HTTP_HDR_FIRST) {
-		fp("      hd = {\n");
+		vsb_printf(vsp, "      hd = {\n");
 		for (i = HTTP_HDR_FIRST; i < h->nhd; ++i)
-			fp("        \"%.*s\",\n",
+			vsb_printf(vsp, "        \"%.*s\",\n",
 			    (int)(h->hd[i].e - h->hd[i].b),
 			    h->hd[i].b);
-		fp("      },\n");
+		vsb_printf(vsp, "      },\n");
 	}
-	fp("    },\n");
+	vsb_printf(vsp, "    },\n");
 }
 
-/* dump a struct object */
+
+/*--------------------------------------------------------------------*/
+
 static void
-dump_object(const struct object *o)
+pan_object(const struct object *o)
 {
 	const struct storage *st;
 
-	fp("  obj = %p {\n", o);
-	fp("    refcnt = %u, xid = %u,\n", o->refcnt, o->xid);
-	dump_http(o->http);
-	fp("    len = %u,\n", o->len);
-	fp("    store = {\n");
-	VTAILQ_FOREACH(st, &o->store, list) {
-		dump_storage(st);
-	}
-	fp("    },\n");
-	fp("  },\n");
+	vsb_printf(vsp, "  obj = %p {\n", o);
+	vsb_printf(vsp, "    refcnt = %u, xid = %u,\n", o->refcnt, o->xid);
+	pan_ws(o->ws_o, 4);
+	pan_http(o->http);
+	vsb_printf(vsp, "    len = %u,\n", o->len);
+	vsb_printf(vsp, "    store = {\n");
+	VTAILQ_FOREACH(st, &o->store, list)
+		pan_storage(st);
+	vsb_printf(vsp, "    },\n");
+	vsb_printf(vsp, "  },\n");
 }
 
-#if 0
-/* dump a struct backend */
-static void
-dump_backend(const struct backend *be)
-{
+/*--------------------------------------------------------------------*/
 
-	fp("  backend = %p {\n", be);
-	fp("    vcl_name = \"%s\",\n",
-	    be->vcl_name ? be->vcl_name : "(null)");
-	fp("  },\n");
+static void
+pan_vcl(const struct VCL_conf *vcl)
+{
+	int i;
+
+	vsb_printf(vsp, "    vcl = {\n");
+	vsb_printf(vsp, "      srcname = {\n");
+	for (i = 0; i < vcl->nsrc; ++i)
+		vsb_printf(vsp, "        \"%s\",\n", vcl->srcname[i]);
+	vsb_printf(vsp, "      },\n");
+	vsb_printf(vsp, "    },\n");
 }
-#endif
 
-/* dump a struct sess */
+
+/*--------------------------------------------------------------------*/
+
 static void
-dump_sess(const struct sess *sp)
+pan_wrk(const struct worker *wrk)
 {
-#if 0
-	const struct backend *be = sp->backend;
-#endif
-	const struct object *obj = sp->obj;
-	const struct VCL_conf *vcl = sp->vcl;
 
-	fp("sp = %p {\n", sp);
-	fp("  fd = %d, id = %d, xid = %u,\n", sp->fd, sp->id, sp->xid);
-	fp("  client = %s:%s,\n",
+	vsb_printf(vsp, "    worker = %p {\n", wrk);
+	vsb_printf(vsp, "    },\n");
+}
+
+/*--------------------------------------------------------------------*/
+
+static void
+pan_sess(const struct sess *sp)
+{
+	const char *stp, *hand;
+
+	vsb_printf(vsp, "sp = %p {\n", sp);
+	vsb_printf(vsp,
+	    "  fd = %d, id = %d, xid = %u,\n", sp->fd, sp->id, sp->xid);
+	vsb_printf(vsp, "  client = %s:%s,\n",
 	    sp->addr ? sp->addr : "?.?.?.?",
 	    sp->port ? sp->port : "?");
-	if (sp->step < nsteps)
-		fp("  step = %s,\n", steps[sp->step]);
+	switch (sp->step) {
+/*lint -save -e525 */
+#define STEP(l, u) case STP_##u: stp = "STP_" #u; break;
+#include "steps.h"
+#undef STEP
+/*lint -restore */
+		default: stp = NULL;
+	}
+	switch (sp->handling) {
+/*lint -save -e525 */
+#define VCL_RET_MAC(l, u, b, v) case VCL_RET_##u: hand = #u; break;
+#define VCL_RET_MAC_E(l, u, b, v) case VCL_RET_##u: hand = #u; break;
+#include "vcl_returns.h"
+#undef VCL_RET_MAC
+#undef VCL_RET_MAC_E
+/*lint -restore */
+		default: hand = NULL;
+	}
+	if (stp != NULL)
+		vsb_printf(vsp, "  step = %s,\n", stp);
 	else
-		fp("  step = %d,\n", sp->step);
+		vsb_printf(vsp, "  step = 0x%x,\n", sp->step);
+	if (hand != NULL)
+		vsb_printf(vsp, "  handling = %s,\n", hand);
+	else
+		vsb_printf(vsp, "  handling = 0x%x,\n", sp->handling);
 	if (sp->err_code)
-		fp("  err_code = %d, err_reason = %s,\n", sp->err_code,
+		vsb_printf(vsp,
+		    "  err_code = %d, err_reason = %s,\n", sp->err_code,
 		    sp->err_reason ? sp->err_reason : "(null)");
 
-	if (VALID_OBJ(vcl, VCL_CONF_MAGIC))
-		dump_vcl(vcl);
+	pan_ws(sp->ws, 2);
 
-#if 0
-	if (VALID_OBJ(be, BACKEND_MAGIC))
-		dump_backend(be);
-	INCOMPL():
-#endif
+	if (sp->wrk != NULL)
+		pan_wrk(sp->wrk);
 
-	if (VALID_OBJ(obj, OBJECT_MAGIC))
-		dump_object(obj);
+	if (VALID_OBJ(sp->vcl, VCL_CONF_MAGIC))
+		pan_vcl(sp->vcl);
 
-	fp("},\n");
+	if (VALID_OBJ(sp->vbe, BACKEND_MAGIC))
+		pan_vbe(sp->vbe);
+
+	if (VALID_OBJ(sp->obj, OBJECT_MAGIC))
+		pan_object(sp->obj);
+
+	vsb_printf(vsp, "},\n");
 }
 
-/* report as much information as we can before we croak */
-void
-panic(const char *file, int line, const char *func,
-    const struct sess *sp, const char *fmt, ...)
+/*--------------------------------------------------------------------*/
+
+static void
+pan_ic(const char *func, const char *file, int line, const char *cond, int err, int xxx)
 {
-	va_list ap;
-
-	fp("panic in %s() at %s:%d\n", func, file, line);
-	va_start(ap, fmt);
-	vfp(fmt, ap);
-	va_end(ap);
-
-	if (VALID_OBJ(sp, SESS_MAGIC))
-		dump_sess(sp);
-
-	(void)fputs(panicstr, stderr);
-
-	/* I wish there was a way to flush the log buffers... */
-	(void)signal(SIGABRT, SIG_DFL);
-#ifdef HAVE_ABORT2
-	{
-	void *arg[1];
+	int l;
 	char *p;
+	const char *q;
+	const struct sess *sp;
 
-	for (p = panicstr; *p; p++)
-		if (*p == '\n')
-			*p = ' ';
-	arg[0] = panicstr;
-	abort2(panicstr, 1, arg);
+	switch(xxx) {
+	case 3:
+		vsb_printf(vsp,
+		    "Wrong turn:\n%s\n", cond);
+		break;
+	case 2:
+		vsb_printf(vsp,
+		    "Panic from VCL:\n%s\n", cond);
+		break;
+	case 1:
+		vsb_printf(vsp,
+		    "Missing errorhandling code in %s(), %s line %d:\n"
+		    "  Condition(%s) not true.",
+		    func, file, line, cond);
+		break;
+	default:
+	case 0:
+		vsb_printf(vsp,
+		    "Assert error in %s(), %s line %d:\n"
+		    "  Condition(%s) not true.",
+		    func, file, line, cond);
+		break;
+	}
+	if (err)
+		vsb_printf(vsp, "  errno = %d (%s)", err, strerror(err));
+
+	q = THR_GetName();
+	if (q != NULL)
+		vsb_printf(vsp, "  thread = (%s)", q);
+	if (!(params->diag_bitmap & 0x2000)) {
+		sp = THR_GetSession();
+		if (sp != NULL) 
+			pan_sess(sp);
+	}
+	vsb_printf(vsp, "\n");
+	vsb_bcat(vsp, "", 1);	/* NUL termination */
+	VSL_Panic(&l, &p);
+	if (l < sizeof(panicstr))
+		l = sizeof(panicstr);
+	memcpy(p, panicstr, l);
+	if (params->diag_bitmap & 0x4000)
+		(void)fputs(panicstr, stderr);
+		
+#ifdef HAVE_ABORT2
+	if (params->diag_bitmap & 0x8000) {
+		void *arg[1];
+
+		for (p = panicstr; *p; p++)
+			if (*p == '\n')
+				*p = ' ';
+		arg[0] = panicstr;
+		abort2(panicstr, 1, arg);
 	}
 #endif
-	(void)raise(SIGABRT);
+	if (params->diag_bitmap & 0x1000)
+		exit(4);
+	else
+		abort();
 }
 
-#endif
+/*--------------------------------------------------------------------*/
+
+void
+PAN_Init(void)
+{
+
+	lbv_assert = pan_ic;
+	vsp = &vsps;
+	AN(vsb_new(vsp, panicstr, sizeof panicstr, VSB_FIXEDLEN));
+}

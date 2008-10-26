@@ -57,6 +57,7 @@ struct http {
 	char			*rxbuf;
 	int			prxbuf;
 	char			*body;
+	char			bodylen[20];
 
 	char			*req[MAX_HDR];
 	char			*resp[MAX_HDR];
@@ -64,6 +65,41 @@ struct http {
 
 /* XXX: we may want to vary this */
 static const char *nl = "\r\n";
+
+/**********************************************************************
+ * Generate a synthetic body
+ */
+
+static char *
+synth_body(const char *len)
+{
+	int i, j, k, l;
+	char *b;
+	
+	
+	AN(len);
+	i = strtoul(len, NULL, 0);
+	assert(i > 0);
+	b = malloc(i + 1);
+	AN(b);
+	l = k = '!';
+	for (j = 0; j < i; j++) {
+		if ((j % 64) == 63) {
+			b[j] = '\n';
+			k++;
+			if (k == '~')
+				k = '!';
+			l = k;
+		} else {
+			b[j] = l++;
+			if (l == '~')
+				l = '!';
+		}
+	}
+	b[i - 1] = '\n';
+	b[i] = '\0';
+	return (b);
+}
 
 /**********************************************************************
  * Finish and write the vsb to the fd
@@ -124,6 +160,8 @@ cmd_var_resolve(struct http *hp, char *spec)
 		return(hp->resp[1]);
 	if (!strcmp(spec, "resp.msg"))
 		return(hp->resp[2]);
+	if (!strcmp(spec, "resp.bodylen"))
+		return(hp->bodylen);
 	if (!memcmp(spec, "req.http.", 9)) {
 		hh = hp->req;
 		hdr = spec + 9;
@@ -147,6 +185,7 @@ cmd_http_expect(CMD_ARGS)
 	char *rhs;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	assert(!strcmp(av[0], "expect"));
 	av++;
@@ -160,6 +199,15 @@ cmd_http_expect(CMD_ARGS)
 	rhs = cmd_var_resolve(hp, av[2]);
 	if (!strcmp(cmp, "==")) {
 		if (strcmp(lhs, rhs)) {
+			vtc_log(hp->vl, 0, "EXPECT %s (%s) %s %s (%s) failed",
+			    av[0], lhs, av[1], av[2], rhs);
+			exit (1);
+		} else {
+			vtc_log(hp->vl, 4, "EXPECT %s (%s) %s %s (%s) match",
+			    av[0], lhs, av[1], av[2], rhs);
+		}
+	} else if (!strcmp(cmp, "!=")) {
+		if (!strcmp(lhs, rhs)) {
 			vtc_log(hp->vl, 0, "EXPECT %s (%s) %s %s (%s) failed",
 			    av[0], lhs, av[1], av[2], rhs);
 			exit (1);
@@ -257,8 +305,8 @@ http_splitheader(struct http *hp, int req)
  * Receive another character
  */
 
-static void
-http_rxchar(struct http *hp, int n)
+static int
+http_rxchar_eof(struct http *hp, int n)
 {
 	int i;
 	struct pollfd pfd[1];
@@ -271,11 +319,23 @@ http_rxchar(struct http *hp, int n)
 		assert(i > 0);
 		assert(hp->prxbuf < hp->nrxbuf);
 		i = read(hp->fd, hp->rxbuf + hp->prxbuf, n);
+		if (i == 0)
+			return (i);
 		assert(i > 0);
 		hp->prxbuf += i;
 		hp->rxbuf[hp->prxbuf] = '\0';
 		n -= i;
 	}
+	return (1);
+}
+
+static void
+http_rxchar(struct http *hp, int n)
+{
+	int i;
+
+	i = http_rxchar_eof(hp, n);
+	assert(i > 0);
 }
 
 /**********************************************************************
@@ -283,18 +343,21 @@ http_rxchar(struct http *hp, int n)
  */
 
 static void
-http_swallow_body(struct http *hp, char * const *hh)
+http_swallow_body(struct http *hp, char * const *hh, int body)
 {
 	char *p, *q;
-	int i, l;
+	int i, l, ll;
 	
 
+	ll = 0;
 	p = http_find_header(hh, "content-length");
 	if (p != NULL) {
 		l = strtoul(p, NULL, 0);
 		hp->body = q = hp->rxbuf + hp->prxbuf;
 		http_rxchar(hp, l);
 		vtc_dump(hp->vl, 4, "body", hp->body);
+		sprintf(hp->bodylen, "%d", l);
+		return;
 	}
 	p = http_find_header(hh, "transfer-encoding");
 	if (p != NULL && !strcmp(p, "chunked")) {
@@ -310,6 +373,7 @@ http_swallow_body(struct http *hp, char * const *hh)
 			assert(*q == '\0' || vct_islws(*q));
 			hp->prxbuf = l;
 			if (i > 0) {
+				ll += i;
 				http_rxchar(hp, i);
 				vtc_dump(hp->vl, 4, "chunk", hp->rxbuf + l);
 			}
@@ -318,11 +382,23 @@ http_swallow_body(struct http *hp, char * const *hh)
 			assert(vct_iscrlf(hp->rxbuf[l]));
 			assert(vct_iscrlf(hp->rxbuf[l + 1]));
 			hp->prxbuf = l;
+			hp->rxbuf[l] = '\0';
 			if (i == 0)
 				break;
 		}
 		vtc_dump(hp->vl, 4, "body", hp->body);
+		sprintf(hp->bodylen, "%d", ll);
+		return;
 	}
+	if (body) {
+		hp->body = q = hp->rxbuf + hp->prxbuf;
+		do  {
+			i = http_rxchar_eof(hp, 1);
+			ll += i;
+		} while (i > 0);
+		vtc_dump(hp->vl, 4, "rxeof", hp->body);
+	} 
+	sprintf(hp->bodylen, "%d", ll);
 }
 
 /**********************************************************************
@@ -367,6 +443,7 @@ cmd_http_rxresp(CMD_ARGS)
 	struct http *hp;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AN(hp->client);
 	assert(!strcmp(av[0], "rxresp"));
@@ -379,7 +456,11 @@ cmd_http_rxresp(CMD_ARGS)
 	vtc_log(hp->vl, 3, "rxresp");
 	http_rxhdr(hp);
 	http_splitheader(hp, 0);
-	http_swallow_body(hp, hp->resp);
+	if (!strcmp(hp->resp[1], "200")) 
+		http_swallow_body(hp, hp->resp, 1);
+	else
+		http_swallow_body(hp, hp->resp, 0);
+	vtc_log(hp->vl, 4, "bodylen = %s", hp->bodylen);
 }
 
 /**********************************************************************
@@ -393,9 +474,10 @@ cmd_http_txresp(CMD_ARGS)
 	const char *proto = "HTTP/1.1";
 	const char *status = "200";
 	const char *msg = "Ok";
-	const char *body = NULL;
+	char *body = NULL;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AZ(hp->client);
 	assert(!strcmp(av[0], "txresp"));
@@ -430,7 +512,11 @@ cmd_http_txresp(CMD_ARGS)
 	for(; *av != NULL; av++) {
 		if (!strcmp(*av, "-body")) {
 			AZ(body);
-			body = av[1];
+			REPLACE(body, av[1]);
+			av++;
+		} else if (!strcmp(*av, "-bodylen")) {
+			AZ(body);
+			body = synth_body(av[1]);
 			av++;
 		} else
 			break;
@@ -459,6 +545,7 @@ cmd_http_rxreq(CMD_ARGS)
 	struct http *hp;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AZ(hp->client);
 	assert(!strcmp(av[0], "rxreq"));
@@ -471,7 +558,8 @@ cmd_http_rxreq(CMD_ARGS)
 	vtc_log(hp->vl, 3, "rxreq");
 	http_rxhdr(hp);
 	http_splitheader(hp, 1);
-	http_swallow_body(hp, hp->req);
+	http_swallow_body(hp, hp->req, 0);
+	vtc_log(hp->vl, 4, "bodylen = %s", hp->bodylen);
 }
 
 /**********************************************************************
@@ -488,6 +576,7 @@ cmd_http_txreq(CMD_ARGS)
 	const char *body = NULL;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AN(hp->client);
 	assert(!strcmp(av[0], "txreq"));
@@ -521,6 +610,10 @@ cmd_http_txreq(CMD_ARGS)
 			AZ(body);
 			body = av[1];
 			av++;
+		} else if (!strcmp(*av, "-bodylen")) {
+			AZ(body);
+			body = synth_body(av[1]);
+			av++;
 		} else
 			break;
 	}
@@ -549,6 +642,7 @@ cmd_http_send(CMD_ARGS)
 	int i;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AN(av[1]);
 	AZ(av[2]);
@@ -568,6 +662,7 @@ cmd_http_chunked(CMD_ARGS)
 	struct http *hp;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AN(av[1]);
 	AZ(av[2]);
@@ -586,10 +681,11 @@ cmd_http_timeout(CMD_ARGS)
 	struct http *hp;
 
 	(void)cmd;
+	(void)vl;
 	CAST_OBJ_NOTNULL(hp, priv, HTTP_MAGIC);
 	AN(av[1]);
 	AZ(av[2]);
-	hp->timeout = strtof(av[1], NULL) * 1000.0;
+	hp->timeout = strtod(av[1], NULL) * 1000.0;
 }
 
 /**********************************************************************
@@ -632,7 +728,7 @@ http_process(struct vtclog *vl, const char *spec, int sock, int client)
 	q = strchr(s, '\0');
 	assert(q > s);
 	AN(s);
-	parse_string(s, http_cmds, hp);
+	parse_string(s, http_cmds, hp, vl);
 	vsb_delete(hp->vsb);
 	free(hp->rxbuf);
 	free(hp);

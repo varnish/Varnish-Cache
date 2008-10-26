@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "config.h"
 #include "vsb.h"
 
 #include "vcc_priv.h"
@@ -148,6 +149,9 @@ vcc_StringVal(struct tokenlist *tl)
 			break;
 		case FLOAT:
 			Fb(tl, 0, "VRT_double_string(sp, %s)", vp->rname);
+			break;
+		case BACKEND:
+			Fb(tl, 0, "VRT_backend_string(sp)");
 			break;
 		default:
 			vsb_printf(tl->sb,

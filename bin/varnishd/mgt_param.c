@@ -43,6 +43,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "cli.h"
 #include "cli_priv.h"
 #include "cli_common.h"
@@ -274,9 +275,8 @@ static void
 tweak_thread_pool_min(struct cli *cli, const struct parspec *par, const char *arg)
 {
 
-	(void)par;
 	tweak_generic_uint(cli, &master.wthread_min, arg,
-	    0, master.wthread_max);
+	    par->umin, master.wthread_max);
 }
 
 /*--------------------------------------------------------------------*/
@@ -315,15 +315,16 @@ tweak_listen_address(struct cli *cli, const struct parspec *par, const char *arg
 
 	(void)par;
 	if (arg == NULL) {
-		/* Quote the string if we have more than one socket */
-		if (heritage.nsocks > 1)
-			cli_out(cli, "\"%s\"", master.listen_address);
-		else
-			cli_out(cli, "%s", master.listen_address);
+		cli_quote(cli, master.listen_address);
 		return;
 	}
 
-	av = ParseArgv(arg, 0);
+	av = ParseArgv(arg, ARGV_COMMA);
+	if (av == NULL) {
+		cli_out(cli, "Parse error: out of memory");
+		cli_result(cli, CLIS_PARAM);
+		return;
+	}
 	if (av[0] != NULL) {
 		cli_out(cli, "Parse error: %s", av[0]);
 		cli_result(cli, CLIS_PARAM);
@@ -343,7 +344,8 @@ tweak_listen_address(struct cli *cli, const struct parspec *par, const char *arg
 		int j, n;
 
 		if (VSS_parse(av[i], &host, &port) != 0) {
-			cli_out(cli, "Invalid listen address \"%s\"", av[i]);
+			cli_out(cli, "Invalid listen address ");
+			cli_quote(cli, av[i]);
 			cli_result(cli, CLIS_PARAM);
 			break;
 		}
@@ -351,7 +353,8 @@ tweak_listen_address(struct cli *cli, const struct parspec *par, const char *arg
 		free(host);
 		free(port);
 		if (n == 0) {
-			cli_out(cli, "Invalid listen address \"%s\"", av[i]);
+			cli_out(cli, "Invalid listen address ");
+			cli_quote(cli, av[i]);
 			cli_result(cli, CLIS_PARAM);
 			break;
 		}
@@ -394,7 +397,7 @@ tweak_cc_command(struct cli *cli, const struct parspec *par, const char *arg)
 	/* XXX should have tweak_generic_string */
 	(void)par;
 	if (arg == NULL) {
-		cli_out(cli, "%s", mgt_cc_cmd);
+		cli_quote(cli, mgt_cc_cmd);
 	} else {
 		free(mgt_cc_cmd);
 		mgt_cc_cmd = strdup(arg);
@@ -497,15 +500,15 @@ static const struct parspec parspec[] = {
 		"in the way of getting work done.\n",
 		EXPERIMENTAL | DELAYED_EFFECT,
 		"500", "threads" },
-	{ "thread_pool_min", tweak_thread_pool_min, NULL, 1, 0,
-		"The minimum number of threads in all worker pools combined.\n"
+	{ "thread_pool_min", tweak_thread_pool_min, NULL, 2, 0,
+		"The minimum number of threads in each worker pool.\n"
 		"\n"
 		"Increasing this may help ramp up faster from low load "
 		"situations where threads have expired.\n"
 		"\n"
-		"Minimum is 1 thread.",
+		"Minimum is 2 threads.",
 		EXPERIMENTAL | DELAYED_EFFECT,
-		"1", "threads" },
+		"5", "threads" },
 	{ "thread_pool_timeout", tweak_timeout, &master.wthread_timeout, 1, 0,
 		"Thread idle threshold.\n"
 		"\n"
@@ -590,6 +593,15 @@ static const struct parspec parspec[] = {
 		"header and any edits done to it in the VCL code while it "
 		"is cached.\n"
 		"Minimum is 1024 bytes.",
+		DELAYED_EFFECT,
+		"8192", "bytes" },
+	{ "shm_workspace", tweak_uint, &master.shm_workspace, 4096, UINT_MAX,
+		"Bytes of shmlog workspace allocated for worker threads. "
+		"If too big, it wastes some ram, if too small it causes "
+		"needless flushes of the SHM workspace.\n"
+		"These flushes show up in stats as "
+		"\"SHM flushes due to overflow\".\n"
+		"Minimum is 4096 bytes.",
 		DELAYED_EFFECT,
 		"8192", "bytes" },
 	{ "default_grace", tweak_uint, &master.default_grace, 0, UINT_MAX,
@@ -702,13 +714,7 @@ static const struct parspec parspec[] = {
 		"the string will be replaced with the source file name, "
 		"and %o will be replaced with the output file name.",
 		MUST_RELOAD,
-#ifdef __APPLE__
-		"exec cc -dynamiclib -Wl,-undefined,dynamic_lookup -o %o %s"
-#elif defined(__SOLARIS__)
-		"exec cc -shared -fpic -c %o %s"
-#else /* default: GCC on Linux & FreeBSD */
-		"exec cc -fpic -shared -Wl,-x -o %o %s"
-#endif
+		VCC_CC
 		, NULL },
 	{ "max_restarts", tweak_uint, &master.max_restarts, 0, UINT_MAX,
 		"Upper limit on how many times a request can restart."
@@ -716,13 +722,19 @@ static const struct parspec parspec[] = {
 		"the backend, so don't increase thoughtlessly.\n",
 		0,
 		"4", "restarts" },
+	{ "esi_syntax",
+		tweak_uint, &master.esi_syntax, 0, UINT_MAX,
+		"Bitmap controlling ESI parsing code:\n"
+		"  0x00000001 - Don't check if it looks like XML\n"
+		"  0x00000002 - Ignore non-esi elements\n"
+		"Use 0x notation and do the bitor in your head :-)\n",
+		0,
+		"0", "bitmap" },
 	{ "max_esi_includes",
 		tweak_uint, &master.max_esi_includes, 0, UINT_MAX,
-		"Maximum depth of esi:include processing."
-		"\nBe aware that restarts are likely to cause a hit against "
-		"the backend, so don't increase thoughtlessly.\n",
+		"Maximum depth of esi:include processing.\n",
 		0,
-		"5", "restarts" },
+		"5", "includes" },
 	{ "cache_vbe_conns", tweak_bool,  &master.cache_vbe_conns, 0, 0,
 		"Cache vbe_conn's or rely on malloc, that's the question.",
 		EXPERIMENTAL,
@@ -735,6 +747,17 @@ static const struct parspec parspec[] = {
 		"VCL can override this default value for each backend.",
 		0,
 		"400", "ms" },
+	{ "accept_fd_holdoff", tweak_timeout,
+		&master.accept_fd_holdoff, 0,  3600*1000,
+		"If we run out of file descriptors, the accept thread will "
+		"sleep.  This parameter control for how long it will sleep.",
+		EXPERIMENTAL,
+		"50", "ms" },
+	{ "clock_skew", tweak_uint, &master.clock_skew, 0, UINT_MAX,
+		"How much clockskew we are willing to accept between the "
+		"backend and our own clock.",
+		0,
+		"10", "s" },
 	{ "prefer_ipv6", tweak_bool, &master.prefer_ipv6, 0, 0,
 		"Prefer IPv6 address when connecting to backends which "
 		"have both IPv4 and IPv6 addresses.",
@@ -781,9 +804,19 @@ static const struct parspec parspec[] = {
 		"  0x00000010 - mutex contests.\n"
 		"  0x00000020 - waiting list.\n"
 		"  0x00000040 - object workspace.\n"
+		"  0x00001000 - do not core-dump child process.\n"
+		"  0x00002000 - only short panic message.\n"
+		"  0x00004000 - panic to stderr.\n"
+#ifdef HAVE_ABORT2
+		"  0x00008000 - panic to abort2().\n"
+#endif
 		"Use 0x notation and do the bitor in your head :-)\n",
 		0,
 		"0", "bitmap" },
+	{ "err_ttl", tweak_uint, &master.err_ttl, 0, UINT_MAX,
+		"The TTL assigned to the synthesized error pages\n",
+		0,
+		"0", "seconds" },
 	{ NULL, NULL, NULL }
 };
 

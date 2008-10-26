@@ -35,26 +35,20 @@ struct sockaddr;
 /* cache_acceptor.c */
 void VCA_tweak_acceptor(struct cli *cli, const char *arg);
 
+/* shmlog.c */
+void VSL_Panic(int *len, char **ptr);
 
 /* shmlog.c */
 void VSL_MgtInit(const char *fn, unsigned size);
 extern struct varnish_stats *VSL_stats;
 
-/* tcp.c */
-/* NI_MAXHOST and NI_MAXSERV are ridiculously long for numeric format */
-#define TCP_ADDRBUFSIZE		64
-#define TCP_PORTBUFSIZE		16
-
-void TCP_name(const struct sockaddr *addr, unsigned l, char *abuf, unsigned alen, char *pbuf, unsigned plen);
-void TCP_myname(int sock, char *abuf, unsigned alen, char *pbuf, unsigned plen);
-int TCP_filter_http(int sock);
-void TCP_blocking(int sock);
-void TCP_nonblocking(int sock);
-#ifdef SOL_SOCKET
-int TCP_connect(int s, const struct sockaddr *name, socklen_t namelen, int msec);
-#endif
-
 #define TRUST_ME(ptr)	((void*)(uintptr_t)(ptr))
 
 /* Really belongs in mgt.h, but storage_file chokes on both */
 void mgt_child_inherit(int fd, const char *what);
+
+#define ARGV_ERR(...)						\
+	do {							\
+		fprintf(stderr, "Error: " __VA_ARGS__);		\
+		exit(2);					\
+	} while (0);

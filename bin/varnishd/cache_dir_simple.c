@@ -43,6 +43,7 @@
 
 #include "shmlog.h"
 #include "cache.h"
+#include "cache_backend.h"
 #include "vrt.h"
 
 /*--------------------------------------------------------------------*/
@@ -54,16 +55,29 @@ struct vdi_simple {
 	struct backend		*backend;
 };
 
-static struct backend *
-vdi_simple_choose(struct sess *sp)
+static struct vbe_conn *
+vdi_simple_getfd(struct sess *sp)
 {
 	struct vdi_simple *vs;
 
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
 	CAST_OBJ_NOTNULL(vs, sp->director->priv, VDI_SIMPLE_MAGIC);
-	return (vs->backend);
+	return (VBE_GetVbe(sp, vs->backend));
 }
 
+static unsigned
+vdi_simple_healthy(const struct sess *sp)
+{
+	struct vdi_simple *vs;
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	CAST_OBJ_NOTNULL(vs, sp->director->priv, VDI_SIMPLE_MAGIC);
+	return vs->backend->healthy;
+}
+
+/*lint -e{818} not const-able */
 static void
 vdi_simple_fini(struct director *d)
 {
@@ -73,6 +87,7 @@ vdi_simple_fini(struct director *d)
 	CAST_OBJ_NOTNULL(vs, d->priv, VDI_SIMPLE_MAGIC);
 	
 	VBE_DropRef(vs->backend);
+	free(vs->dir.vcl_name);
 	vs->dir.magic = 0;
 	FREE_OBJ(vs);
 }
@@ -89,8 +104,10 @@ VRT_init_dir_simple(struct cli *cli, struct director **bp, const struct vrt_dir_
 	vs->dir.magic = DIRECTOR_MAGIC;
 	vs->dir.priv = vs;
 	vs->dir.name = "simple";
-	vs->dir.choose = vdi_simple_choose;
+	REPLACE(vs->dir.vcl_name, t->host->vcl_name);
+	vs->dir.getfd = vdi_simple_getfd;
 	vs->dir.fini = vdi_simple_fini;
+	vs->dir.healthy = vdi_simple_healthy;
 
 	vs->backend = VBE_AddBackend(cli, t->host);
 

@@ -117,7 +117,7 @@ esi_error(const struct esi_work *ew, const char *p, int i, const char *err)
 			*q++ = 't';
 		} else {
 			/* XXX: use %%%02x instead ? */
-			q += sprintf(q, "\\x%02x", *p);
+			q += sprintf(q, "\\x%02x", *p & 0xff);
 		}
 		p++;
 		i--;
@@ -466,6 +466,17 @@ esi_parse2(struct esi_work *ew)
 			continue;
 		} 
 
+		/* Ignore non esi elements, if so instructed */
+		if ((params->esi_syntax & 0x02)) {
+			if (memcmp(p, "<esi:", i > 5 ? 5 : i) &&
+			    memcmp(p, "</esi:", i > 6 ? 6 : i)) {
+				p += 1;
+				continue;
+			}
+			if (i < 6)
+				return (p);
+		}
+
 		/* Find end of this element */
 		for (q = p + 1; q < t.e && *q != '>'; q++)
 			continue;
@@ -635,7 +646,30 @@ VRT_ESI(struct sess *sp)
 		return;
 	}
 
+	if (VTAILQ_EMPTY(&sp->obj->store))
+		return;
+
 	CHECK_OBJ_NOTNULL(sp->obj, OBJECT_MAGIC);
+
+	if (!(params->esi_syntax & 0x00000001)) {
+		/*
+		 * By default, we will not ESI process an object where
+		 *  the first non-space character is different from '<'
+		 */
+		st = VTAILQ_FIRST(&sp->obj->store);
+		AN(st);
+		for (u = 0; u < st->len; u++) {
+			if (isspace(st->ptr[u]))
+				continue;
+			if (st->ptr[u] == '<')
+				break;
+			WSP(sp, SLT_ESI_xmlerror,
+			    "No ESI processing, "
+			    "binary object: 0x%02x at pos %u.",
+			    st->ptr[u], u);
+			return;
+		}
+	}
 
 	/* XXX: only if GET ? */
 	ew = eww;
@@ -767,9 +801,13 @@ ESI_Deliver(struct sess *sp)
 	struct object *obj;
 
 	VTAILQ_FOREACH(eb, &sp->obj->esibits, list) {
-		WRK_Write(sp->wrk, eb->chunk_length, -1);
-		WRK_Write(sp->wrk, eb->verbatim.b, Tlen(eb->verbatim));
-		WRK_Write(sp->wrk, "\r\n", -1);
+		if (Tlen(eb->verbatim)) {
+			if (sp->http->protover >= 1.1)
+				WRK_Write(sp->wrk, eb->chunk_length, -1);
+			WRK_Write(sp->wrk, eb->verbatim.b, Tlen(eb->verbatim));
+			if (sp->http->protover >= 1.1)
+				WRK_Write(sp->wrk, "\r\n", -1);
+		}
 		if (eb->include.b == NULL ||
 		    sp->esis >= params->max_esi_includes)
 			continue;
@@ -789,15 +827,24 @@ ESI_Deliver(struct sess *sp)
 		http_SetH(sp->http, HTTP_HDR_URL, eb->include.b);
 		if (eb->host.b != NULL)  {
 			http_Unset(sp->http, H_Host);
+			http_Unset(sp->http, H_If_Modified_Since);
 			http_SetHeader(sp->wrk, sp->fd, sp->http, eb->host.b);
 		}
+		/*
+		 * XXX: We should decide if we should cache the director
+		 * XXX: or not (for session/backend coupling).  Until then
+		 * XXX: make sure we don't trip up the check in vcl_recv.
+		 */
+		sp->director = NULL;
 		sp->step = STP_RECV;
+		http_ForceGet(sp->http);
+		http_Unset(sp->http, H_Content_Length);
 		CNT_Session(sp);
 		sp->esis--;
 		sp->obj = obj;
 
 	}
-	if (sp->esis == 0)
+	if (sp->esis == 0 && sp->http->protover >= 1.1)
 		WRK_Write(sp->wrk, "0\r\n\r\n", -1);
 }
 

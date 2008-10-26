@@ -1,22 +1,24 @@
 Summary: Varnish is a high-performance HTTP accelerator
 Name: varnish
 Version: 2.0
-Release: pre_svn20080307%{?dist}
+Release: 1%{?dist}
 License: BSD
 Group: System Environment/Daemons
 URL: http://www.varnish-cache.org/
 Source0: http://downloads.sourceforge.net/varnish/varnish-%{version}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-# The svn sources needs autoconf, automake and libtoolto generate a suitable
+# The svn sources needs autoconf, automake and libtool to generate a suitable
 # configure script. Release tarballs would not need this
 #BuildRequires: automake autoconf libtool
-BuildRequires: ncurses-devel libxslt
+BuildRequires: ncurses-devel libxslt groff
 Requires: kernel >= 2.6.0 varnish-libs = %{version}-%{release}
 Requires: logrotate
+Requires: ncurses
 Requires(pre): shadow-utils
 Requires(post): /sbin/chkconfig
 Requires(preun): /sbin/chkconfig
 Requires(preun): /sbin/service
+Requires(preun): initscripts
 
 # Varnish actually needs gcc installed to work. It uses the C compiler 
 # at runtime to compile the VCL configuration files. This is by design.
@@ -31,7 +33,6 @@ web site: http://www.varnish-cache.org/
 Summary: Libraries for %{name}
 Group: System Environment/Libraries
 BuildRequires: ncurses-devel
-#Requires: ncurses
 #Obsoletes: libvarnish1
 
 %description libs
@@ -48,37 +49,81 @@ Requires: kernel >= 2.6.0 varnish-libs = %{version}-%{release}
 Development files for %{name}-libs
 Varnish is a high-performance HTTP accelerator
 
+#%package libs-static
+#Summary: Files for static linking of %{name} library functions
+#Group: System Environment/Libraries
+#BuildRequires: ncurses-devel
+#Requires: kernel >= 2.6.0 varnish-libs-devel = %{version}-%{release}
+#
+#%description libs-static
+#Files for static linking of varnish library functions
+#Varnish is a high-performance HTTP accelerator
+
 %prep
 %setup -q
+#%setup -q -n varnish-cache
 
 # The svn sources needs to generate a suitable configure script
 # Release tarballs would not need this
-# ./autogen.sh
+#./autogen.sh
+
+# Hack to get 32- and 64-bits tests run concurrently on the same build machine
+case `uname -m` in
+	ppc64 | s390x | x86_64 | sparc64 )
+		sed -i ' 
+			s,9001,9011,g;
+			s,9080,9090,g; 
+			s,9081,9091,g; 
+			s,9082,9092,g; 
+			s,9180,9190,g;
+		' bin/varnishtest/*.c bin/varnishtest/tests/*vtc
+		;;
+	*)
+		;;
+esac
 
 mkdir examples
-cp etc/default.vcl etc/zope-plone.vcl examples
+cp bin/varnishd/default.vcl etc/zope-plone.vcl examples
 
 %build
 
 # Remove "--disable static" if you want to build static libraries 
+# jemalloc is not compatible with Red Hat's ppc64 RHEL5 kernel koji server :-(
+%ifarch ppc64 ppc
+%configure --disable-static --localstatedir=/var/lib --disable-jemalloc
+%else
 %configure --disable-static --localstatedir=/var/lib
+%endif
 
 # We have to remove rpath - not allowed in Fedora
 # (This problem only visible on 64 bit arches)
 sed -i 's|^hardcode_libdir_flag_spec=.*|hardcode_libdir_flag_spec=""|g;
-        s|^runpath_var=LD_RUN_PATH|runpath_var=DIE_RPATH_DIE|g' libtool
+	s|^runpath_var=LD_RUN_PATH|runpath_var=DIE_RPATH_DIE|g' libtool
 
 %{__make} %{?_smp_mflags}
 
-sed -e ' s/8080/80/g ' etc/default.vcl > redhat/default.vcl
+head -6 etc/default.vcl > redhat/default.vcl
 
+cat << EOF >> redhat/default.vcl
+backend default {
+  .host = "127.0.0.1";
+  .port = "80";
+}
+EOF
 
-%if "%dist" == "el4"
-    sed -i 's,daemon --pidfile \${\?PIDFILE}\?,daemon,g;
-            s,status -p \$PIDFILE,status,g;
-            s,killproc -p \$PIDFILE,killproc,g' \
-    redhat/varnish.initrc redhat/varnishlog.initrc
+tail -n +11 etc/default.vcl >> redhat/default.vcl
+
+%if 0%{?fedora}%{?rhel} == 0 || 0%{?rhel} <= 4 && 0%{?fedora} <= 8
+	# Old style daemon function
+	sed -i 's,--pidfile \$pidfile,,g;
+		s,status -p \$pidfile,status,g;
+		s,killproc -p \$pidfile,killproc,g' \
+	redhat/varnish.initrc redhat/varnishlog.initrc redhat/varnishncsa.initrc
 %endif
+
+%check
+LD_LIBRARY_PATH="lib/libvarnish/.libs:lib/libvarnishcompat/.libs:lib/libvarnishapi/.libs:lib/libvcl/.libs" bin/varnishd/varnishd -b 127.0.0.1:80 -C -n /tmp/foo
+%{__make} check LD_LIBRARY_PATH="../../lib/libvarnish/.libs:../../lib/libvarnishcompat/.libs:../../lib/libvarnishapi/.libs:../../lib/libvcl/.libs"
 
 %install
 rm -rf %{buildroot}
@@ -92,12 +137,13 @@ find %{buildroot}/%{_libdir}/ -name '*.la' -exec rm -f {} ';'
 
 mkdir -p %{buildroot}/var/lib/varnish
 mkdir -p %{buildroot}/var/log/varnish
-
+mkdir -p %{buildroot}/var/run/varnish
 %{__install} -D -m 0644 redhat/default.vcl %{buildroot}%{_sysconfdir}/varnish/default.vcl
 %{__install} -D -m 0644 redhat/varnish.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/varnish
 %{__install} -D -m 0644 redhat/varnish.logrotate %{buildroot}%{_sysconfdir}/logrotate.d/varnish
-%{__install} -D -m 0755 redhat/varnish.initrc %{buildroot}%{_sysconfdir}/init.d/varnish
-%{__install} -D -m 0755 redhat/varnishlog.initrc %{buildroot}%{_sysconfdir}/init.d/varnishlog
+%{__install} -D -m 0755 redhat/varnish.initrc %{buildroot}%{_initrddir}/varnish
+%{__install} -D -m 0755 redhat/varnishlog.initrc %{buildroot}%{_initrddir}/varnishlog
+%{__install} -D -m 0755 redhat/varnishncsa.initrc %{buildroot}%{_initrddir}/varnishncsa
 
 %clean
 rm -rf %{buildroot}
@@ -116,8 +162,9 @@ rm -rf %{buildroot}
 %config(noreplace) %{_sysconfdir}/varnish/default.vcl
 %config(noreplace) %{_sysconfdir}/sysconfig/varnish
 %config(noreplace) %{_sysconfdir}/logrotate.d/varnish
-%{_sysconfdir}/init.d/varnish
-%{_sysconfdir}/init.d/varnishlog
+%{_initrddir}/varnish
+%{_initrddir}/varnishlog
+%{_initrddir}/varnishncsa
 
 %files libs
 %defattr(-,root,root,-)
@@ -130,41 +177,42 @@ rm -rf %{buildroot}
 %{_libdir}/libvarnishapi.so
 %{_libdir}/libvarnishcompat.so
 %{_libdir}/libvcl.so
+%dir %{_includedir}/varnish
 %{_includedir}/varnish/shmlog.h
 %{_includedir}/varnish/shmlog_tags.h
 %{_includedir}/varnish/stat_field.h
 %{_includedir}/varnish/stats.h
 %{_includedir}/varnish/varnishapi.h
 %{_libdir}/pkgconfig/varnishapi.pc
+%doc LICENSE
+
+#%files libs-static
 #%{_libdir}/libvarnish.a
 #%{_libdir}/libvarnishapi.a
 #%{_libdir}/libvarnishcompat.a
 #%{_libdir}/libvcl.a
-%doc LICENSE
+#%doc LICENSE
 
 %pre
 getent group varnish >/dev/null || groupadd -r varnish
 getent passwd varnish >/dev/null || \
-useradd -r -g varnish -d /var/lib/varnish -s /sbin/nologin \
-    -c "Varnish http accelerator user" varnish
+	useradd -r -g varnish -d /var/lib/varnish -s /sbin/nologin \
+		-c "Varnish http accelerator user" varnish
 exit 0
 
 %post
 /sbin/chkconfig --add varnish
 /sbin/chkconfig --add varnishlog
+/sbin/chkconfig --add varnishncsa 
 
 %preun
 if [ $1 -lt 1 ]; then
-  /sbin/service varnish stop > /dev/null 2>/dev/null
-  /sbin/service varnishlog stop > /dev/null 2>/dev/null
+  /sbin/service varnish stop > /dev/null 2>&1
+  /sbin/service varnishlog stop > /dev/null 2>&1
+  /sbin/service varnishncsa stop > /dev/null 2>%1
   /sbin/chkconfig --del varnish
   /sbin/chkconfig --del varnishlog
-fi
-
-%postun
-if [ $1 -ge 1 ]; then
-  /sbin/service varnish condrestart > /dev/null 2>/dev/null
-  /sbin/service varnishlog condrestart > /dev/null 2>/dev/null
+  /sbin/chkconfig --del varnishncsa 
 fi
 
 %post libs -p /sbin/ldconfig
@@ -172,6 +220,63 @@ fi
 %postun libs -p /sbin/ldconfig
 
 %changelog
+* Wed Oct 15 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-1
+- 2.0 released. New upstream sources
+- Disabled jemalloc on ppc and ppc64. Added a note in README.redhat.
+- Synced to upstream again. No more patches needed.
+
+* Wed Oct 08 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.11.rc1
+- 2.0-rc1 released. New upstream sources
+- Added a patch for pagesize to match redhat's rhel5 ppc64 koji build boxes
+- Added a patch for test a00008, from r3269
+- Removed condrestart in postscript at upgrade. We don't want that.
+
+* Fri Sep 26 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.10.beta2
+- 2.0-beta2 released. New upstream sources
+- Whitespace changes to make rpmlint more happy
+
+* Fri Sep 12 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.9.20080912svn3184
+- Added varnisnsca init script (Colin Hill)
+- Corrected varnishlog init script (Colin Hill)
+
+* Tue Sep 09 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.8.beta1
+- Added a patch from r3171 that fixes an endian bug on ppc and ppc64
+- Added a hack that changes the varnishtest ports for 64bits builds,
+  so they can run in parallell with 32bits build on same build host
+
+* Tue Sep 02 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.7.beta1
+- Added a patch from r3156 and r3157, hiding a legit errno in make check
+
+* Tue Sep 02 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.6.beta1
+- Added a commented option for max coresize in the sysconfig script
+- Added a comment in README.redhat about upgrading from 1.x to 2.0
+
+* Fri Aug 29 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.5.beta1
+- Bumped version numbers and source url for first beta release \o/
+- Added a missing directory to the libs-devel package (Michael Schwendt)
+- Added the LICENSE file to the libs-devel package
+- Moved make check to its proper place
+- Removed superfluous definition of lockfile in initscripts
+
+* Wed Aug 27 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.4.20080827svn3136
+- Fixed up init script for varnishlog too
+
+* Mon Aug 25 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.3.20080825svn3125
+- Fixing up init script according to newer Fedora standards
+- The build now runs the test suite after compiling
+- Requires initscripts
+- Change default.vcl from nothing but comments to point to localhost:80,
+
+* Mon Aug 18 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.2.tp2
+- Changed source, version and release to match 2.0-tp2
+
+* Thu Aug 14 2008 Ingvar Hagelund <ingvar@linpro.no> - 2.0-0.1.20080814svn
+- default.vcl has moved
+- Added groff to build requirements
+
+* Tue Feb 19 2008 Fedora Release Engineering <rel-eng@fedoraproject.org> - 1.1.2-6
+- Autorebuild for GCC 4.3
+
 * Sat Dec 29 2007 Ingvar Hagelund <ingvar@linpro.no> - 1.1.2-5
 - Added missing configuration examples
 - Corrected the license to "BSD"

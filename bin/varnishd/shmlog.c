@@ -74,6 +74,7 @@ vsl_wrap(void)
 	*logstart = SLT_ENDMARKER;
 	logstart[loghead->ptr] = SLT_WRAPMARKER;
 	loghead->ptr = 0;
+	VSL_stats->shm_cycles++;
 }
 
 static void
@@ -265,6 +266,20 @@ WSL(struct worker *w, enum shmlogtag tag, int id, const char *fmt, ...)
 /*--------------------------------------------------------------------*/
 
 void
+VSL_Panic(int *len, char **ptr)
+{
+
+	AN(len);
+	AN(ptr);
+	assert(loghead->magic == SHMLOGHEAD_MAGIC);
+	assert(loghead->hdrsize == sizeof *loghead);
+	*len = sizeof(loghead->panicstr);
+	*ptr = loghead->panicstr;
+}
+
+/*--------------------------------------------------------------------*/
+
+void
 VSL_Init(void)
 {
 
@@ -274,6 +289,7 @@ VSL_Init(void)
 	logstart = (unsigned char *)loghead + loghead->start;
 	MTX_INIT(&vsl_mtx);
 	loghead->starttime = TIM_real();
+	loghead->panicstr[0] = '\0';
 	memset(VSL_stats, 0, sizeof *VSL_stats);
 }
 

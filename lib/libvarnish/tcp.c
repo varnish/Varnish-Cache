@@ -38,6 +38,9 @@
 
 #include <errno.h>
 #include <sys/ioctl.h>
+#ifdef HAVE_SYS_FILIO_H
+#include <sys/filio.h>
+#endif
 #include <netdb.h>
 #include <poll.h>
 #include <stdio.h>
@@ -45,11 +48,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
 #ifndef HAVE_STRLCPY
 #include "compat/strlcpy.h"
 #endif
 
-#include "mgt.h"
+#include "libvarnish.h"
 
 /*--------------------------------------------------------------------*/
 
@@ -190,4 +194,18 @@ TCP_connect(int s, const struct sockaddr *name, socklen_t namelen, int msec)
 
 	TCP_blocking(s);
 	return (0);
+}
+
+/*--------------------------------------------------------------------
+ * When closing a TCP connection, a couple of errno's are legit, we
+ * can't be held responsible for the other end wanting to talk to us.
+ */
+
+void
+TCP_close(int *s)
+{
+	assert (close(*s) == 0 ||
+	    errno == ECONNRESET ||
+	    errno == ENOTCONN);
+	*s = -1;
 }

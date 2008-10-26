@@ -50,6 +50,9 @@
 #include "vrt_obj.h"
 #include "vcl.h"
 #include "cache.h"
+#include "cache_backend.h"
+
+void *vrt_magic_string_end = &vrt_magic_string_end;
 
 /*--------------------------------------------------------------------*/
 
@@ -118,6 +121,7 @@ VRT_GetHdr(const struct sess *sp, enum gethdr_e where, const char *n)
 
 /*--------------------------------------------------------------------*/
 
+/*lint -e{818} ap,hp could be const */
 static char *
 vrt_assemble_string(struct http *hp, const char *h, const char *p, va_list ap)
 {
@@ -135,7 +139,9 @@ vrt_assemble_string(struct http *hp, const char *h, const char *p, va_list ap)
 		if (b + 1 < e) 
 			*b++ = ' ';
 	}
-	while (p != NULL) {
+	while (p != vrt_magic_string_end) {
+		if (p == NULL)
+			p = "(null)";
 		x = strlen(p);
 		if (b + x < e)
 			memcpy(b, p, x);
@@ -407,7 +413,6 @@ VRT_r_obj_##onm(const struct sess *sp)					\
 	return (sp->obj->field);					\
 }
 
-VOBJ(unsigned, valid, valid)
 VOBJ(unsigned, cacheable, cacheable)
 
 /*--------------------------------------------------------------------*/
@@ -419,6 +424,7 @@ VRT_l_req_backend(struct sess *sp, struct director *be)
 	sp->director = be;
 }
 
+/*lint -e{818} sp could be const */
 struct director *
 VRT_r_req_backend(struct sess *sp)
 {
@@ -450,6 +456,7 @@ VRT_l_req_grace(struct sess *sp, double a)
 	sp->grace = a;
 }
 
+/*lint -e{818} sp could be const */
 double
 VRT_r_req_grace(struct sess *sp)
 {
@@ -457,6 +464,24 @@ VRT_r_req_grace(struct sess *sp)
 	if (isnan(sp->grace))
 		return ((double)params->default_grace);
 	return (sp->grace);
+}
+
+/*--------------------------------------------------------------------
+ * req.xid
+ */
+
+/*lint -e{818} sp could be const */
+const char *
+VRT_r_req_xid(struct sess *sp)
+{
+	char *p;
+	int size;
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+
+	size = snprintf(NULL, 0, "%u", sp->xid) + 1;
+	AN(p = WS_Alloc(sp->http->ws, size));
+	assert(snprintf(p, size, "%u", sp->xid) < size);
+	return (p);
 }
 
 /*--------------------------------------------------------------------*/
@@ -473,9 +498,23 @@ VRT_r_server_ip(struct sess *sp)
 {
 
 	if (sp->mysockaddr->sa_family == AF_UNSPEC)
-		AZ(getsockname(sp->fd, sp->mysockaddr, &sp->mysockaddrlen));
+		assert(!getsockname(sp->fd, sp->mysockaddr, &sp->mysockaddrlen)
+		    || errno == ECONNRESET);
 
 	return (sp->mysockaddr);
+}
+
+int
+VRT_r_server_port(struct sess *sp)
+{
+	char abuf[TCP_ADDRBUFSIZE];
+	char pbuf[TCP_PORTBUFSIZE];
+
+	if (sp->mysockaddr->sa_family == AF_UNSPEC)
+		AZ(getsockname(sp->fd, sp->mysockaddr, &sp->mysockaddrlen));
+	TCP_name(sp->mysockaddr, sp->mysockaddrlen, abuf, sizeof abuf, pbuf, sizeof pbuf);
+
+	return (atoi(pbuf));
 }
 
 /*--------------------------------------------------------------------
@@ -514,6 +553,15 @@ VRT_r_now(const struct sess *sp)
 	return (TIM_real());
 }
 
+int
+VRT_r_obj_hits(const struct sess *sp)
+{
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CHECK_OBJ_NOTNULL(sp->obj, OBJECT_MAGIC);	/* XXX */
+	return (sp->obj->hits);
+}
+
 double
 VRT_r_obj_lastuse(const struct sess *sp)
 {
@@ -537,17 +585,12 @@ VRT_r_obj_hash(const struct sess *sp)
 	return (sp->obj->objhead->hash);
 }
 
-int
-VRT_r_backend_health(const struct sess *sp)
+unsigned
+VRT_r_req_backend_healthy(const struct sess *sp)
 {
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
-#if 0	
-	CHECK_OBJ_NOTNULL(sp->backend, BACKEND_MAGIC);
-	return (sp->backend->health);
-#else
-	INCOMPL();
-	return (0);
-#endif
+	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	return (sp->director->healthy(sp));
 }
 
 /*--------------------------------------------------------------------*/
@@ -556,17 +599,21 @@ char *
 VRT_IP_string(const struct sess *sp, const struct sockaddr *sa)
 {
 	char *p;
+	const struct sockaddr_in *si4;
+	const struct sockaddr_in6 *si6;
 	const void *addr;
 	int len;
 
 	switch (sa->sa_family) {
 	case AF_INET:
 		len = INET_ADDRSTRLEN;
-		addr = &((const struct sockaddr_in *)sa)->sin_addr;
+		si4 = (const void *)sa;
+		addr = &(si4->sin_addr);
 		break;
 	case AF_INET6:
-		len = INET_ADDRSTRLEN;
-		addr = &((const struct sockaddr_in6 *)sa)->sin6_addr;
+		len = INET6_ADDRSTRLEN;
+		si6 = (const void *)sa;
+		addr = &(si6->sin6_addr);
 		break;
 	default:
 		INCOMPL();
@@ -601,6 +648,14 @@ VRT_double_string(const struct sess *sp, double num)
 	return (p);
 }
 
+const char *
+VRT_backend_string(struct sess *sp)
+{
+       CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+       CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+       return (sp->director->vcl_name);
+}
+
 /*--------------------------------------------------------------------*/
 
 void
@@ -613,11 +668,59 @@ VRT_Rollback(struct sess *sp)
 	
 /*--------------------------------------------------------------------*/
 
+/*lint -e{818} sp could be const */
+void
+VRT_panic(struct sess *sp, const char *str, ...)
+{
+	va_list ap;
+	char *b;
+
+	va_start(ap, str);
+	b = vrt_assemble_string(sp->http, "PANIC: ", str, ap);
+	va_end(ap);
+	lbv_assert("VCL", "", 0, b, 0, 2);
+}
+
+/*--------------------------------------------------------------------*/
+
+/*lint -e{818} sp could be const */
+void
+VRT_synth_page(struct sess *sp, unsigned flags, const char *str, ...)
+{
+	va_list ap;
+	const char *p;
+	struct vsb *vsb;
+
+	(void)flags;
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CHECK_OBJ_NOTNULL(sp->obj, OBJECT_MAGIC);
+	vsb = SMS_Makesynth(sp->obj);
+	AN(vsb);
+
+	vsb_cat(vsb, str);
+	va_start(ap, str);
+	p = va_arg(ap, const char *);
+	while (p != vrt_magic_string_end) {
+		if (p == NULL)
+			p = "(null)";
+		vsb_cat(vsb, p);
+		p = va_arg(ap, const char *);
+	}
+	va_end(ap);
+	SMS_Finish(sp->obj);
+	http_Unset(sp->obj->http, H_Content_Length);
+	http_PrintfHeader(sp->wrk, sp->fd, sp->obj->http,
+	    "Content-Length: %d", sp->obj->len);
+}
+
+/*--------------------------------------------------------------------*/
+
 void
 VRT_purge(const char *regexp, int hash)
 {
 	
-	(void)BAN_Add(NULL, regexp, hash);
+	if (regexp != NULL)
+		(void)BAN_Add(NULL, regexp, hash);
 }
 
 /*--------------------------------------------------------------------
@@ -630,5 +733,12 @@ VRT_strcmp(const char *s1, const char *s2)
 	if (s1 == NULL || s2 == NULL)
 		return(1);
 	return (strcmp(s1, s2));
+}
+
+void
+VRT_memmove(void *dst, const void *src, unsigned len)
+{
+
+	(void)memmove(dst, src, len);
 }
 

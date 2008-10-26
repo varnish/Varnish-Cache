@@ -58,6 +58,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <fcntl.h>
 
@@ -104,19 +105,26 @@ HSH_Prealloc(struct sess *sp)
 		st->len = sizeof *w->nobj;
 		memset(w->nobj, 0, sizeof *w->nobj);
 		w->nobj->objstore = st;
+		WS_Init(w->nobj->ws_o, "obj",
+		    st->ptr + st->len, st->space - st->len);
+		st->len = st->space;
+		WS_Assert(w->nobj->ws_o);
+		http_Setup(w->nobj->http, w->nobj->ws_o);
 		w->nobj->magic = OBJECT_MAGIC;
 		w->nobj->http->magic = HTTP_MAGIC;
 		w->nobj->busy = 1;
 		w->nobj->refcnt = 1;
 		w->nobj->grace = NAN;
+		w->nobj->entered = NAN;
 		VTAILQ_INIT(&w->nobj->store);
 		VTAILQ_INIT(&w->nobj->esibits);
 		VSL_stats->n_object++;
+		
 	} else
 		CHECK_OBJ_NOTNULL(w->nobj, OBJECT_MAGIC);
 }
 
-static void
+void
 HSH_Freestore(struct object *o)
 {
 	struct storage *st, *stn;
@@ -247,6 +255,8 @@ HSH_Lookup(struct sess *sp)
 	if (o != NULL) {
 		/* We found an object we like */
 		o->refcnt++;
+		if (o->hits < INT_MAX)
+			o->hits++;
 		UNLOCK(&oh->mtx);
 		if (params->log_hash)
 			WSP(sp, SLT_Hash, "%s", oh->hash);
@@ -302,7 +312,7 @@ hsh_rush(struct objhead *oh)
 }
 
 void
-HSH_Unbusy(struct sess *sp)
+HSH_Unbusy(const struct sess *sp)
 {
 	struct object *o;
 	struct objhead *oh;

@@ -35,6 +35,8 @@
 
 #define INDENT		2
 
+struct acl_e;
+
 struct membit {
 	VTAILQ_ENTRY(membit)	list;
 	void			*ptr;
@@ -84,6 +86,8 @@ struct tokenlist {
 	VTAILQ_HEAD(, proc)	procs;
 	struct proc		*curproc;
 	struct proc		*mprocs[N_METHODS];
+
+	VTAILQ_HEAD(, acl_e)	acl;
 
 	unsigned		recnt;
 	unsigned		nhashcount;
@@ -199,12 +203,12 @@ int vcc_StringVal(struct tokenlist *tl);
 void vcc_ExpectedStringval(struct tokenlist *tl);
 
 /* vcc_token.c */
+void vcc_Coord(const struct tokenlist *tl, struct vsb *vsb, const struct token *t);
 void vcc_ErrToken(const struct tokenlist *tl, const struct token *t);
 void vcc_ErrWhere(struct tokenlist *tl, const struct token *t);
 void vcc__Expect(struct tokenlist *tl, unsigned tok, int line);
 int vcc_Teq(const struct token *t1, const struct token *t2);
 int vcc_IdIs(const struct token *t, const char *p);
-int vcc_isCid(const struct token *t);
 void vcc_ExpectCid(struct tokenlist *tl);
 void vcc_Lexer(struct tokenlist *tl, struct source *sp);
 void vcc_NextToken(struct tokenlist *tl);

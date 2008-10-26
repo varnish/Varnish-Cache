@@ -34,17 +34,18 @@
 # Second element is list of valid return actions.
 #
 set methods {
-	{recv		{error restart pass pipe lookup}}
-	{pipe		{error restart pipe}}
+	{recv		{error pass pipe lookup}}
+	{pipe		{error pipe}}
 	{pass		{error restart pass}}
 	{hash		{hash}}
 	{miss		{error restart pass fetch}}
 	{hit		{error restart pass deliver}}
-	{fetch		{error restart pass insert}}
-	{deliver	{error restart deliver}}
+	{fetch		{error restart pass deliver}}
+	{deliver	{restart deliver}}
 	{prefetch	{fetch pass}}
 	{timeout	{fetch discard}}
 	{discard	{discard keep}}
+	{error		{deliver}}
 }
 
 # These are the return actions
@@ -56,7 +57,6 @@ set returns {
 	pipe
 	pass
 	fetch
-	insert
 	deliver
 	discard
 	keep
@@ -142,8 +142,6 @@ puts $fo {	unsigned        magic;
 
 	unsigned	nhashcount;
 
-        void            *priv;
-
         vcl_init_f      *init_func;
         vcl_fini_f      *fini_func;
 }
@@ -216,6 +214,7 @@ warns $foh
 puts $fo "#include \"config.h\""
 puts $fo "#include <stdio.h>"
 puts $fo "#include <ctype.h>"
+puts $fo "#include \"config.h\""
 puts $fo "#include \"vcc_priv.h\""
 puts $fo "#include \"vsb.h\""
 
@@ -260,8 +259,6 @@ foreach t $fixed {
 }
 set seq [lsort [array names xx]]
 
-set ll 0
-
 puts $fo {
 unsigned
 vcl_fixed_token(const char *p, const char **q)}
@@ -280,19 +277,18 @@ foreach ch "$seq" {
 	# And do then in reverse order to match longest first
 	set l [lsort -index 0 -decreasing $l]
 	scan "$ch" "%c" cx
-	if {$cx != $ll} {
-		if {$ll} {
-			puts $fo "		return (0);"
-		}
-	
-		puts $fo "	case '$ch':"
-		set ll $cx
-	}
+	puts $fo "	case '$ch':"
+	set retval "0"
 	foreach tt $l {
 		set k [lindex $tt 0]
+		if {[string length $k] == 1} {
+			puts $fo "\t\t*q = p + 1;"
+			set retval {p[0]}
+			continue;
+		}
 		puts -nonewline $fo "		if ("
-		for {set i 0} {$i < [string length $k]} {incr i} {
-			if {$i > 0} {
+		for {set i 1} {$i < [string length $k]} {incr i} {
+			if {$i > 1} {
 				puts -nonewline $fo " && "
 				if {![expr $i % 3]} {
 					puts -nonewline $fo "\n\t\t    "
@@ -307,12 +303,13 @@ foreach ch "$seq" {
 			puts -nonewline $fo " && !isvar(p\[$i\])"
 		}
 		puts $fo ") {"
-		puts $fo "			*q = p + [string length $k];"
-		puts $fo "			return ([lindex $tt 1]);"
-		puts $fo "		}"
+		puts $fo "\t\t\t*q = p + [string length $k];"
+		puts $fo "\t\t\treturn ([lindex $tt 1]);"
+		puts $fo "\t\t}"
 	}
+	puts $fo "\t\treturn ($retval);"
 } 
-puts $fo "		return (0);"
+
 puts $fo "	default:"
 puts $fo "		return (0);"
 puts $fo "	}"

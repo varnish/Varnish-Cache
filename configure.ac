@@ -3,14 +3,14 @@
 AC_PREREQ(2.59)
 AC_COPYRIGHT([Copyright (c) 2006-2008 Linpro AS / Verdens Gang AS])
 AC_REVISION([$Id$])
-AC_INIT([Varnish], [trunk], [varnish-dev@projects.linpro.no])
+AC_INIT([Varnish], [2.0.1], [varnish-dev@projects.linpro.no])
 AC_CONFIG_SRCDIR(include/varnishapi.h)
 AM_CONFIG_HEADER(config.h)
 
 AC_CANONICAL_SYSTEM
 AC_LANG(C)
 
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([foreign])
 
 # Checks for programs.
 AC_GNU_SOURCE
@@ -101,6 +101,7 @@ AC_CHECK_FUNCS([strptime])
 AC_CHECK_FUNCS([fmtcheck])
 AC_CHECK_FUNCS([getdtablesize])
 AC_CHECK_FUNCS([abort2])
+AC_CHECK_FUNCS([timegm])
 
 save_LIBS="${LIBS}"
 LIBS="${PTHREAD_LIBS}"
@@ -128,6 +129,20 @@ case $host in
 	   AC_DEFINE([SENDFILE_WORKS], [1], [Define if SENDFILE works])
 	fi
  	;;
+*-*-solaris*)
+	AC_CHECK_HEADERS([sys/filio.h])
+	AC_CHECK_LIB(sendfile, sendfile)
+	AC_CHECK_LIB(umem, malloc)
+	AC_CHECK_HEADERS([umem.h])
+
+	if test "$ac_cv_lib_sendfile_sendfile" = yes; then
+		save_LIBS="${LIBS}"
+		LIBS="${NET_LIBS}"
+		AC_CHECK_FUNCS([sendfile])
+		AC_CHECK_FUNCS([sendfilev])
+		LIBS="${save_LIBS}"
+	fi
+	;;
 *)
 	AC_MSG_WARN([won't look for sendfile() on $host])
 	;;
@@ -142,6 +157,7 @@ AC_CHECK_FUNCS([strlcat strlcpy])
 AC_CHECK_FUNCS([strndup])
 AC_CHECK_FUNCS([vis strvis strvisx])
 AC_CHECK_FUNCS([daemon])
+AC_SYS_LARGEFILE
 
 save_LIBS="${LIBS}"
 LIBS="${LIBS} ${RT_LIBS}"
@@ -163,7 +179,7 @@ AC_ARG_ENABLE(kqueue,
 
 if test "$enable_kqueue" = yes; then
 	case $host in
-	*-*-freebsd*)
+	*-*-freebsd* | *-*-darwin9* )
 		AC_CHECK_FUNCS([kqueue])
 		;;
 	*-*-bsd*)
@@ -189,23 +205,23 @@ else
 	ac_cv_func_epoll_ctl=no
 fi
 
-# --enable-poll
-AC_ARG_ENABLE(poll,
-    AS_HELP_STRING([--enable-poll],
-	[use poll if available (default is YES)]),
+# --enable-ports
+AC_ARG_ENABLE(ports,
+    AS_HELP_STRING([--enable-ports],
+	[use ports if available (default is YES)]),
     ,
-    [enable_poll=yes])
+    [enable_ports=yes])
 
-if test "$enable_poll" = yes; then
-	AC_CHECK_FUNCS([poll])
+if test "$enable_ports" = yes; then
+	AC_CHECK_FUNCS([port_create])
 else
-	ac_cv_func_poll=no
+	ac_cv_func_port_create=no
 fi
 
-if test "$ac_cv_func_kqueue" != yes &&
-   test "$ac_cv_func_epoll_ctl" != yes &&
-   test "$ac_cv_func_poll" != yes; then
-	AC_MSG_ERROR([no usable acceptor mechanism])
+AM_MISSING_HAS_RUN
+AC_CHECK_PROGS(TCLSH, [tclsh tclsh8.4 tclsh8.5], :)
+if test "$TCLSH" = :; then
+  TCLSH="${am_missing_run}tclsh || true"
 fi
 
 # Solaris defines SO_{RCV,SND}TIMEO, but does not implement them.
@@ -260,6 +276,9 @@ fi
 VARNISH_STATE_DIR='${localstatedir}/varnish'
 AC_SUBST(VARNISH_STATE_DIR)
 
+# Default configuration directory.
+varnishconfdir='${sysconfdir}/varnish'
+AC_SUBST(varnishconfdir)
 # Now that we're done using the compiler to look for functions and
 # libraries, set CFLAGS to what we want them to be for our own code
 
@@ -304,6 +323,49 @@ AC_ARG_ENABLE(werror,
 	AS_HELP_STRING([--enable-werror],[use -Werror (default is NO)]),
 	CFLAGS="${CFLAGS} -Werror")
 
+# Command line for compiling VCL code.  I wish there were a simple way
+# to figure this out dynamically without introducing a run-time
+# dependency on libtool.
+AC_ARG_VAR([VCC_CC], [C compiler command line for VCL code])
+if test "$ac_cv_env_VCC_CC_set" = "set"; then
+	VCC_CC="$ac_cv_env_VCC_CC_value"
+else
+	case $host in
+	*-*-solaris*)
+		VCC_CC="cc -Kpic -G -o %o %s"
+		;;
+	*-*-darwin*)
+		VCC_CC="exec cc -dynamiclib -Wl,-undefined,dynamic_lookup -o %o %s"
+		;;
+	*)
+		VCC_CC="exec cc -fpic -shared -Wl,-x -o %o %s"
+		;;
+	esac
+fi
+AC_DEFINE_UNQUOTED([VCC_CC],"$VCC_CC",[C compiler command line for VCL code])
+
+# Use jemalloc on Linux
+JEMALLOC_SUBDIR=
+JEMALLOC_LDADD=
+AC_ARG_ENABLE(jemalloc,
+AS_HELP_STRING([--disable-jemalloc],[do not use jemalloc (default is yes on Linux, no everywhere else)]),
+[if "x$enableval" = "xyes"; then
+	JEMALLOC_SUBDIR=libjemalloc
+	JEMALLOC_LDADD='$(top_builddir)/lib/libjemalloc/libjemalloc_mt.la'
+fi],
+[case $host in #(
+*-*-linux*)
+	JEMALLOC_SUBDIR=libjemalloc
+	JEMALLOC_LDADD='$(top_builddir)/lib/libjemalloc/libjemalloc_mt.la'
+	;; #(
+*)
+	true
+	;;
+esac])
+
+AC_SUBST(JEMALLOC_SUBDIR)
+AC_SUBST(JEMALLOC_LDADD)
+
 # Generate output
 AC_CONFIG_FILES([
     Makefile
@@ -325,6 +387,7 @@ AC_CONFIG_FILES([
     lib/libvarnishapi/Makefile
     lib/libvarnishcompat/Makefile
     lib/libvcl/Makefile
+    lib/libjemalloc/Makefile
     man/Makefile
     redhat/Makefile
     varnishapi.pc

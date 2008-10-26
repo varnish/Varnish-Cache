@@ -36,6 +36,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "config.h"
 #include "vqueue.h"
 
 #include "vsb.h"
@@ -67,32 +68,54 @@ vcc__ErrInternal(struct tokenlist *tl, const char *func, unsigned line)
 	tl->err = 1;
 }
 
-void
-vcc_ErrWhere(struct tokenlist *tl, const struct token *t)
+static void
+vcc_icoord(struct vsb *vsb, const struct token *t, const char **ll)
 {
-	unsigned lin, pos, x, y;
-	const char *p, *l, *f, *b, *e;
+	unsigned lin, pos;
+	const char *p, *b;
 	struct source *sp;
 
 	lin = 1;
 	pos = 0;
 	sp = t->src;
-	f = sp->name;
 	b = sp->b;
-	e = sp->e;
-	for (l = p = b; p < t->b; p++) {
+	if (ll != NULL)
+		*ll = b;
+	for (p = b; p < t->b; p++) {
 		if (*p == '\n') {
 			lin++;
 			pos = 0;
-			l = p + 1;
+			if (ll != NULL)
+				*ll = p + 1;
 		} else if (*p == '\t') {
 			pos &= ~7;
 			pos += 8;
 		} else
 			pos++;
 	}
-	vsb_printf(tl->sb, "(%s Line %d Pos %d)\n", f, lin, pos + 1);
+	vsb_printf(vsb, "(%s Line %d Pos %d)", sp->name, lin, pos + 1);
+}
+
+void
+vcc_Coord(const struct tokenlist *tl, struct vsb *vsb, const struct token *t)
+{
+
+	if (t == NULL)
+		t = tl->t;
+	vcc_icoord(vsb, t, NULL);
+}
+
+void
+vcc_ErrWhere(struct tokenlist *tl, const struct token *t)
+{
+	unsigned x, y;
+	const char *p, *l, *e;
+
+	vcc_icoord(tl->sb, t, &l);
+	vsb_printf(tl->sb, "\n");
+	
 	x = y = 0;
+	e = t->src->e;
 	for (p = l; p < e && *p != '\n'; p++) {
 		if (*p == '\t') {
 			y &= ~7;
@@ -191,7 +214,7 @@ vcc_IdIs(const struct token *t, const char *p)
  * Check that we have a C-identifier
  */
 
-int
+static int
 vcc_isCid(const struct token *t)
 {
 	const char *q;
@@ -266,7 +289,7 @@ vcc_decstr(struct tokenlist *tl)
 			vcc_ErrWhere(tl, tl->t);
 			return(1);
 		}
-		u = vcc_xdig(p[1]) * 16 + vcc_xdig(p[2]);
+		u = (vcc_xdig(p[1]) * 16 + vcc_xdig(p[2])) & 0xff;
 		if (!isgraph(u)) {
 			vcc_AddToken(tl, CSTR, p, p + 3);
 			vsb_printf(tl->sb,
@@ -301,12 +324,6 @@ vcc_AddToken(struct tokenlist *tl, unsigned tok, const char *b, const char *e)
 	else
 		VTAILQ_INSERT_TAIL(&tl->tokens, t, list);
 	tl->t = t;
-	if (0) {
-		fprintf(stderr, "[%s %.*s] ",
-		    vcl_tnames[tok], PF(t));
-		if (tok == EOI)
-			fprintf(stderr, "\n");
-	}
 }
 
 /*--------------------------------------------------------------------
@@ -364,12 +381,13 @@ vcc_Lexer(struct tokenlist *tl, struct source *sp)
 			for (q = p + 2; q < sp->e; q++) {
 				if (*q == '}' && q[1] == 'C') {
 					vcc_AddToken(tl, CSRC, p, q + 2);
-					p = q + 2;
 					break;
 				}
 			}
-			if (q < sp->e)
+			if (q < sp->e) {
+				p = q + 2;
 				continue;
+			}
 			vcc_AddToken(tl, EOI, p, p + 2);
 			vsb_printf(tl->sb,
 			    "Unterminated inline C source, starting at\n");
@@ -377,6 +395,30 @@ vcc_Lexer(struct tokenlist *tl, struct source *sp)
 			return;
 		}
 	
+		/* Recognize long-strings */
+		if (*p == '{' && p[1] == '"') {
+			for (q = p + 2; q < sp->e; q++) {
+				if (*q == '"' && q[1] == '}') {
+					vcc_AddToken(tl, CSTR, p, q + 2);
+					break;
+				}
+			}
+			if (q < sp->e) {
+				p = q + 2;
+				u = tl->t->e - tl->t->b;
+				u -= 4; 	/* {" ... "} */
+				tl->t->dec = TlAlloc(tl, u + 1 );
+				AN(tl->t->dec);
+				memcpy(tl->t->dec, tl->t->b + 2, u);
+				tl->t->dec[u] = '\0';
+				continue;
+			}
+			vcc_AddToken(tl, EOI, p, p + 2);
+			vsb_printf(tl->sb,
+			    "Unterminated long-string, starting at\n");
+			vcc_ErrWhere(tl, tl->t);
+			return;
+		}
 
 		/* Match for the fixed tokens (see token.tcl) */
 		u = vcl_fixed_token(p, &q);

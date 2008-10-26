@@ -40,7 +40,6 @@
 #include "shmlog.h"
 #include "cache.h"
 #include "stevedore.h"
-#include "cli.h"
 #include "cli_priv.h"
 
 static unsigned fetchfrag;
@@ -113,7 +112,7 @@ fetch_chunked(struct sess *sp, struct http_conn *htc)
 		if (q == NULL || q == buf || *q != '\n') {
 			xxxassert(be > bp);
 			/*
-			 * The sematics we need here is "read until you have
+			 * The semantics we need here is "read until you have
 			 * received at least one character, but feel free to
 			 * return up to (be-bp) if they are available, but do
 			 * not wait for those extra characters.
@@ -204,7 +203,7 @@ fetch_chunked(struct sess *sp, struct http_conn *htc)
 /*--------------------------------------------------------------------*/
 
 static void
-dump_st(struct sess *sp, struct storage *st)
+dump_st(const struct sess *sp, const struct storage *st)
 {
 	txt t;
 
@@ -247,7 +246,7 @@ fetch_eof(struct sess *sp, struct http_conn *htc)
 		st->len += i;
 		sp->obj->len += i;
 	}
-	if (st != NULL && fetchfrag > 0)
+	if (fetchfrag > 0)
 		dump_st(sp, st);
 
 	if (st->len == 0) {
@@ -272,7 +271,7 @@ FetchReqBody(struct sess *sp)
 	unsigned long content_length;
 	char buf[8192];
 	char *ptr, *endp;
-	int read;
+	int rdcnt;
 
 	if (http_GetHdr(sp->http, H_Content_Length, &ptr)) {
 
@@ -280,16 +279,16 @@ FetchReqBody(struct sess *sp)
 		/* XXX should check result of conversion */
 		while (content_length) {
 			if (content_length > sizeof buf)
-				read = sizeof buf;
+				rdcnt = sizeof buf;
 			else
-				read = content_length;
-			read = HTC_Read(sp->htc, buf, read);
-			if (read <= 0)
+				rdcnt = content_length;
+			rdcnt = HTC_Read(sp->htc, buf, rdcnt);
+			if (rdcnt <= 0)
 				return (1);
-			content_length -= read;
+			content_length -= rdcnt;
 			if (!sp->sendbody)
 				continue;
-			WRK_Write(sp->wrk, buf, read);
+			WRK_Write(sp->wrk, buf, rdcnt);	/* XXX: stats ? */
 			if (WRK_Flush(sp->wrk))
 				return (2);
 		}
@@ -322,7 +321,7 @@ Fetch(struct sess *sp)
 	CHECK_OBJ_NOTNULL(sp->wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->obj, OBJECT_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->bereq, BEREQ_MAGIC);
-	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	AN(sp->director);
 	assert(sp->obj->busy != 0);
 	w = sp->wrk;
 	bereq = sp->bereq;
@@ -332,33 +331,39 @@ Fetch(struct sess *sp)
 	sp->obj->xid = sp->xid;
 
 	/* Set up obj's workspace */
-	st = sp->obj->objstore;
-	WS_Init(sp->obj->ws_o, "obj", st->ptr + st->len, st->space - st->len);
-	st->len = st->space;
 	WS_Assert(sp->obj->ws_o);
-	http_Setup(sp->obj->http, sp->obj->ws_o);
-	vc = VBE_GetFd(sp);
-	if (vc == NULL)
+	VBE_GetFd(sp);
+	if (sp->vbe == NULL)
 		return (__LINE__);
+	vc = sp->vbe;
+
+	/*
+	 * Now that we know our backend, we can set a default Host:
+	 * header if one is necessary.
+	 * XXX: This possibly ought to go into the default VCL
+	 */
+	if (!http_GetHdr(hp, H_Host, &b)) 
+		VBE_AddHostHeader(sp);
+
 	TCP_blocking(vc->fd);	/* XXX: we should timeout instead */
 	WRK_Reset(w, &vc->fd);
-	http_Write(w, hp, 0);
+	http_Write(w, hp, 0);	/* XXX: stats ? */
 
 	/* Deal with any message-body the request might have */
 	i = FetchReqBody(sp);
 	if (i > 0) {
-		if (i > 1)
-			VBE_UpdateHealth(sp, vc, -1);
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 		return (__LINE__);
 	}
 
 	if (WRK_Flush(w)) {
-		VBE_UpdateHealth(sp, vc, -1);
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 		/* XXX: other cleanup ? */
 		return (__LINE__);
 	}
+
+	/* Checkpoint the shmlog here */
+	WSL_Flush(w, 0);
 
 	/* XXX is this the right place? */
 	VSL_stats->backend_req++;
@@ -369,15 +374,13 @@ Fetch(struct sess *sp)
 	while (i == 0);
 
 	if (i < 0) {
-		VBE_UpdateHealth(sp, vc, -1);
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 		/* XXX: other cleanup ? */
 		return (__LINE__);
 	}
 
 	if (http_DissectResponse(sp->wrk, htc, hp)) {
-		VBE_UpdateHealth(sp, vc, -2);
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 		/* XXX: other cleanup ? */
 		return (__LINE__);
 	}
@@ -409,8 +412,7 @@ Fetch(struct sess *sp)
 	} else if (http_GetHdr(hp, H_Transfer_Encoding, &b)) {
 		/* XXX: AUGH! */
 		WSL(sp->wrk, SLT_Debug, vc->fd, "Invalid Transfer-Encoding");
-		VBE_UpdateHealth(sp, vc, -3);
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 		return (__LINE__);
 	} else {
 		switch (http_GetStatus(hp)) {
@@ -430,8 +432,7 @@ Fetch(struct sess *sp)
 			VTAILQ_REMOVE(&sp->obj->store, st, list);
 			STV_free(st);
 		}
-		VBE_UpdateHealth(sp, vc, -4);
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 		sp->obj->len = 0;
 		return (__LINE__);
 	}
@@ -453,12 +454,10 @@ Fetch(struct sess *sp)
 	if (http_GetHdr(hp, H_Connection, &b) && !strcasecmp(b, "close"))
 		cls = 1;
 
-	VBE_UpdateHealth(sp, vc, http_GetStatus(sp->bereq->http));
-
 	if (cls)
-		VBE_ClosedFd(sp->wrk, vc);
+		VBE_ClosedFd(sp);
 	else
-		VBE_RecycleFd(sp->wrk, vc);
+		VBE_RecycleFd(sp);
 
 	return (0);
 }

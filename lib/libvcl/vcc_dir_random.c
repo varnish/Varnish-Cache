@@ -54,18 +54,38 @@ vcc_ParseRandomDirector(struct tokenlist *tl, const struct token *t_policy, cons
 {
 	struct token *t_field, *t_be;
 	int nbh, nelem;
-	struct fld_spec *fs;
-	unsigned u;
+	struct fld_spec *fs, *mfs;
+	unsigned u, retries;
+	const char *first;
 
-	fs = vcc_FldSpec(tl, "!backend", "!weight", NULL);
+	fs = vcc_FldSpec(tl, "?retries", NULL);
+
+	retries = 0;
+	while (tl->t->tok != '{') {
+		vcc_IsField(tl, &t_field, fs);
+		ERRCHK(tl);
+		if (vcc_IdIs(t_field, "retries")) {
+			ExpectErr(tl, CNUM);
+			retries = vcc_UintVal(tl);
+			ERRCHK(tl);
+			vcc_NextToken(tl);
+			ExpectErr(tl, ';');
+			vcc_NextToken(tl);
+		} else {
+			ErrInternal(tl);
+		}
+	}
+
+	mfs = vcc_FldSpec(tl, "!backend", "!weight", NULL);
 
 	Fc(tl, 0,
 	    "\nstatic const struct vrt_dir_random_entry vdre_%.*s[] = {\n",
 	    PF(t_dir));
 
 	for (nelem = 0; tl->t->tok != '}'; nelem++) {	/* List of members */
+		first = "";
 		t_be = tl->t;
-		vcc_ResetFldSpec(fs);
+		vcc_ResetFldSpec(mfs);
 		nbh = -1;
 
 		ExpectErr(tl, '{');
@@ -73,16 +93,17 @@ vcc_ParseRandomDirector(struct tokenlist *tl, const struct token *t_policy, cons
 		Fc(tl, 0, "\t{");
 	
 		while (tl->t->tok != '}') {	/* Member fields */
-			vcc_IsField(tl, &t_field, fs);
+			vcc_IsField(tl, &t_field, mfs);
 			ERRCHK(tl);
 			if (vcc_IdIs(t_field, "backend")) {
 				vcc_ParseBackendHost(tl, &nbh,
 				    t_dir, t_policy, nelem);
-				Fc(tl, 0, " .host = &bh_%d,", nbh);
+				Fc(tl, 0, "%s .host = &bh_%d", first, nbh);
 				ERRCHK(tl);
 			} else if (vcc_IdIs(t_field, "weight")) {
 				ExpectErr(tl, CNUM);
 				u = vcc_UintVal(tl);
+				ERRCHK(tl);
 				if (u == 0) {
 					vsb_printf(tl->sb,
 					    "The .weight must be higher "
@@ -92,18 +113,19 @@ vcc_ParseRandomDirector(struct tokenlist *tl, const struct token *t_policy, cons
 					vcc_ErrWhere(tl, tl->t);
 					return;
 				}
-				Fc(tl, 0, " .weight = %u", u);
+				Fc(tl, 0, "%s .weight = %u", first, u);
 				vcc_NextToken(tl);
 				ExpectErr(tl, ';');
 				vcc_NextToken(tl);
 			} else {
 				ErrInternal(tl);
 			}
+			first = ", ";
 		}
-		vcc_FieldsOk(tl, fs);
+		vcc_FieldsOk(tl, mfs);
 		if (tl->err) {
 			vsb_printf(tl->sb,
-			    "\nIn member host specfication starting at:\n");
+			    "\nIn member host specification starting at:\n");
 			vcc_ErrWhere(tl, t_be);
 			return;
 		}
@@ -115,6 +137,7 @@ vcc_ParseRandomDirector(struct tokenlist *tl, const struct token *t_policy, cons
 	    "\nstatic const struct vrt_dir_random vdr_%.*s = {\n",
 	    PF(t_dir));
 	Fc(tl, 0, "\t.name = \"%.*s\",\n", PF(t_dir));
+	Fc(tl, 0, "\t.retries = %u,\n", retries);
 	Fc(tl, 0, "\t.nmember = %d,\n", nelem);
 	Fc(tl, 0, "\t.members = vdre_%.*s,\n", PF(t_dir));
 	Fc(tl, 0, "};\n");

@@ -85,8 +85,9 @@ sma_alloc(struct stevedore *st, size_t size)
 	return (&sma->s);
 }
 
+/*lint -e{818} not const-able */
 static void
-sma_free(const struct storage *s)
+sma_free(struct storage *s)
 {
 	struct sma *sma;
 
@@ -123,26 +124,26 @@ sma_trim(const struct storage *s, size_t size)
 }
 
 static void
-sma_init(struct stevedore *parent, const char *spec)
+sma_init(struct stevedore *parent, int ac, char * const *av)
 {
 	const char *e;
 	uintmax_t u;
 
 	(void)parent;
-	if (spec != NULL && *spec != '\0') {
-		e = str2bytes(spec, &u, 0);
-		if (e != NULL) {
-			fprintf(stderr,
-			    "Error: (-smalloc) size \"%s\": %s\n", spec, e);
-			exit(2);
-		}
-		if ((u != (uintmax_t)(size_t)u)) {
-			fprintf(stderr,
-			    "Error: (-smalloc) size \"%s\": too big\n", spec);
-			exit(2);
-		}
-		sma_max = u;
-	}
+
+	AZ(av[ac]);
+	if (ac > 1) 
+		ARGV_ERR("(-smalloc) too many arguments\n");
+
+	if (ac == 0 || *av[0] == '\0')
+		 return;
+
+	e = str2bytes(av[0], &u, 0);
+	if (e != NULL)
+		ARGV_ERR("(-smalloc) size \"%s\": %s\n", av[0], e);
+	if ((u != (uintmax_t)(size_t)u)) 
+		ARGV_ERR("(-smalloc) size \"%s\": too big\n", av[0]);
+	sma_max = u;
 }
 
 static void
@@ -153,10 +154,11 @@ sma_open(const struct stevedore *st)
 }
 
 struct stevedore sma_stevedore = {
-	.name =		"malloc",
-	.init =		sma_init,
-	.open =		sma_open,
-	.alloc =	sma_alloc,
-	.free =		sma_free,
-	.trim =		sma_trim,
+	.magic	=	STEVEDORE_MAGIC,
+	.name	=	"malloc",
+	.init	=	sma_init,
+	.open	=	sma_open,
+	.alloc	=	sma_alloc,
+	.free	=	sma_free,
+	.trim	=	sma_trim,
 };

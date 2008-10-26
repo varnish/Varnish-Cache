@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2008 Linpro AS
+ * Copyright (c) 2008 Linpro AS
  * All rights reserved.
  *
  * Author: Petter Knudsen <petter@linpro.no>
@@ -26,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $Id: vcc_dir_random.c 2900 2008-07-08 07:30:42Z phk $
+ * $Id$
  */
 
 #include "config.h"
@@ -55,6 +54,7 @@ vcc_ParseRoundRobinDirector(struct tokenlist *tl, const struct token *t_policy, 
 	struct token *t_field, *t_be;
 	int nbh, nelem;
 	struct fld_spec *fs;
+	const char *first;
 
 	fs = vcc_FldSpec(tl, "!backend", NULL);
 
@@ -63,6 +63,7 @@ vcc_ParseRoundRobinDirector(struct tokenlist *tl, const struct token *t_policy, 
 	    PF(t_dir));
 
 	for (nelem = 0; tl->t->tok != '}'; nelem++) {	/* List of members */
+		first = "";
 		t_be = tl->t;
 		vcc_ResetFldSpec(fs);
 		nbh = -1;
@@ -77,16 +78,17 @@ vcc_ParseRoundRobinDirector(struct tokenlist *tl, const struct token *t_policy, 
 			if (vcc_IdIs(t_field, "backend")) {
 				vcc_ParseBackendHost(tl, &nbh,
 				    t_dir, t_policy, nelem);
-				Fc(tl, 0, " .host = &bh_%d,", nbh);
+				Fc(tl, 0, "%s .host = &bh_%d", first, nbh);
 				ERRCHK(tl);
 			} else {
 				ErrInternal(tl);
 			}
+			first = ", ";
 		}
 		vcc_FieldsOk(tl, fs);
 		if (tl->err) {
 			vsb_printf(tl->sb,
-			    "\nIn member host specfication starting at:\n");
+			    "\nIn member host specification starting at:\n");
 			vcc_ErrWhere(tl, t_be);
 			return;
 		}

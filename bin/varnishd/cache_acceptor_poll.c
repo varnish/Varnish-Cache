@@ -32,8 +32,6 @@
 
 #include "config.h"
 
-#if defined(HAVE_POLL)
-
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -111,7 +109,7 @@ vca_main(void *arg)
 	double deadline;
 	int i, fd;
 
-	THR_Name("cache-poll");
+	THR_SetName("cache-poll");
 	(void)arg;
 
 	vca_poll(vca_pipes[0]);
@@ -167,5 +165,3 @@ struct acceptor acceptor_poll = {
 	.name =		"poll",
 	.init =		vca_poll_init,
 };
-
-#endif /* defined(HAVE_POLL) */

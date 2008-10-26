@@ -1,4 +1,4 @@
-# $Id: v00006.vtc 2906 2008-07-08 10:29:07Z phk $
+# $Id$
 
 test "VCL: Test backend retirement"
 
@@ -10,9 +10,9 @@ server s1 -listen 127.0.0.1:9080 {
 } -start
 
 # Only one pool, to avoid getting more than one work thread
-varnish v1 -arg "-p thread_pools=1" -vcl {
+varnish v1 -arg "-p thread_pools=1 -w1,1,300" -vcl {
 	backend b1 {
-		.host = "localhost";
+		.host = "127.0.0.1";
 		.port = "9080";
 	}
 } -start
@@ -38,7 +38,7 @@ server s2 -listen 127.0.0.1:9180 {
 
 varnish v1 -vcl {
 	backend b2 {
-		.host = "localhost";
+		.host = "127.0.0.1";
 		.port = "9180";
 	}
 }
@@ -62,7 +62,7 @@ varnish v1 -expect n_vcl_discard == 1
 client c1 {
 	txreq -url /foo
 	rxresp
-} -start
+} -run
 
 # The workthread should have released its VCL reference now
 # but we need to tickle the CLI to notice

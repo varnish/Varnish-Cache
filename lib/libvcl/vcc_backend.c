@@ -60,6 +60,7 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include "config.h"
 #include "vsb.h"
 
 #include "vcc_priv.h"
@@ -260,7 +261,6 @@ vcc_FldSpec(struct tokenlist *tl, const char *first, ...)
 	return (r);
 }
 
-
 void
 vcc_IsField(struct tokenlist *tl, struct token **t, struct fld_spec *fs)
 {
@@ -317,6 +317,8 @@ vcc_FieldsOk(struct tokenlist *tl, const struct fld_spec *fs)
 static void
 vcc_ProbeRedef(struct tokenlist *tl, struct token **t_did, struct token *t_field)
 {
+	/* .url and .request are mutually exclusive */
+
 	if (*t_did != NULL) {
 		vsb_printf(tl->sb,
 		    "Probe request redefinition at:\n");
@@ -334,35 +336,35 @@ vcc_ParseProbe(struct tokenlist *tl)
 {
 	struct fld_spec *fs;
 	struct token *t_field;
-	struct token *t_did = NULL;
+	struct token *t_did = NULL, *t_window = NULL, *t_threshold = NULL;
+	unsigned window, threshold;
 
 	fs = vcc_FldSpec(tl,
 	    "?url",
 	    "?request",
 	    "?timeout",
 	    "?interval",
+	    "?window",
+	    "?threshold",
 	    NULL);
 
 	ExpectErr(tl, '{');
 	vcc_NextToken(tl);
 
+	window = 0;
+	threshold = 0;
 	Fb(tl, 0, "\t.probe = {\n");
 	while (tl->t->tok != '}') {
 
 		vcc_IsField(tl, &t_field, fs);
 		ERRCHK(tl);
-		if (tl->err)
-			break;
 		if (vcc_IdIs(t_field, "url")) {
 			vcc_ProbeRedef(tl, &t_did, t_field);
 			ERRCHK(tl);
 			ExpectErr(tl, CSTR);
-			Fb(tl, 0, "\t\t.request =\n");
-			Fb(tl, 0, "\t\t\t\"GET \" ");
+			Fb(tl, 0, "\t\t.url = ");
 			EncToken(tl->fb, tl->t);
-			Fb(tl, 0, " \" /HTTP/1.1\\r\\n\"\n");
-			Fb(tl, 0, "\t\t\t\"Connection: close\\r\\n\"\n");
-			Fb(tl, 0, "\t\t\t\"\\r\\n\",\n");
+			Fb(tl, 0, ",\n");
 			vcc_NextToken(tl);
 		} else if (vcc_IdIs(t_field, "request")) {
 			vcc_ProbeRedef(tl, &t_did, t_field);
@@ -386,6 +388,16 @@ vcc_ParseProbe(struct tokenlist *tl)
 			vcc_TimeVal(tl);
 			ERRCHK(tl);
 			Fb(tl, 0, ",\n");
+		} else if (vcc_IdIs(t_field, "window")) {
+			t_window = tl->t;
+			window = vcc_UintVal(tl);
+			vcc_NextToken(tl);
+			ERRCHK(tl);
+		} else if (vcc_IdIs(t_field, "threshold")) {
+			t_threshold = tl->t;
+			threshold = vcc_UintVal(tl);
+			vcc_NextToken(tl);
+			ERRCHK(tl);
 		} else {
 			vcc_ErrToken(tl, t_field);
 			vcc_ErrWhere(tl, t_field);
@@ -395,6 +407,38 @@ vcc_ParseProbe(struct tokenlist *tl)
 
 		ExpectErr(tl, ';');
 		vcc_NextToken(tl);
+	}
+
+	if (t_threshold != NULL || t_window != NULL) {
+		if (t_threshold == NULL && t_window != NULL) {
+			vsb_printf(tl->sb,
+			    "Must specify .threshold with .window\n");
+			vcc_ErrWhere(tl, t_window);
+			return;
+		} else if (t_threshold != NULL && t_window == NULL) {
+			if (threshold > 64) {
+				vsb_printf(tl->sb,
+				    "Threshold must be 64 or less.\n");
+				vcc_ErrWhere(tl, t_threshold);
+				return;
+			}
+			window = threshold + 1;
+		} else if (window > 64) {
+			AN(t_window);
+			vsb_printf(tl->sb, "Window must be 64 or less.\n");
+			vcc_ErrWhere(tl, t_window);
+			return;
+		}
+		if (threshold > window ) {
+			vsb_printf(tl->sb,
+			    "Threshold can not be greater than window.\n");
+			AN(t_threshold);
+			vcc_ErrWhere(tl, t_threshold);
+			AN(t_window);
+			vcc_ErrWhere(tl, t_window);
+		}
+		Fb(tl, 0, "\t\t.window = %u,\n", window);
+		Fb(tl, 0, "\t\t.threshold = %u\n", threshold);
 	}
 	Fb(tl, 0, "\t},\n");
 	ExpectErr(tl, '}');
@@ -430,13 +474,16 @@ vcc_ParseHostDef(struct tokenlist *tl, int *nbh, const struct token *name, const
 	const char *ep;
 	struct fld_spec *fs;
 	struct vsb *vsb;
+	unsigned u;
 
 	fs = vcc_FldSpec(tl,
 	    "!host",
 	    "?port",
 	    "?host_header",
 	    "?connect_timeout",
-	    "?probe", NULL);
+	    "?probe",
+	    "?max_connections",
+	    NULL);
 	t_first = tl->t;
 
 	ExpectErr(tl, '{');
@@ -470,8 +517,6 @@ vcc_ParseHostDef(struct tokenlist *tl, int *nbh, const struct token *name, const
 
 		vcc_IsField(tl, &t_field, fs);
 		ERRCHK(tl);
-		if (tl->err)
-			break;
 		if (vcc_IdIs(t_field, "host")) {
 			ExpectErr(tl, CSTR);
 			assert(tl->t->dec != NULL);
@@ -500,6 +545,13 @@ vcc_ParseHostDef(struct tokenlist *tl, int *nbh, const struct token *name, const
 			Fb(tl, 0, ",\n");
 			ExpectErr(tl, ';');
 			vcc_NextToken(tl);
+		} else if (vcc_IdIs(t_field, "max_connections")) {
+			u = vcc_UintVal(tl);
+			vcc_NextToken(tl);
+			ERRCHK(tl);
+			ExpectErr(tl, ';');
+			vcc_NextToken(tl);
+			Fb(tl, 0, "\t.max_connections = %u,\n", u);
 		} else if (vcc_IdIs(t_field, "probe")) {
 			vcc_ParseProbe(tl);
 			ERRCHK(tl);
@@ -524,7 +576,7 @@ vcc_ParseHostDef(struct tokenlist *tl, int *nbh, const struct token *name, const
 
 	/* Check that the portname makes sense */
 	if (t_port != NULL) {
-		ep = CheckHostPort("localhost", t_port->dec);
+		ep = CheckHostPort("127.0.0.1", t_port->dec);
 		if (ep != NULL) {
 			vsb_printf(tl->sb,
 			    "Backend port '%.*s': %s\n", PF(t_port), ep);
@@ -602,7 +654,7 @@ vcc_ParseBackendHost(struct tokenlist *tl, int *nbh, const struct token *name, c
 		vcc_ParseHostDef(tl, nbh, name, qual, serial);
 		if (tl->err) {
 			vsb_printf(tl->sb,
-			    "\nIn backend host specfication starting at:\n");
+			    "\nIn backend host specification starting at:\n");
 			vcc_ErrWhere(tl, t);
 		}
 		return;
@@ -655,7 +707,7 @@ static const struct dirlist {
 	const char	*name;
 	parsedirector_f	*func;
 } dirlist[] = {
-	{ "random", 	vcc_ParseRandomDirector },
+	{ "random", 		vcc_ParseRandomDirector },
 	{ "round-robin", 	vcc_ParseRoundRobinDirector },
 	{ NULL,		NULL }
 };
@@ -706,7 +758,7 @@ vcc_ParseDirector(struct tokenlist *tl)
 	}
 	if (tl->err) {
 		vsb_printf(tl->sb,
-		    "\nIn %.*s specfication starting at:\n", PF(t_first));
+		    "\nIn %.*s specification starting at:\n", PF(t_first));
 		vcc_ErrWhere(tl, t_first);
 		return;
 	}

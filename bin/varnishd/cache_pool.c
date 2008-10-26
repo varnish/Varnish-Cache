@@ -52,6 +52,8 @@
 #include <sys/socket.h>
 #elif defined(__linux__)
 #include <sys/sendfile.h>
+#elif defined(__sun)
+#include <sys/sendfile.h>
 #else
 #error Unknown sendfile() implementation
 #endif
@@ -91,7 +93,6 @@ static struct wq		**wq;
 static unsigned			nwq;
 static unsigned			ovfl_max;
 static unsigned			nthr_max;
-static unsigned			nthr_min;
 
 static pthread_cond_t		herder_cond;
 static MTX			herder_mtx;
@@ -192,6 +193,37 @@ WRK_Sendfile(struct worker *w, int fd, off_t off, unsigned len)
 		    sendfile(*w->wfd, fd, &off, len) != len)
 			w->werr++;
 	} while (0);
+#elif defined(__sun)
+#ifdef HAVE_SENDFILEV
+	do {
+		sendfilevec_t svvec[HTTP_HDR_MAX * 2 + 1];
+		size_t xferred = 0, expected = 0;
+		int i;
+		for (i = 0; i < w->niov; i++) {
+			svvec[i].sfv_fd = SFV_FD_SELF;
+			svvec[i].sfv_flag = 0;
+			svvec[i].sfv_off = (off_t) w->iov[i].iov_base;
+			svvec[i].sfv_len = w->iov[i].iov_len;
+			expected += svvec[i].sfv_len;
+		}
+		svvec[i].sfv_fd = fd;
+		svvec[i].sfv_flag = 0;
+		svvec[i].sfv_off = off;
+		svvec[i].sfv_len = len;
+		expected += svvec[i].sfv_len;
+		if (sendfilev(*w->wfd, svvec, i, &xferred) == -1 ||
+		    xferred != expected)
+			w->werr++;
+		w->liov = 0;
+		w->niov = 0;
+	} while (0);
+#else
+	do {
+		if (WRK_Flush(w) == 0 &&
+		    sendfile(*w->wfd, fd, &off, len) != len)
+			w->werr++;
+	} while (0);
+#endif
 #else
 #error Unknown sendfile() implementation
 #endif
@@ -205,15 +237,14 @@ wrk_thread(void *priv)
 {
 	struct worker *w, ww;
 	struct wq *qp;
-	unsigned char wlog[8192]; 	/* XXX: size */
-	struct workreq *wrq;
+	unsigned char wlog[params->shm_workspace];
 
-	THR_Name("cache-worker");
+	THR_SetName("cache-worker");
 	w = &ww;
 	CAST_OBJ_NOTNULL(qp, priv, WQ_MAGIC);
 	memset(w, 0, sizeof *w);
 	w->magic = WORKER_MAGIC;
-	w->used = TIM_real();
+	w->lastused = NAN;
 	w->wlb = w->wlp = wlog;
 	w->wle = wlog + sizeof wlog;
 	AZ(pthread_cond_init(&w->cond, NULL));
@@ -224,7 +255,6 @@ wrk_thread(void *priv)
 	qp->nthr++;
 	while (1) {
 		CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-		assert(!isnan(w->used));
 
 		/* Process overflow requests, if any */
 		w->wrq = VTAILQ_FIRST(&qp->overflow);
@@ -232,6 +262,8 @@ wrk_thread(void *priv)
 			VTAILQ_REMOVE(&qp->overflow, w->wrq, list);
 			qp->nqueue--;
 		} else {
+			if (isnan(w->lastused))
+				w->lastused = TIM_real();
 			VTAILQ_INSERT_HEAD(&qp->idle, w, list);
 			AZ(pthread_cond_wait(&w->cond, &qp->mtx));
 		}
@@ -239,9 +271,9 @@ wrk_thread(void *priv)
 			break;
 		UNLOCK(&qp->mtx);
 		AN(w->wrq);
-		wrq = w->wrq;
-		AN(wrq->func);
-		wrq->func(w, wrq->priv);
+		AN(w->wrq->func);
+		w->lastused = NAN;
+		w->wrq->func(w, w->wrq->priv);
 		w->wrq = NULL;
 		LOCK(&qp->mtx);
 	}
@@ -323,14 +355,14 @@ wrk_do_cnt_sess(struct worker *w, void *priv)
 	struct sess *sess;
 
 	CAST_OBJ_NOTNULL(sess, priv, SESS_MAGIC);
+	THR_SetSession(sess);
 	sess->wrk = w;
 	CHECK_OBJ_ORNULL(w->nobj, OBJECT_MAGIC);
 	CHECK_OBJ_ORNULL(w->nobjhead, OBJHEAD_MAGIC);
-	w->used = NAN;
 	CNT_Session(sess);
-	assert(!isnan(w->used));
 	CHECK_OBJ_ORNULL(w->nobj, OBJECT_MAGIC);
 	CHECK_OBJ_ORNULL(w->nobjhead, OBJHEAD_MAGIC);
+	THR_SetSession(NULL);
 }
 
 /*--------------------------------------------------------------------*/
@@ -351,7 +383,7 @@ WRK_QueueSession(struct sess *sp)
 	 */
 	sp->t_end = TIM_real();
 	vca_close_session(sp, "dropped");
-	if(sp->vcl != NULL) {
+	if (sp->vcl != NULL) {
 		/*
 		 * A session parked on a busy object can come here
 		 * after it wakes up.  Loose the VCL reference.
@@ -397,21 +429,21 @@ wrk_addpools(const unsigned pools)
 static void
 wrk_decimate_flock(struct wq *qp, double t_idle, struct varnish_stats *vs)
 {
-	struct worker *w;
-
-	if (qp->nthr <= nthr_min)
-		return;
+	struct worker *w = NULL;
 
 	LOCK(&qp->mtx);
-	w = VTAILQ_LAST(&qp->idle, workerhead);
-	if (w != NULL && (w->used < t_idle || qp->nthr > nthr_max))
-		VTAILQ_REMOVE(&qp->idle, w, list);
-	else
-		w = NULL;
 	vs->n_wrk += qp->nthr;
 	vs->n_wrk_queue += qp->nqueue;
 	vs->n_wrk_drop += qp->ndrop;
 	vs->n_wrk_overflow += qp->noverflow;
+
+	if (qp->nthr > params->wthread_min) {
+		w = VTAILQ_LAST(&qp->idle, workerhead);
+		if (w != NULL && (w->lastused < t_idle || qp->nthr > nthr_max))
+			VTAILQ_REMOVE(&qp->idle, w, list);
+		else
+			w = NULL;
+	}
 	UNLOCK(&qp->mtx);
 
 	/* And give it a kiss on the cheek... */
@@ -439,7 +471,7 @@ wrk_herdtimer_thread(void *priv)
 	double t_idle;
 	struct varnish_stats vsm, *vs;
 
-	THR_Name("wrk_herdtimer");
+	THR_SetName("wrk_herdtimer");
 
 	memset(&vsm, 0, sizeof vsm);
 	vs = &vsm;
@@ -452,14 +484,10 @@ wrk_herdtimer_thread(void *priv)
 			wrk_addpools(u);
 
 		/* Scale parameters */
-		u = params->wthread_min / nwq;
-		if (u < 1)
-			u = 1;
-		nthr_min = u;
 
 		u = params->wthread_max / nwq;
-		if (u < nthr_min)
-			u = nthr_min;
+		if (u < params->wthread_min)
+			u = params->wthread_min;
 		nthr_max = u;
 
 		ovfl_max = (nthr_max * params->overflow_max) / 100;
@@ -495,7 +523,7 @@ wrk_breed_flock(struct wq *qp)
 	 * If we need more threads, and have space, create
 	 * one more thread.
 	 */
-	if (qp->nthr < nthr_min ||	/* Not enough threads yet */
+	if (qp->nthr < params->wthread_min ||	/* Not enough threads yet */
 	    (qp->nqueue > params->wthread_add_threshold && /* more needed */
 	    qp->nqueue > qp->lqueue)) {	/* not getting better since last */
 		if (qp->nthr >= nthr_max) {
@@ -532,17 +560,16 @@ wrk_herder_thread(void *priv)
 {
 	unsigned u, w;
 
-	THR_Name("wrk_herder");
+	THR_SetName("wrk_herder");
 	(void)priv;
 	while (1) {
 		for (u = 0 ; u < nwq; u++) {
 			/*
 			 * Make sure all pools have their minimum complement
 			 */
-			for (w = 0 ; w < nwq; w++) {
-				if (wq[w]->nthr < nthr_min)
+			for (w = 0 ; w < nwq; w++)
+				while (wq[w]->nthr < params->wthread_min)
 					wrk_breed_flock(wq[w]);
-			}
 			/*
 			 * We cannot avoid getting a mutex, so we have a
 			 * bogo mutex just for POSIX_STUPIDITY

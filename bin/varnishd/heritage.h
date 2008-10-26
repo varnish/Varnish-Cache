@@ -77,6 +77,9 @@ struct params {
 
 	/* TTL used for lack of anything better */
 	unsigned		default_ttl;
+	
+	/* TTL used for synthesized error pages */
+	unsigned		err_ttl;
 
 	/* Worker threads and pool */
 	unsigned		wthread_min;
@@ -93,6 +96,7 @@ struct params {
 	/* Memory allocation hints */
 	unsigned		sess_workspace;
 	unsigned		obj_workspace;
+	unsigned		shm_workspace;
 
 	/* Acceptor hints */
 	unsigned		sess_timeout;
@@ -140,6 +144,9 @@ struct params {
 	/* Maximum esi:include depth allowed */
 	unsigned		max_esi_includes;
 
+	/* ESI parser hints */
+	unsigned		esi_syntax;
+
 	/* Rush exponent */
 	unsigned		rush_exponent;
 
@@ -169,6 +176,13 @@ struct params {
 
 	/* Prefer IPv6 connections to backend*/
 	unsigned		prefer_ipv6;
+
+	/* Acceptable clockskew with backends */
+	unsigned		clock_skew;
+
+	/* Amount of time to sleep when running out of file
+	   descriptors.  In msecs */
+	unsigned		accept_fd_holdoff;
 };
 
 extern volatile struct params *params;

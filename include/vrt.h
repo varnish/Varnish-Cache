@@ -45,25 +45,31 @@ struct sockaddr;
  * A backend probe specification
  */
 
+extern void *vrt_magic_string_end;
+
 struct vrt_backend_probe {
-	char		*request;
+	const char	*url;
+	const char	*request;
 	double		timeout;
 	double		interval;
+	unsigned	window;
+	unsigned	threshold;
 };
 
 /*
  * A backend is a host+port somewhere on the network
  */
 struct vrt_backend {
-	char				*vcl_name;
-	char				*ident;
+	const char			*vcl_name;
+	const char			*ident;
 
-	char				*hosthdr;
+	const char			*hosthdr;
 
 	const unsigned char		*ipv4_sockaddr;
 	const unsigned char		*ipv6_sockaddr;
 
 	double				connect_timeout;
+	unsigned			max_connections;
 	struct vrt_backend_probe 	probe;
 };
 
@@ -87,6 +93,7 @@ struct vrt_dir_random_entry {
 
 struct vrt_dir_random {
 	const char 				*name;
+	unsigned				retries;
 	unsigned 				nmember;
 	const struct vrt_dir_random_entry	*members;
 };
@@ -120,19 +127,10 @@ struct vrt_ref {
 	const char	*token;
 };
 
-struct vrt_acl {
-	unsigned char	not;
-	unsigned char	mask;
-	unsigned char	paren;
-	const char	*name;
-	const char	*desc;
-	void		*priv;
-};
-
 /* ACL related */
-int VRT_acl_match(const struct sess *, struct sockaddr *, const char *, const struct vrt_acl *);
-void VRT_acl_init(struct vrt_acl *);
-void VRT_acl_fini(struct vrt_acl *);
+#define VRT_ACL_MAXADDR		16	/* max(IPv4, IPv6) */
+
+void VRT_acl_log(const struct sess *, const char *msg);
 
 /* Regexp related */
 void VRT_re_init(void **, const char *, int sub);
@@ -141,6 +139,7 @@ int VRT_re_match(const char *, void *re);
 int VRT_re_test(struct vsb *, const char *, int sub);
 const char *VRT_regsub(const struct sess *sp, int all, const char *, void *, const char *);
 
+void VRT_panic(struct sess *sp,  const char *, ...);
 void VRT_purge(const char *, int hash);
 
 void VRT_count(const struct sess *, unsigned);
@@ -155,9 +154,13 @@ void VRT_handling(struct sess *sp, unsigned hand);
 
 /* Simple stuff */
 int VRT_strcmp(const char *s1, const char *s2);
+void VRT_memmove(void *dst, const void *src, unsigned len);
 
 void VRT_ESI(struct sess *sp);
 void VRT_Rollback(struct sess *sp);
+
+/* Synthetic pages */
+void VRT_synth_page(struct sess *sp, unsigned flags, const char *, ...);
 
 /* Backend related */
 void VRT_init_dir_simple(struct cli *, struct director **, const struct vrt_dir_simple *);
@@ -168,6 +171,7 @@ void VRT_fini_dir(struct cli *, struct director *);
 char *VRT_IP_string(const struct sess *sp, const struct sockaddr *sa);
 char *VRT_int_string(const struct sess *sp, int);
 char *VRT_double_string(const struct sess *sp, double);
+const char *VRT_backend_string(struct sess *sp);
 
 #define VRT_done(sp, hand)			\
 	do {					\

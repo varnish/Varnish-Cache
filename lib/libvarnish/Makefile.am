@@ -4,6 +4,8 @@ INCLUDES = -I$(top_srcdir)/include
 
 lib_LTLIBRARIES = libvarnish.la
 
+libvarnish_la_LDFLAGS = -version-info 1:0:0
+
 libvarnish_la_SOURCES = \
 	argv.c \
 	assert.c \
@@ -14,6 +16,7 @@ libvarnish_la_SOURCES = \
 	flopen.c \
 	num.c \
 	time.c \
+	tcp.c \
 	vct.c \
 	version.c \
 	vev.c \

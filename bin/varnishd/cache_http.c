@@ -41,6 +41,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "config.h"
 #include "shmlog.h"
 #include "vct.h"
 #include "cache.h"
@@ -53,6 +54,7 @@
 #include "http_headers.h"
 #undef HTTPH
 
+/*lint -save -e773 not () */
 #define LOGMTX2(ax, bx, cx) 	[bx] = SLT_##ax##cx
 
 #define LOGMTX1(ax) { 		\
@@ -69,6 +71,7 @@ static enum shmlogtag logmtx[][HTTP_HDR_FIRST + 1] = {
 	[HTTP_Tx] = LOGMTX1(Tx),
 	[HTTP_Obj] = LOGMTX1(Obj)
 };
+/*lint -restore */
 
 static enum shmlogtag
 http2shmlog(const struct http *hp, int t)
@@ -376,7 +379,6 @@ http_dissect_hdrs(struct worker *w, struct http *hp, int fd, char *p, txt t)
 		r = q + 1;
 		if (q > p && q[-1] == '\r')
 			q--;
-		*q = '\0';
 		if (p == q)
 			break;
 
@@ -384,6 +386,10 @@ http_dissect_hdrs(struct worker *w, struct http *hp, int fd, char *p, txt t)
 		    (p[1] == 'f' || p[1] == 'F') &&
 		    p[2] == '-')
 			hp->conds = 1;
+
+		while (q > p && vct_issp(q[-1]))
+			q--;
+		*q = '\0';
 
 		if (hp->nhd < HTTP_HDR_MAX) {
 			hp->hdf[hp->nhd] = 0;
@@ -429,12 +435,14 @@ http_splitline(struct worker *w, int fd, struct http *hp, const struct http_conn
 	for (; vct_issp(*p); p++)
 		;
 
-	/* Second field cannot contain SP, CRLF or CTL */
+	/* Second field cannot contain LWS */
 	hp->hd[h2].b = p;
-	for (; !vct_issp(*p); p++)
-		if (vct_isctl(*p))
-			return (400);
+	for (; !vct_islws(*p); p++)
+		;
 	hp->hd[h2].e = p;
+
+	if (!Tlen(hp->hd[h2]))
+		return (400);
 
 	/* Skip SP */
 	for (; vct_issp(*p); p++)
@@ -488,9 +496,17 @@ http_DissectRequest(struct sess *sp)
 
 	i = http_splitline(sp->wrk, sp->fd, hp, htc,
 	    HTTP_HDR_REQ, HTTP_HDR_URL, HTTP_HDR_PROTO);
-
-	if (i != 0)
+	if (i != 0) {
 		WSPR(sp, SLT_HttpGarbage, htc->rxbuf);
+		return (i);
+	}
+
+	if (!strcmp(hp->hd[HTTP_HDR_PROTO].b, "HTTP/1.0"))
+		hp->protover = 1.0;
+	else if (!strcmp(hp->hd[HTTP_HDR_PROTO].b, "HTTP/1.1"))
+		hp->protover = 1.1;
+	else
+		hp->protover = 0.9;
 	return (i);
 }
 
@@ -517,7 +533,8 @@ http_DissectResponse(struct worker *w, const struct http_conn *htc, struct http 
 		hp->status = 
 		    strtoul(hp->hd[HTTP_HDR_STATUS].b, NULL /* XXX */, 10);
 	}
-	if (!Tlen(hp->hd[HTTP_HDR_RESPONSE])) {
+	if (hp->hd[HTTP_HDR_RESPONSE].b == NULL ||
+	    !Tlen(hp->hd[HTTP_HDR_RESPONSE])) {
 		/* Backend didn't send a response string, use the standard */
 		hp->hd[HTTP_HDR_RESPONSE].b = 
 		    TRUST_ME(http_StatusMessage(hp->status));
@@ -551,20 +568,27 @@ http_copyh(struct http *to, const struct http *fm, unsigned n)
 }
 
 static void
-http_copyreq(struct http *to, const struct http *fm, int transparent)
+http_copyreq(struct http *to, const struct http *fm, int how)
 {
 
 	CHECK_OBJ_NOTNULL(fm, HTTP_MAGIC);
 	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
-	if (transparent)
+
+	if ((how == HTTPH_R_PIPE) || (how == HTTPH_R_PASS)) {
 		http_copyh(to, fm, HTTP_HDR_REQ);
-	else
-		http_SetH(to, HTTP_HDR_REQ, "GET");
-	http_copyh(to, fm, HTTP_HDR_URL);
-	if (transparent)
 		http_copyh(to, fm, HTTP_HDR_PROTO);
-	else
+	} else {
+		http_SetH(to, HTTP_HDR_REQ, "GET");
 		http_SetH(to, HTTP_HDR_PROTO, "HTTP/1.1");
+	}
+	http_copyh(to, fm, HTTP_HDR_URL);
+}
+
+void
+http_ForceGet(struct http *to)
+{
+	if (strcmp(http_GetReq(to), "GET"))
+		http_SetH(to, HTTP_HDR_REQ, "GET");
 }
 
 void
@@ -601,6 +625,7 @@ http_copyheader(struct worker *w, int fd, struct http *to, const struct http *fm
 	Tcheck(fm->hd[n]);
 	if (to->nhd < HTTP_HDR_MAX) {
 		to->hd[to->nhd] = fm->hd[n];
+		to->hdf[to->nhd] = 0;
 		to->nhd++;
 	} else  {
 		VSL_stats->losthdr++;
@@ -638,25 +663,19 @@ http_FilterHeader(struct sess *sp, unsigned how)
 {
 	struct bereq *bereq;
 	struct http *hp;
-	char *b;
 
         bereq = VBE_new_bereq();
         AN(bereq);
         hp = bereq->http;
         hp->logtag = HTTP_Tx;
 
-	http_copyreq(hp, sp->http,
-	    (how == HTTPH_R_PIPE) || (how == HTTPH_R_PASS));
+	http_copyreq(hp, sp->http, how);
 	http_FilterFields(sp->wrk, sp->fd, hp, sp->http, how);
 	http_PrintfHeader(sp->wrk, sp->fd, hp, "X-Varnish: %u", sp->xid);
 	http_PrintfHeader(sp->wrk, sp->fd, hp,
 	    "X-Forwarded-For: %s", sp->addr);
 
 	sp->bereq = bereq;
-
-	/* XXX: This possibly ought to go into the default VCL */
-	if (!http_GetHdr(hp, H_Host, &b)) 
-		VBE_AddHostHeader(sp);
 }
 
 /*--------------------------------------------------------------------
@@ -734,10 +753,12 @@ http_PutField(struct worker *w, int fd, struct http *to, int field, const char *
 		WSL(w, SLT_LostHeader, fd, "%s", string);
 		to->hd[field].b = NULL;
 		to->hd[field].e = NULL;
+		to->hdf[field] = 0;
 	} else {
 		memcpy(p, string, l + 1);
 		to->hd[field].b = p;
 		to->hd[field].e = p + l;
+		to->hdf[field] = 0;
 	}
 }
 
@@ -784,6 +805,7 @@ http_PrintfHeader(struct worker *w, int fd, struct http *to, const char *fmt, ..
 	} else {
 		to->hd[to->nhd].b = to->ws->f;
 		to->hd[to->nhd].e = to->ws->f + n;
+		to->hdf[to->nhd] = 0;
 		WS_Release(to->ws, n + 1);
 		to->nhd++;
 	}
@@ -798,8 +820,10 @@ http_Unset(struct http *hp, const char *hdr)
 	for (v = u = HTTP_HDR_FIRST; u < hp->nhd; u++) {
 		if (http_IsHdr(&hp->hd[u], hdr)) 
 			continue;
-		if (v != u)
+		if (v != u) {
 			memcpy(&hp->hd[v], &hp->hd[u], sizeof hp->hd[v]);
+			memcpy(&hp->hdf[v], &hp->hdf[u], sizeof hp->hdf[v]);
+		}
 		v++;
 	}
 	hp->nhd = v;

@@ -46,6 +46,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "vsb.h"
 
 #include "libvarnish.h"
@@ -54,8 +55,9 @@
 #include "cli_priv.h"
 #include "cli_common.h"
 
+/*lint -e{818} cli could be const */
 void
-cli_out(const struct cli *cli, const char *fmt, ...)
+cli_out(struct cli *cli, const char *fmt, ...)
 {
 	va_list ap;
 
@@ -67,16 +69,63 @@ cli_out(const struct cli *cli, const char *fmt, ...)
 	va_end(ap);
 }
 
+/*lint -e{818} cli could be const */
+void
+cli_quote(struct cli *cli, const char *s)
+{
+	const char *q;
+	int quote = 0;
+
+	for (q = s; *q != '\0'; q++) {
+		if (!isgraph(*q) || *q == '"') {
+			quote++;
+			break;
+		}
+	}
+	if (!quote) {
+		(void)vsb_cat(cli->sb, s);
+		return;
+	}
+	(void)vsb_putc(cli->sb, '"');
+	for (q = s; *q != '\0'; q++) {
+		switch (*q) {
+		case ' ':
+			(void)vsb_putc(cli->sb, *q);
+			break;
+		case '\\':
+		case '"':
+			(void)vsb_putc(cli->sb, '\\');
+			(void)vsb_putc(cli->sb, *q);
+			break;
+		case '\n':
+			(void)vsb_cat(cli->sb, "\\n");
+			break;
+		case '\r':
+			(void)vsb_cat(cli->sb, "\\r");
+			break;
+		case '\t':
+			(void)vsb_cat(cli->sb, "\\t");
+			break;
+		default:
+			if (isgraph(*q))
+				(void)vsb_putc(cli->sb, *q);
+			else
+				(void)vsb_printf(cli->sb, "\\%o", *q);
+			break;
+		}
+	}
+	(void)vsb_putc(cli->sb, '"');
+}
+
 void
 cli_result(struct cli *cli, unsigned res)
 {
 
 	if (cli != NULL)
-		cli->result = res;
+		cli->result = res;	/*lint !e64 type mismatch */
 	else
 		printf("CLI result = %d\n", res);
 }
-
 
 void
 cli_param(struct cli *cli)
@@ -97,7 +146,7 @@ cli_writeres(int fd, const struct cli *cli)
 					 */
 
 	assert(cli->result >= 100);
-	assert(cli->result <= 999);
+	assert(cli->result <= 999);	/*lint !e650 const out of range */
 	i = snprintf(res, sizeof res,
 	    "%-3d %-8d\n", cli->result, vsb_len(cli->sb));
 	assert(i == CLI_LINE0_LEN);
@@ -191,5 +240,5 @@ cli_func_ping(struct cli *cli, const char * const *av, void *priv)
 	(void)priv;
 	(void)av;
 	t = time(NULL);
-	cli_out(cli, "PONG %ld", t);
+	cli_out(cli, "PONG %ld 1.0", t);
 }

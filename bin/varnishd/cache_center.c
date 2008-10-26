@@ -53,6 +53,7 @@ DOT	shape=hexagon
 DOT	label="Request received"
 DOT ]
 DOT ERROR [shape=plaintext]
+DOT RESTART [shape=plaintext]
 DOT acceptor -> start [style=bold,color=green,weight=4]
  */
 
@@ -66,13 +67,13 @@ DOT acceptor -> start [style=bold,color=green,weight=4]
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
 #ifndef HAVE_SRANDOMDEV
 #include "compat/srandomdev.h"
 #endif
 
 #include "shmlog.h"
 #include "vcl.h"
-#include "cli.h"
 #include "cli_priv.h"
 #include "cache.h"
 
@@ -123,12 +124,14 @@ DOT		label="vcl_deliver()|resp."
 DOT	]
 DOT	deliver2 [
 DOT		shape=ellipse
-DOT		label="Send hdr + object"
+DOT		label="Send resp + body"
 DOT	]
 DOT	deliver -> vcl_deliver [style=bold,color=green,weight=4]
 DOT	vcl_deliver -> deliver2 [style=bold,color=green,weight=4,label=deliver]
 DOT     vcl_deliver -> errdeliver [label="error"]
 DOT     errdeliver [label="ERROR",shape=plaintext]
+DOT     vcl_deliver -> rstdeliver [label="restart",color=purple]
+DOT     rstdeliver [label="RESTART",shape=plaintext]
 DOT }
 DOT deliver2 -> DONE [style=bold,color=green,weight=4]
  *
@@ -163,21 +166,15 @@ cnt_deliver(struct sess *sp)
 	switch (sp->handling) {
 	case VCL_RET_DELIVER:
 		break;
-	case VCL_RET_ERROR:
-		HSH_Deref(sp->obj);
-		sp->obj = NULL;
-		sp->step = STP_ERROR;
-		return (0);
-	default:
+	case VCL_RET_RESTART:
 		INCOMPL();
+		break;
+	default:
+		WRONG("Illegal action in vcl_deliver{}");
 	}
 
 	sp->director = NULL;
 	sp->restarts = 0;
-	sp->backend = NULL;		/*
-					 * XXX: we may want to leave this
-					 * behind to hint directors ?
-					 */
 					
 	RES_WriteObj(sp);
 	HSH_Deref(sp->obj);
@@ -208,13 +205,10 @@ cnt_done(struct sess *sp)
 	CHECK_OBJ_ORNULL(sp->vcl, VCL_CONF_MAGIC);
 
 	AZ(sp->obj);
+	AZ(sp->vbe);
 	AZ(sp->bereq);
 	sp->director = NULL;
 	sp->restarts = 0;
-	sp->backend = NULL;		/*
-					 * XXX: we may want to leave this
-					 * behind to hint directors ?
-					 */
 					
 	if (sp->vcl != NULL && sp->esis == 0) {
 		if (sp->wrk->vcl != NULL)
@@ -224,7 +218,7 @@ cnt_done(struct sess *sp)
 	}
 
 	sp->t_end = TIM_real();
-	sp->wrk->used = sp->t_end;
+	sp->wrk->lastused = sp->t_end;
 	if (sp->xid == 0) {
 		sp->t_req = sp->t_end;
 		sp->t_resp = sp->t_end;
@@ -251,7 +245,6 @@ cnt_done(struct sess *sp)
 	if (sp->fd < 0) {
 		SES_Charge(sp);
 		VSL_stats->sess_closed++;
-		assert(!isnan(sp->wrk->used));
 		sp->wrk = NULL;
 		SES_Delete(sp);
 		return (1);
@@ -284,7 +277,6 @@ cnt_done(struct sess *sp)
 	}
 	VSL_stats->sess_herd++;
 	SES_Charge(sp);
-	assert(!isnan(sp->wrk->used));
 	sp->wrk = NULL;
 	vca_return_session(sp);
 	return (1);
@@ -295,24 +287,60 @@ cnt_done(struct sess *sp)
  * Emit an error
  *
 DOT subgraph xcluster_error {
-DOT	error [
-DOT		shape=ellipse
-DOT		label="Issue HTTP error"
+DOT	vcl_error [
+DOT		shape=record
+DOT		label="vcl_error()|resp."
 DOT	]
-DOT	ERROR -> error
+DOT	ERROR -> vcl_error
+DOT	vcl_error-> deliver [label=deliver]
 DOT }
-DOT error -> DONE
  */
 
 static int
 cnt_error(struct sess *sp)
 {
+	struct worker *w;
+	struct http *h;
+	time_t now;
+	char date[40];
 
-	AZ(sp->obj);
-	SYN_ErrorPage(sp, sp->err_code, sp->err_reason);
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+
+	/* We always close when we take this path */
+	sp->doclose = "error";
+	sp->wantbody = 1;
+
+	w = sp->wrk;
+	if (sp->obj == NULL) {
+		HSH_Prealloc(sp);
+		sp->obj = sp->wrk->nobj;
+		sp->obj->xid = sp->xid;
+		sp->obj->entered = sp->t_req;
+		sp->wrk->nobj = NULL;
+	} else {
+		/* XXX: Null the headers ? */
+	}
+	CHECK_OBJ_NOTNULL(sp->obj, OBJECT_MAGIC);
+	h = sp->obj->http;
+
+	http_PutProtocol(w, sp->fd, h, "HTTP/1.1");
+	http_PutStatus(w, sp->fd, h, sp->err_code);
+	now = TIM_real();
+	TIM_format(now, date);
+        http_PrintfHeader(w, sp->fd, h, "Date: %s", date);
+        http_PrintfHeader(w, sp->fd, h, "Server: Varnish");
+        http_PrintfHeader(w, sp->fd, h, "Retry-After: %d", params->err_ttl);
+
+	if (sp->err_reason != NULL)
+		http_PutResponse(w, sp->fd, h, sp->err_reason);
+	else
+		http_PutResponse(w, sp->fd, h,
+		    http_StatusMessage(sp->err_code));
+	VCL_error_method(sp);
+	assert(sp->handling == VCL_RET_DELIVER);
 	sp->err_code = 0;
 	sp->err_reason = NULL;
-	sp->step = STP_DONE;
+	sp->step = STP_DELIVER;
 	return (0);
 }
 
@@ -335,11 +363,14 @@ DOT	fetch_pass [
 DOT		shape=ellipse
 DOT		label="obj.pass=true"
 DOT	]
-DOT	vcl_fetch -> fetch_pass [label="pass"]
+DOT	vcl_fetch -> fetch_pass [label="pass",style=bold,color=red]
 DOT }
-DOT fetch_pass -> deliver
-DOT vcl_fetch -> deliver [label="insert",style=bold,color=blue,weight=2]
+DOT fetch_pass -> deliver [style=bold,color=red]
+DOT vcl_fetch -> deliver [label="deliver",style=bold,color=blue,weight=2]
 DOT vcl_fetch -> recv [label="restart"]
+DOT vcl_fetch -> rstfetch [label="restart",color=purple]
+DOT rstfetch [label="RESTART",shape=plaintext]
+DOT fetch -> errfetch 
 DOT vcl_fetch -> errfetch [label="error"]
 DOT errfetch [label="ERROR",shape=plaintext]
  */
@@ -353,18 +384,26 @@ cnt_fetch(struct sess *sp)
 	CHECK_OBJ_NOTNULL(sp->vcl, VCL_CONF_MAGIC);
 
 	AN(sp->bereq);
-	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	AN(sp->director);
+	AZ(sp->vbe);
 	i = Fetch(sp);
-	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	AZ(sp->vbe);
+	AN(sp->director);
 
-	if (!i)
-		RFC2616_cache_policy(sp, sp->obj->http);	/* XXX -> VCL */
-	else {
-		http_PutStatus(sp->wrk, sp->fd, sp->obj->http, 503);
-		http_PutProtocol(sp->wrk, sp->fd, sp->obj->http, "HTTP/1.1");
-		http_PutResponse(sp->wrk, sp->fd, sp->obj->http,
-		    "Backend error");
+	if (i) {
+		sp->err_code = 503;
+		sp->step = STP_ERROR;
+		VBE_free_bereq(sp->bereq);
+		sp->bereq = NULL;
+		sp->obj->ttl = 0;
+		sp->obj->cacheable = 0;
+		HSH_Unbusy(sp);
+		HSH_Deref(sp->obj);
+		sp->obj = NULL;
+		return (0);
 	}
+
+	RFC2616_cache_policy(sp, sp->obj->http);	/* XXX -> VCL */
 
 	sp->err_code = http_GetStatus(sp->obj->http);
 	VCL_fetch_method(sp);
@@ -373,34 +412,37 @@ cnt_fetch(struct sess *sp)
 	sp->bereq = NULL;
 
 	switch (sp->handling) {
-	case VCL_RET_ERROR:
 	case VCL_RET_RESTART:
 		sp->obj->ttl = 0;
 		sp->obj->cacheable = 0;
 		HSH_Unbusy(sp);
 		HSH_Deref(sp->obj);
 		sp->obj = NULL;
-		if (sp->handling == VCL_RET_ERROR)
-			sp->step = STP_ERROR;
-		else {
-			sp->director = NULL;
-			sp->restarts++;
-			sp->step = STP_RECV;
-		}
+		sp->director = NULL;
+		sp->restarts++;
+		sp->step = STP_RECV;
 		return (0);
 	case VCL_RET_PASS:
 		sp->obj->pass = 1;
 		break;
-	case VCL_RET_INSERT:
+	case VCL_RET_DELIVER:
 		break;
+	case VCL_RET_ERROR:
+		sp->step = STP_ERROR;
+		sp->obj->ttl = 0;
+		sp->obj->cacheable = 0;
+		HSH_Unbusy(sp);
+		HSH_Deref(sp->obj);
+		sp->obj = NULL;
+		return (0);
 	default:
-		INCOMPL();
+		WRONG("Illegal action in vcl_fetch{}");
 	}
 
 	sp->obj->cacheable = 1;
 	if (sp->obj->objhead != NULL) {
 		VRY_Create(sp);
-		EXP_Insert(sp->obj, sp->wrk->used);
+		EXP_Insert(sp->obj);
 		HSH_Unbusy(sp);
 	}
 	sp->wrk->acct.fetch++;
@@ -424,6 +466,7 @@ cnt_first(struct sess *sp)
 	 */
 
 	assert(sp->xid == 0);
+	assert(sp->restarts == 0);
 	VCA_Prep(sp);
 
 	/* Record the session watermark */
@@ -431,7 +474,7 @@ cnt_first(struct sess *sp)
 
 	/* Receive a HTTP protocol request */
 	HTC_Init(sp->htc, sp->ws, sp->fd);
-	sp->wrk->used = sp->t_open;
+	sp->wrk->lastused = sp->t_open;
 	sp->wrk->acct.sess++;
 	SES_RefSrcAddr(sp);
 	do
@@ -451,7 +494,7 @@ cnt_first(struct sess *sp)
 		sp->step = STP_DONE;
 		break;
 	default:
-		INCOMPL();
+		WRONG("Illegal return from HTC_Rx");
 	}
 	return (0);
 }
@@ -468,7 +511,9 @@ DOT	]
 DOT }
 DOT hit -> err_hit [label="error"]
 DOT err_hit [label="ERROR",shape=plaintext]
-DOT hit -> pass [label=pass]
+DOT hit -> rst_hit [label="restart",color=purple]
+DOT rst_hit [label="RESTART",shape=plaintext]
+DOT hit -> pass [label=pass,style=bold,color=red]
 DOT hit -> deliver [label="deliver",style=bold,color=green,weight=4]
  */
 
@@ -495,18 +540,20 @@ cnt_hit(struct sess *sp)
 	HSH_Deref(sp->obj);
 	sp->obj = NULL;
 
-	if (sp->handling == VCL_RET_PASS) {
+	switch(sp->handling) {
+	case VCL_RET_PASS:
 		sp->step = STP_PASS;
 		return (0);
-	}
-
-	if (sp->handling == VCL_RET_ERROR) {
+	case VCL_RET_ERROR:
 		sp->step = STP_ERROR;
 		return (0);
+	case VCL_RET_RESTART:
+		INCOMPL();
+		return (0);
+	default:
+		WRONG("Illegal action in vcl_hit{}");
+		return (0);
 	}
-
-
-	INCOMPL();
 }
 
 
@@ -534,7 +581,7 @@ DOT	hash -> lookup [label="hash",style=bold,color=green,weight=4]
 DOT	lookup -> lookup2 [label="yes",style=bold,color=green,weight=4]
 DOT }
 DOT lookup2 -> hit [label="no", style=bold,color=green,weight=4]
-DOT lookup2 -> pass [label="yes"]
+DOT lookup2 -> pass [label="yes",style=bold,color=red]
 DOT lookup -> miss [label="no",style=bold,color=blue,weight=2]
  */
 
@@ -565,7 +612,7 @@ cnt_lookup(struct sess *sp)
 		sp->hashptr = (void*)p;
 
 		VCL_hash_method(sp);
-		/* XXX check error */
+		assert(sp->handling == VCL_RET_HASH);
 	}
 
 	o = HSH_Lookup(sp);
@@ -575,16 +622,10 @@ cnt_lookup(struct sess *sp)
 		 * We hit a busy object, disembark worker thread and expect
 		 * hash code to restart us, still in STP_LOOKUP, later.
 		 */
-		spassert(sp->objhead != NULL);
+		assert(sp->objhead != NULL);
 		if (params->diag_bitmap & 0x20)
 			WSP(sp, SLT_Debug,
 			    "on waiting list <%s>", sp->objhead->hash);
-		/*
-		 * There is a non-zero risk that we come here more than once
-		 * before we get through, in that case cnt_recv must be set
-		 */
-		if (isnan(sp->wrk->used))
-			sp->wrk->used = TIM_real();
 		SES_Charge(sp);
 		return (1);
 	}
@@ -626,16 +667,14 @@ DOT	vcl_miss [
 DOT		shape=record
 DOT		label="vcl_miss()|req.\nbereq."
 DOT	]
-DOT	miss_ins [
-DOT		label="obj.pass=true"
-DOT	]
 DOT	miss -> vcl_miss [style=bold,color=blue,weight=2]
 DOT }
+DOT vcl_miss -> rst_miss [label="restart",color=purple]
+DOT rst_miss [label="RESTART",shape=plaintext]
 DOT vcl_miss -> err_miss [label="error"]
 DOT err_miss [label="ERROR",shape=plaintext]
 DOT vcl_miss -> fetch [label="fetch",style=bold,color=blue,weight=2]
-DOT miss_ins -> pass
-DOT vcl_miss -> miss_ins [label="pass"]
+DOT vcl_miss -> pass [label="pass",style=bold,color=red]
 DOT
  */
 
@@ -647,10 +686,10 @@ cnt_miss(struct sess *sp)
 	CHECK_OBJ_NOTNULL(sp->obj, OBJECT_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->vcl, VCL_CONF_MAGIC);
 
-	VBE_SelectBackend(sp);
 	http_FilterHeader(sp, HTTPH_R_FETCH);
 	VCL_miss_method(sp);
-	if (sp->handling == VCL_RET_ERROR) {
+	switch(sp->handling) {
+	case VCL_RET_ERROR:
 		sp->obj->cacheable = 0;
 		HSH_Unbusy(sp);
 		HSH_Deref(sp->obj);
@@ -659,8 +698,7 @@ cnt_miss(struct sess *sp)
 		sp->bereq = NULL;
 		sp->step = STP_ERROR;
 		return (0);
-	}
-	if (sp->handling == VCL_RET_PASS) {
+	case VCL_RET_PASS:
 		sp->obj->cacheable = 0;
 		HSH_Unbusy(sp);
 		HSH_Deref(sp->obj);
@@ -669,12 +707,16 @@ cnt_miss(struct sess *sp)
 		VBE_free_bereq(sp->bereq);
 		sp->bereq = NULL;
 		return (0);
-	}
-	if (sp->handling == VCL_RET_FETCH) {
+	case VCL_RET_FETCH:
 		sp->step = STP_FETCH;
 		return (0);
+	case VCL_RET_RESTART:
+		INCOMPL();
+		return (0);
+	default:
+		WRONG("Illegal action in vcl_miss{}");
+		return (0);
 	}
-	INCOMPL();
 }
 
 
@@ -685,7 +727,11 @@ cnt_miss(struct sess *sp)
 DOT subgraph xcluster_pass {
 DOT	pass [
 DOT		shape=ellipse
-DOT		label="deref obj\nfilter req.->bereq."
+DOT		label="deref obj."
+DOT	]
+DOT	pass2 [
+DOT		shape=ellipse
+DOT		label="filter req.->bereq."
 DOT	]
 DOT	vcl_pass [
 DOT		shape=record
@@ -695,10 +741,13 @@ DOT	pass_do [
 DOT		shape=ellipse
 DOT		label="create anon object\n"
 DOT	]
-DOT	pass -> vcl_pass
-DOT	vcl_pass -> pass_do [label="pass"]
+DOT	pass -> pass2 [style=bold, color=red]
+DOT	pass2 -> vcl_pass [style=bold, color=red]
+DOT	vcl_pass -> pass_do [label="pass"] [style=bold, color=red]
 DOT }
-DOT pass_do -> fetch
+DOT pass_do -> fetch [style=bold, color=red]
+DOT vcl_pass -> rst_pass [label="restart",color=purple]
+DOT rst_pass [label="RESTART",shape=plaintext]
 DOT vcl_pass -> err_pass [label="error"]
 DOT err_pass [label="ERROR",shape=plaintext]
  */
@@ -711,7 +760,6 @@ cnt_pass(struct sess *sp)
 	CHECK_OBJ_NOTNULL(sp->vcl, VCL_CONF_MAGIC);
 	AZ(sp->obj);
 
-	VBE_SelectBackend(sp);
 	http_FilterHeader(sp, HTTPH_R_PASS);
 
 	VCL_pass_method(sp);
@@ -719,6 +767,8 @@ cnt_pass(struct sess *sp)
 		sp->step = STP_ERROR;
 		return (0);
 	}
+	assert(sp->handling == VCL_RET_PASS);
+	sp->wrk->acct.pass++;
 	HSH_Prealloc(sp);
 	sp->obj = sp->wrk->nobj;
 	sp->wrk->nobj = NULL;
@@ -745,10 +795,10 @@ DOT	pipe_do [
 DOT		shape=ellipse
 DOT		label="send bereq.\npipe until close"
 DOT	]
-DOT	vcl_pipe -> pipe_do [label="pipe"]
-DOT	pipe -> vcl_pipe
+DOT	vcl_pipe -> pipe_do [label="pipe",style=bold,color=orange]
+DOT	pipe -> vcl_pipe [style=bold,color=orange]
 DOT }
-DOT pipe_do -> DONE
+DOT pipe_do -> DONE [style=bold,color=orange]
 DOT vcl_pipe -> err_pipe [label="error"]
 DOT err_pipe [label="ERROR",shape=plaintext]
  */
@@ -761,13 +811,13 @@ cnt_pipe(struct sess *sp)
 	CHECK_OBJ_NOTNULL(sp->vcl, VCL_CONF_MAGIC);
 
 	sp->wrk->acct.pipe++;
-	VBE_SelectBackend(sp);
 	http_FilterHeader(sp, HTTPH_R_PIPE);
 
 	VCL_pipe_method(sp);
 
 	if (sp->handling == VCL_RET_ERROR)
 		INCOMPL();
+	assert(sp->handling == VCL_RET_PIPE);
 
 	PipeSession(sp);
 	sp->step = STP_DONE;
@@ -785,8 +835,9 @@ DOT		shape=record
 DOT		label="vcl_recv()|req."
 DOT	]
 DOT }
-DOT recv -> pipe [label="pipe"]
-DOT recv -> pass [label="pass"]
+DOT RESTART -> recv
+DOT recv -> pipe [label="pipe",style=bold,color=orange]
+DOT recv -> pass2 [label="pass",style=bold,color=red]
 DOT recv -> err_recv [label="error"]
 DOT err_recv [label="ERROR",shape=plaintext]
 DOT recv -> hash [label="lookup",style=bold,color=green,weight=4]
@@ -803,9 +854,15 @@ cnt_recv(struct sess *sp)
 	/* By default we use the first backend */
 	AZ(sp->director);
 	sp->director = sp->vcl->director[0];
-	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	AN(sp->director);
 
 	VCL_recv_method(sp);
+	if (sp->restarts >= params->max_restarts) {
+		if (sp->err_code == 0)
+			sp->err_code = 503;
+		sp->step = STP_ERROR;
+		return (0);
+	}
 
 	sp->wantbody = (strcmp(sp->http->hd[HTTP_HDR_REQ].b, "HEAD") != 0);
 	sp->sendbody = 0;
@@ -831,7 +888,8 @@ cnt_recv(struct sess *sp)
 		sp->step = STP_ERROR;
 		return (0);
 	default:
-		INCOMPL();
+		WRONG("Illegal action in vcl_recv{}");
+		return (0);
 	}
 }
 
@@ -840,13 +898,15 @@ cnt_recv(struct sess *sp)
  * Handle a request, wherever it came from recv/restart.
  *
 DOT start [shape=box,label="Dissect request"]
-DOT start -> recv 
+DOT start -> recv [style=bold,color=green,weight=4]
  */
 
 static int
 cnt_start(struct sess *sp)
 {
 	int done;
+	char *p;
+	const char *r = "HTTP/1.1 100 Continue\r\n\r\n";
 
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	AZ(sp->restarts);
@@ -856,7 +916,7 @@ cnt_start(struct sess *sp)
 	/* Update stats of various sorts */
 	VSL_stats->client_req++;			/* XXX not locked */
 	sp->t_req = TIM_real();
-	sp->wrk->used = sp->t_req;
+	sp->wrk->lastused = sp->t_req;
 	sp->wrk->acct.req++;
 
 	/* Assign XID and log */
@@ -878,14 +938,29 @@ cnt_start(struct sess *sp)
 	*sp->http0 = *sp->http;
 
 	if (done != 0) {
-		SYN_ErrorPage(sp, done, NULL);		/* XXX: STP_ERROR ? */
-		sp->step = STP_DONE;
+		sp->err_code = done;
+		sp->step = STP_ERROR;
 		return (0);
 	}
 
 	sp->doclose = http_DoConnection(sp->http);
 
 	/* XXX: Handle TRACE & OPTIONS of Max-Forwards = 0 */
+
+	/*
+	 * Handle Expect headers
+	 */
+	if (http_GetHdr(sp->http, H_Expect, &p)) {
+		if (strcmp(p, "100-continue")) {
+			sp->err_code = 417;
+			sp->step = STP_ERROR;
+			return (0);
+		}
+
+		/* XXX: Don't bother with write failures for now */
+		(void)write(sp->fd, r, strlen(r));
+		http_Unset(sp->http, H_Expect);
+	}
 
 	sp->step = STP_RECV;
 	return (0);
@@ -924,6 +999,15 @@ CNT_Session(struct sess *sp)
 	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
 
 	/*
+	 * Possible entrance states
+	 */
+	assert(
+	    sp->step == STP_FIRST ||
+	    sp->step == STP_START ||
+	    sp->step == STP_LOOKUP ||
+	    sp->step == STP_RECV);
+	  
+	/*
 	 * Whenever we come in from the acceptor we need to set blocking
 	 * mode, but there is no point in setting it when we come from
 	 * ESI or when a parked sessions returns.
@@ -944,7 +1028,6 @@ CNT_Session(struct sess *sp)
 		CHECK_OBJ_NOTNULL(sp->wrk, WORKER_MAGIC);
 		CHECK_OBJ_ORNULL(w->nobj, OBJECT_MAGIC);
 		CHECK_OBJ_ORNULL(w->nobjhead, OBJHEAD_MAGIC);
-		CHECK_OBJ_ORNULL(sp->director, DIRECTOR_MAGIC);
 
 		switch (sp->step) {
 #define STEP(l,u) \
@@ -955,12 +1038,12 @@ CNT_Session(struct sess *sp)
 		        break;
 #include "steps.h"
 #undef STEP
-		default:	INCOMPL();
+		default:
+			WRONG("State engine misfire");
 		}
 		CHECK_OBJ_ORNULL(w->nobj, OBJECT_MAGIC);
 		CHECK_OBJ_ORNULL(w->nobjhead, OBJHEAD_MAGIC);
 	}
-	assert(!isnan(w->used));
 	WSL_Flush(w, 0);
 }
 
@@ -978,7 +1061,7 @@ cli_debug_xid(struct cli *cli, const char * const *av, void *priv)
         (void)priv;
 	if (av[2] != NULL) 
 		xids = strtoul(av[2], NULL, 0);
-	cli_out(cli, "XID is %u\n", xids);
+	cli_out(cli, "XID is %u", xids);
 }
 
 static struct cli_proto debug_cmds[] = {

@@ -8,6 +8,9 @@
 -elib(123)  // size is both a variable and a macro with args
 -emacro(736, isnan)  // isnanf
 -efile(766, ../../config.h)
+-emacro(413, offsetof)	// likely null pointer
+
+-emacro(702, WEXITSTATUS)	// signed shift right 
 
 
 // -header(../../config.h)
@@ -37,6 +40,10 @@
 -emacro((826), VTAILQ_LAST) // Suspicious pointer-to-pointer conversion (area too small)
 -emacro(506, VTAILQ_FOREACH_SAFE) // constant value boolean
 
+-esym(765, vcc_ProcAction) // could be made static
+-esym(759, vcc_ProcAction) // could be moved to module
+-esym(714, vcc_ProcAction) // not ref.
+
 -esym(534, sprintf)	// Ignoring return value of function
 -esym(534, asprintf)	// Ignoring return value of function
 -esym(534, printf)	// Ignoring return value of function
@@ -46,19 +53,25 @@
 -esym(534, memmove)	// Ignoring return value of function
 -esym(534, strcpy)	// Ignoring return value of function
 -esym(534, vsb_printf)	// Ignoring return value of function
+-esym(534, vsb_vprintf)	// Ignoring return value of function
 -esym(534, vsb_cat)	// Ignoring return value of function
 -esym(534, vsb_bcat)	// Ignoring return value of function
 -esym(534, vsb_putc)	// Ignoring return value of function
 -esym(534, strcat)	// Ignoring return value of function
 -esym(534, strcpy)	// Ignoring return value of function
 -esym(534, strlcpy)	// Ignoring return value of function
+-esym(765, panicstr)	// Could be static
 
--emacro(506, isnan)	// constant value boolean
+-emacro(506, isnan, isfinite)	// constant value boolean
+-emacro(736, isfinite)	// loss of precision
 -emacro(747, isnan)	// significant coersion
 -emacro(506, assert)	// constant value boolean
 -emacro(827, assert)	// loop not reachable
 -emacro(774, assert)	// booelan always true
 -emacro(774, HTTPH)	// always false
+-emacro(527, ARGV_ERR)	// unreachable
+
+-e788			// enum value not used in defaulted switch
 
 // cache.h
 -emacro(506, INCOMPL) // Constant value Boolean

@@ -9,6 +9,7 @@
 #include "config.h"
 #include <stdio.h>
 #include <ctype.h>
+#include "config.h"
 #include "vcc_priv.h"
 #include "vsb.h"
 
@@ -18,205 +19,148 @@ vcl_fixed_token(const char *p, const char **q)
 
 	switch (p[0]) {
 	case '!':
-		if (p[0] == '!' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_NEQ);
 		}
-		if (p[0] == '!') {
-			*q = p + 1;
-			return ('!');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '%':
-		if (p[0] == '%') {
-			*q = p + 1;
-			return ('%');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '&':
-		if (p[0] == '&' && p[1] == '&') {
+		if (p[1] == '&') {
 			*q = p + 2;
 			return (T_CAND);
 		}
-		if (p[0] == '&') {
-			*q = p + 1;
-			return ('&');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '(':
-		if (p[0] == '(') {
-			*q = p + 1;
-			return ('(');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case ')':
-		if (p[0] == ')') {
-			*q = p + 1;
-			return (')');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '*':
-		if (p[0] == '*' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_MUL);
 		}
-		if (p[0] == '*') {
-			*q = p + 1;
-			return ('*');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '+':
-		if (p[0] == '+' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_INCR);
 		}
-		if (p[0] == '+' && p[1] == '+') {
+		if (p[1] == '+') {
 			*q = p + 2;
 			return (T_INC);
 		}
-		if (p[0] == '+') {
-			*q = p + 1;
-			return ('+');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case ',':
-		if (p[0] == ',') {
-			*q = p + 1;
-			return (',');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '-':
-		if (p[0] == '-' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_DECR);
 		}
-		if (p[0] == '-' && p[1] == '-') {
+		if (p[1] == '-') {
 			*q = p + 2;
 			return (T_DEC);
 		}
-		if (p[0] == '-') {
-			*q = p + 1;
-			return ('-');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '.':
-		if (p[0] == '.') {
-			*q = p + 1;
-			return ('.');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '/':
-		if (p[0] == '/' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_DIV);
 		}
-		if (p[0] == '/') {
-			*q = p + 1;
-			return ('/');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case ';':
-		if (p[0] == ';') {
-			*q = p + 1;
-			return (';');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '<':
-		if (p[0] == '<' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_LEQ);
 		}
-		if (p[0] == '<' && p[1] == '<') {
+		if (p[1] == '<') {
 			*q = p + 2;
 			return (T_SHL);
 		}
-		if (p[0] == '<') {
-			*q = p + 1;
-			return ('<');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '=':
-		if (p[0] == '=' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_EQ);
 		}
-		if (p[0] == '=') {
-			*q = p + 1;
-			return ('=');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '>':
-		if (p[0] == '>' && p[1] == '>') {
+		if (p[1] == '>') {
 			*q = p + 2;
 			return (T_SHR);
 		}
-		if (p[0] == '>' && p[1] == '=') {
+		if (p[1] == '=') {
 			*q = p + 2;
 			return (T_GEQ);
 		}
-		if (p[0] == '>') {
-			*q = p + 1;
-			return ('>');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case 'e':
-		if (p[0] == 'e' && p[1] == 'l' && p[2] == 's' && 
+		if (p[1] == 'l' && p[2] == 's' && 
 		    p[3] == 'i' && p[4] == 'f' && !isvar(p[5])) {
 			*q = p + 5;
 			return (T_ELSIF);
 		}
-		if (p[0] == 'e' && p[1] == 'l' && p[2] == 's' && 
+		if (p[1] == 'l' && p[2] == 's' && 
 		    p[3] == 'e' && p[4] == 'i' && p[5] == 'f'
 		     && !isvar(p[6])) {
 			*q = p + 6;
 			return (T_ELSEIF);
 		}
-		if (p[0] == 'e' && p[1] == 'l' && p[2] == 's' && 
+		if (p[1] == 'l' && p[2] == 's' && 
 		    p[3] == 'e' && !isvar(p[4])) {
 			*q = p + 4;
 			return (T_ELSE);
 		}
 		return (0);
 	case 'i':
-		if (p[0] == 'i' && p[1] == 'n' && p[2] == 'c' && 
+		if (p[1] == 'n' && p[2] == 'c' && 
 		    p[3] == 'l' && p[4] == 'u' && p[5] == 'd' && 
 		    p[6] == 'e' && !isvar(p[7])) {
 			*q = p + 7;
 			return (T_INCLUDE);
 		}
-		if (p[0] == 'i' && p[1] == 'f' && !isvar(p[2])) {
+		if (p[1] == 'f' && !isvar(p[2])) {
 			*q = p + 2;
 			return (T_IF);
 		}
 		return (0);
 	case '{':
-		if (p[0] == '{') {
-			*q = p + 1;
-			return ('{');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '|':
-		if (p[0] == '|' && p[1] == '|') {
+		if (p[1] == '|') {
 			*q = p + 2;
 			return (T_COR);
 		}
-		if (p[0] == '|') {
-			*q = p + 1;
-			return ('|');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '}':
-		if (p[0] == '}') {
-			*q = p + 1;
-			return ('}');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	case '~':
-		if (p[0] == '~') {
-			*q = p + 1;
-			return ('~');
-		}
-		return (0);
+		*q = p + 1;
+		return (p[0]);
 	default:
 		return (0);
 	}
@@ -282,11 +226,10 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "#define VCL_RET_PIPE  (1 << 3)\n");
 	vsb_cat(sb, "#define VCL_RET_PASS  (1 << 4)\n");
 	vsb_cat(sb, "#define VCL_RET_FETCH  (1 << 5)\n");
-	vsb_cat(sb, "#define VCL_RET_INSERT  (1 << 6)\n");
-	vsb_cat(sb, "#define VCL_RET_DELIVER  (1 << 7)\n");
-	vsb_cat(sb, "#define VCL_RET_DISCARD  (1 << 8)\n");
-	vsb_cat(sb, "#define VCL_RET_KEEP  (1 << 9)\n");
-	vsb_cat(sb, "#define VCL_RET_RESTART  (1 << 10)\n");
+	vsb_cat(sb, "#define VCL_RET_DELIVER  (1 << 6)\n");
+	vsb_cat(sb, "#define VCL_RET_DISCARD  (1 << 7)\n");
+	vsb_cat(sb, "#define VCL_RET_KEEP  (1 << 8)\n");
+	vsb_cat(sb, "#define VCL_RET_RESTART  (1 << 9)\n");
 	vsb_cat(sb, "/*\n");
 	vsb_cat(sb, " * $Id$\n");
 	vsb_cat(sb, " *\n");
@@ -319,8 +262,6 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "	unsigned	nhashcount;\n");
 	vsb_cat(sb, "\n");
-	vsb_cat(sb, "        void            *priv;\n");
-	vsb_cat(sb, "\n");
 	vsb_cat(sb, "        vcl_init_f      *init_func;\n");
 	vsb_cat(sb, "        vcl_fini_f      *fini_func;\n");
 	vsb_cat(sb, "\n");
@@ -335,6 +276,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "	vcl_func_f	*prefetch_func;\n");
 	vsb_cat(sb, "	vcl_func_f	*timeout_func;\n");
 	vsb_cat(sb, "	vcl_func_f	*discard_func;\n");
+	vsb_cat(sb, "	vcl_func_f	*error_func;\n");
 	vsb_cat(sb, "};\n");
 	vsb_cat(sb, "/*-\n");
 	vsb_cat(sb, " * Copyright (c) 2006 Verdens Gang AS\n");
@@ -383,25 +325,31 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, " * A backend probe specification\n");
 	vsb_cat(sb, " */\n");
 	vsb_cat(sb, "\n");
+	vsb_cat(sb, "extern void *vrt_magic_string_end;\n");
+	vsb_cat(sb, "\n");
 	vsb_cat(sb, "struct vrt_backend_probe {\n");
-	vsb_cat(sb, "	char		*request;\n");
+	vsb_cat(sb, "	const char	*url;\n");
+	vsb_cat(sb, "	const char	*request;\n");
 	vsb_cat(sb, "	double		timeout;\n");
 	vsb_cat(sb, "	double		interval;\n");
+	vsb_cat(sb, "	unsigned	window;\n");
+	vsb_cat(sb, "	unsigned	threshold;\n");
 	vsb_cat(sb, "};\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "/*\n");
 	vsb_cat(sb, " * A backend is a host+port somewhere on the network\n");
 	vsb_cat(sb, " */\n");
 	vsb_cat(sb, "struct vrt_backend {\n");
-	vsb_cat(sb, "	char				*vcl_name;\n");
-	vsb_cat(sb, "	char				*ident;\n");
+	vsb_cat(sb, "	const char			*vcl_name;\n");
+	vsb_cat(sb, "	const char			*ident;\n");
 	vsb_cat(sb, "\n");
-	vsb_cat(sb, "	char				*hosthdr;\n");
+	vsb_cat(sb, "	const char			*hosthdr;\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "	const unsigned char		*ipv4_sockaddr;\n");
 	vsb_cat(sb, "	const unsigned char		*ipv6_sockaddr;\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "	double				connect_timeout;\n");
+	vsb_cat(sb, "	unsigned			max_connections;\n");
 	vsb_cat(sb, "	struct vrt_backend_probe 	probe;\n");
 	vsb_cat(sb, "};\n");
 	vsb_cat(sb, "\n");
@@ -425,6 +373,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "struct vrt_dir_random {\n");
 	vsb_cat(sb, "	const char 				*name;\n");
+	vsb_cat(sb, "	unsigned				retries;\n");
 	vsb_cat(sb, "	unsigned 				nmember;\n");
 	vsb_cat(sb, "	const struct vrt_dir_random_entry	*members;\n");
 	vsb_cat(sb, "};\n");
@@ -458,19 +407,10 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "	const char	*token;\n");
 	vsb_cat(sb, "};\n");
 	vsb_cat(sb, "\n");
-	vsb_cat(sb, "struct vrt_acl {\n");
-	vsb_cat(sb, "	unsigned char	not;\n");
-	vsb_cat(sb, "	unsigned char	mask;\n");
-	vsb_cat(sb, "	unsigned char	paren;\n");
-	vsb_cat(sb, "	const char	*name;\n");
-	vsb_cat(sb, "	const char	*desc;\n");
-	vsb_cat(sb, "	void		*priv;\n");
-	vsb_cat(sb, "};\n");
-	vsb_cat(sb, "\n");
 	vsb_cat(sb, "/* ACL related */\n");
-	vsb_cat(sb, "int VRT_acl_match(const struct sess *, struct sockaddr *, const char *, const struct vrt_acl *);\n");
-	vsb_cat(sb, "void VRT_acl_init(struct vrt_acl *);\n");
-	vsb_cat(sb, "void VRT_acl_fini(struct vrt_acl *);\n");
+	vsb_cat(sb, "#define VRT_ACL_MAXADDR		16	/* max(IPv4, IPv6) */\n");
+	vsb_cat(sb, "\n");
+	vsb_cat(sb, "void VRT_acl_log(const struct sess *, const char *msg);\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "/* Regexp related */\n");
 	vsb_cat(sb, "void VRT_re_init(void **, const char *, int sub);\n");
@@ -479,6 +419,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "int VRT_re_test(struct vsb *, const char *, int sub);\n");
 	vsb_cat(sb, "const char *VRT_regsub(const struct sess *sp, int all, const char *, void *, const char *);\n");
 	vsb_cat(sb, "\n");
+	vsb_cat(sb, "void VRT_panic(struct sess *sp,  const char *, ...);\n");
 	vsb_cat(sb, "void VRT_purge(const char *, int hash);\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "void VRT_count(const struct sess *, unsigned);\n");
@@ -493,9 +434,13 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "/* Simple stuff */\n");
 	vsb_cat(sb, "int VRT_strcmp(const char *s1, const char *s2);\n");
+	vsb_cat(sb, "void VRT_memmove(void *dst, const void *src, unsigned len);\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "void VRT_ESI(struct sess *sp);\n");
 	vsb_cat(sb, "void VRT_Rollback(struct sess *sp);\n");
+	vsb_cat(sb, "\n");
+	vsb_cat(sb, "/* Synthetic pages */\n");
+	vsb_cat(sb, "void VRT_synth_page(struct sess *sp, unsigned flags, const char *, ...);\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "/* Backend related */\n");
 	vsb_cat(sb, "void VRT_init_dir_simple(struct cli *, struct director **, const struct vrt_dir_simple *);\n");
@@ -506,6 +451,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "char *VRT_IP_string(const struct sess *sp, const struct sockaddr *sa);\n");
 	vsb_cat(sb, "char *VRT_int_string(const struct sess *sp, int);\n");
 	vsb_cat(sb, "char *VRT_double_string(const struct sess *sp, double);\n");
+	vsb_cat(sb, "const char *VRT_backend_string(struct sess *sp);\n");
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "#define VRT_done(sp, hand)			\\\n");
 	vsb_cat(sb, "	do {					\\\n");
@@ -522,6 +468,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "\n");
 	vsb_cat(sb, "struct sockaddr * VRT_r_client_ip(const struct sess *);\n");
 	vsb_cat(sb, "struct sockaddr * VRT_r_server_ip(struct sess *);\n");
+	vsb_cat(sb, "int VRT_r_server_port(struct sess *);\n");
 	vsb_cat(sb, "const char * VRT_r_req_request(const struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_req_request(const struct sess *, const char *, ...);\n");
 	vsb_cat(sb, "const char * VRT_r_req_url(const struct sess *);\n");
@@ -534,6 +481,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "int VRT_r_req_restarts(const struct sess *);\n");
 	vsb_cat(sb, "double VRT_r_req_grace(struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_req_grace(struct sess *, double);\n");
+	vsb_cat(sb, "const char * VRT_r_req_xid(struct sess *);\n");
 	vsb_cat(sb, "const char * VRT_r_bereq_request(const struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_bereq_request(const struct sess *, const char *, ...);\n");
 	vsb_cat(sb, "const char * VRT_r_bereq_url(const struct sess *);\n");
@@ -546,8 +494,7 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "void VRT_l_obj_status(const struct sess *, int);\n");
 	vsb_cat(sb, "const char * VRT_r_obj_response(const struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_obj_response(const struct sess *, const char *, ...);\n");
-	vsb_cat(sb, "unsigned VRT_r_obj_valid(const struct sess *);\n");
-	vsb_cat(sb, "void VRT_l_obj_valid(const struct sess *, unsigned);\n");
+	vsb_cat(sb, "int VRT_r_obj_hits(const struct sess *);\n");
 	vsb_cat(sb, "unsigned VRT_r_obj_cacheable(const struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_obj_cacheable(const struct sess *, unsigned);\n");
 	vsb_cat(sb, "double VRT_r_obj_ttl(const struct sess *);\n");
@@ -565,5 +512,5 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, "const char * VRT_r_resp_response(const struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_resp_response(const struct sess *, const char *, ...);\n");
 	vsb_cat(sb, "double VRT_r_now(const struct sess *);\n");
-	vsb_cat(sb, "int VRT_r_backend_health(const struct sess *);\n");
+	vsb_cat(sb, "unsigned VRT_r_req_backend_healthy(const struct sess *);\n");
 }

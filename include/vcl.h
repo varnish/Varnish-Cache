@@ -30,8 +30,6 @@ struct VCL_conf {
 
 	unsigned	nhashcount;
 
-        void            *priv;
-
         vcl_init_f      *init_func;
         vcl_fini_f      *fini_func;
 
@@ -46,4 +44,5 @@ struct VCL_conf {
 	vcl_func_f	*prefetch_func;
 	vcl_func_f	*timeout_func;
 	vcl_func_f	*discard_func;
+	vcl_func_f	*error_func;
 };

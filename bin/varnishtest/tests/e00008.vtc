@@ -1,10 +1,11 @@
-# $Id: e00004.vtc 2906 2008-07-08 10:29:07Z phk $
+# $Id$
 
 test "ESI parsing errors"
 
 server s1 {
 	rxreq 
 	txresp -body {
+		<html>
 		Before include
 		<!--esi <esi:include src="/body"/> -->
 		After include

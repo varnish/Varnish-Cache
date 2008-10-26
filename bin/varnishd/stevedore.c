@@ -37,15 +37,10 @@
 #include "cache.h"
 #include "stevedore.h"
 
-/*
- * Stevedores are kept in a circular list with the head pointer
- * continuously moving from one element to the next.
- */
+static VTAILQ_HEAD(, stevedore)	stevedores =
+    VTAILQ_HEAD_INITIALIZER(stevedores);
 
-extern struct stevedore sma_stevedore;
-extern struct stevedore smf_stevedore;
-
-static struct stevedore * volatile stevedores;
+static struct stevedore * volatile stv_next;
 
 struct storage *
 STV_alloc(struct sess *sp, size_t size)
@@ -56,8 +51,13 @@ STV_alloc(struct sess *sp, size_t size)
 	for (;;) {
 
 		/* pick a stevedore and bump the head along */
-		/* XXX: only safe as long as pointer writes are atomic */
-		stv = stevedores = stevedores->next;
+		stv = VTAILQ_NEXT(stv_next, list);
+		if (stv == NULL)
+			stv = VTAILQ_FIRST(&stevedores);
+		AN(stv);
+
+		 /* XXX: only safe as long as pointer writes are atomic */
+		stv_next = stv;
 
 		/* try to allocate from it */
 		st = stv->alloc(stv, size);
@@ -83,7 +83,7 @@ STV_trim(const struct storage *st, size_t size)
 }
 
 void
-STV_free(const struct storage *st)
+STV_free(struct storage *st)
 {
 
 	CHECK_OBJ_NOTNULL(st, STORAGE_MAGIC);
@@ -92,57 +92,26 @@ STV_free(const struct storage *st)
 	st->stevedore->free(st);
 }
 
-static int
-cmp_storage(const struct stevedore *s, const char *p, const char *q)
-{
-	unsigned u;
-
-	u = pdiff(p, q);
-	if (strlen(s->name) != u)
-		return (1);
-	if (strncmp(s->name, p, u))
-		return (1);
-	return (0);
-}
-
 void
-STV_add(const char *spec)
+STV_add(const struct stevedore *stv2, int ac, char * const *av)
 {
-	const char *p, *q;
 	struct stevedore *stv;
 
-	p = strchr(spec, ',');
-	if (p == NULL)
-		q = p = strchr(spec, '\0');
-	else
-		q = p + 1;
-	xxxassert(p != NULL);
-	xxxassert(q != NULL);
-
-	stv = malloc(sizeof *stv);
+	CHECK_OBJ_NOTNULL(stv2, STEVEDORE_MAGIC);
+	ALLOC_OBJ(stv, STEVEDORE_MAGIC);
 	AN(stv);
 
-	if (!cmp_storage(&sma_stevedore, spec, p)) {
-		*stv = sma_stevedore;
-	} else if (!cmp_storage(&smf_stevedore, spec, p)) {
-		*stv = smf_stevedore;
-	} else {
-		fprintf(stderr, "Unknown storage method \"%.*s\"\n",
-		    (int)(p - spec), spec);
-		exit (2);
-	}
-	if (stv->init != NULL)
-		stv->init(stv, q);
+	*stv = *stv2;
 
-	if (!stevedores) {
-		stevedores = stv->next = stv->prev = stv;
-	} else {
-		stv->next = stevedores;
-		stv->prev = stevedores->prev;
-		stv->next->prev = stv;
-		stv->prev->next = stv;
-		stevedores = stv;
-	}
+	if (stv->init != NULL)
+		stv->init(stv, ac, av);
+	else if (ac != 0) 
+		ARGV_ERR("(-s%s) too many arguments\n", stv->name);
+
+	VTAILQ_INSERT_TAIL(&stevedores, stv, list);
+
+	if (!stv_next)
+		stv_next = VTAILQ_FIRST(&stevedores);
 }
 
 void
@@ -150,10 +119,8 @@ STV_open(void)
 {
 	struct stevedore *stv;
 
-	stv = stevedores;
-	do {
+	VTAILQ_FOREACH(stv, &stevedores, list) {
 		if (stv->open != NULL)
 			stv->open(stv);
-		stv = stv->next;
-	} while (stv != stevedores);
+	}
 }

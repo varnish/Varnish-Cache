@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "config.h"
 #include "vsb.h"
 
 #include "vcc_priv.h"
@@ -78,6 +79,8 @@ TimeUnit(struct tokenlist *tl)
 		sc = 60.0 * 60.0;
 	else if (vcc_IdIs(tl->t, "d"))
 		sc = 60.0 * 60.0 * 24.0;
+	else if (vcc_IdIs(tl->t, "w"))
+		sc = 60.0 * 60.0 * 24.0 * 7.0;
 	else {
 		vsb_printf(tl->sb, "Unknown time unit ");
 		vcc_ErrToken(tl, tl->t);
@@ -305,7 +308,7 @@ Cond_Int(const struct var *vp, struct tokenlist *tl)
 	default:
 		vsb_printf(tl->sb, "Invalid condition ");
 		vcc_ErrToken(tl, tl->t);
-		vsb_printf(tl->sb, " on integer variable\n");
+		vsb_printf(tl->sb, " on numeric variable\n");
 		vsb_printf(tl->sb,
 		    "  only '==', '!=', '<', '>', '<=' and '>=' are legal\n");
 		vcc_ErrWhere(tl, tl->t);
@@ -321,10 +324,29 @@ Cond_Bool(const struct var *vp, const struct tokenlist *tl)
 }
 
 static void
-Cond_Backend(const struct var *vp, const struct tokenlist *tl)
+Cond_Backend(const struct var *vp, struct tokenlist *tl)
 {
 
 	Fb(tl, 1, "%s\n", vp->rname);
+	if (tl->t->tok == T_EQ) {
+		Fb(tl, 1, "  ==\n");
+	} else if (tl->t->tok == T_NEQ) {
+		Fb(tl, 1, "  !=\n");
+	} else {
+		vsb_printf(tl->sb, "Invalid condition ");
+		vcc_ErrToken(tl, tl->t);
+		vsb_printf(tl->sb, " on backend variable\n");
+		vsb_printf(tl->sb,
+		    "  only '==' and '!=' are legal\n");
+		vcc_ErrWhere(tl, tl->t);
+		return;
+	}
+	vcc_NextToken(tl);
+	vcc_ExpectCid(tl);
+	ERRCHK(tl);
+	vcc_AddRef(tl, tl->t, R_BACKEND);
+	Fb(tl, 1, "VGC_backend_%.*s\n", PF(tl->t));
+	vcc_NextToken(tl);
 }
 
 static void
@@ -525,22 +547,31 @@ Function(struct tokenlist *tl)
 			vcc_AddRef(tl, tl->t, R_FUNC);
 		}
 		tl->curproc = tl->mprocs[m];
+		Fb(tl, 1, "  /* ... from ");
+		vcc_Coord(tl, tl->fb, NULL);
+		Fb(tl, 0, " */\n");
 	} else {
 		tl->fb = tl->fc;
 		tl->curproc = vcc_AddProc(tl, tl->t);
 		vcc_AddDef(tl, tl->t, R_FUNC);
 		Fh(tl, 0, "static int VGC_function_%.*s (struct sess *sp);\n",
 		    PF(tl->t));
-		Fc(tl, 1, "static int\n");
+		Fc(tl, 1, "\nstatic int\n");
 		Fc(tl, 1, "VGC_function_%.*s (struct sess *sp)\n", PF(tl->t));
 	}
 	vcc_NextToken(tl);
 	tl->indent += INDENT;
 	Fb(tl, 1, "{\n");
 	L(tl, Compound(tl));
+	if (m == -1) {
+		/*
+		 * non-method subroutines must have an explicit non-action
+		 * return in case they just fall through the bottom.
+		 */
+		Fb(tl, 1, "  return(0);\n");
+	}
 	Fb(tl, 1, "}\n");
 	tl->indent -= INDENT;
-	Fb(tl, 0, "\n");
 	tl->fb = NULL;
 	tl->curproc = NULL;
 }

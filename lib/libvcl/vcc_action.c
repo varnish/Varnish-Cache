@@ -33,6 +33,7 @@
 
 #include <stdio.h>
 
+#include "config.h"
 #include "vsb.h"
 
 #include "vcc_priv.h"
@@ -94,21 +95,34 @@ parse_call(struct tokenlist *tl)
 static void
 parse_error(struct tokenlist *tl)
 {
-	unsigned a;
+	struct var *vp;
 
 	vcc_NextToken(tl);
-	if (tl->t->tok == CNUM) {
-		a = vcc_UintVal(tl);
+	if (tl->t->tok == VAR) {
+		vp = vcc_FindVar(tl, tl->t, vcc_vars);
+		ERRCHK(tl);
+		assert(vp != NULL);
+		if (vp->fmt == INT) {
+			Fb(tl, 1, "VRT_error(sp, %s", vp->rname);
+			vcc_NextToken(tl);
+		} else {
+			Fb(tl, 1, "VRT_error(sp, 0");
+		}
+	} else if (tl->t->tok == CNUM) {
+		Fb(tl, 1, "VRT_error(sp, %u", vcc_UintVal(tl));
 		vcc_NextToken(tl);
 	} else
-		a = 0;
-	Fb(tl, 1, "VRT_error(sp, %u", a);
+		Fb(tl, 1, "VRT_error(sp, 0");
 	if (tl->t->tok == CSTR) {
 		Fb(tl, 0, ", %.*s", PF(tl->t));
 		vcc_NextToken(tl);
 	} else if (tl->t->tok == VAR) {
 		Fb(tl, 0, ", ");
-		vcc_StringVal(tl);
+		if (!vcc_StringVal(tl)) {
+			ERRCHK(tl);
+			vcc_ExpectedStringval(tl);
+			return;
+		}
 	} else {
 		Fb(tl, 0, ", (const char *)0");
 	}
@@ -265,11 +279,30 @@ parse_set(struct tokenlist *tl)
 			vcc_ErrWhere(tl, tl->t);
 			return;
 		}
-		Fb(tl, 0, "0);\n");
+		Fb(tl, 0, "vrt_magic_string_end);\n");
+		break;
+	case BOOL:
+		if (tl->t->tok != '=') {
+			illegal_assignment(tl, "boolean");
+			return;
+		}
+		vcc_NextToken(tl);
+		ExpectErr(tl, ID);
+		if (vcc_IdIs(tl->t, "true")) {
+			Fb(tl, 0, " 1);\n", vp->lname);
+		} else if (vcc_IdIs(tl->t, "false")) {
+			Fb(tl, 0, " 0);\n", vp->lname);
+		} else {
+			vsb_printf(tl->sb,
+			    "Expected true or false\n");
+			vcc_ErrWhere(tl, tl->t);
+			return;
+		}
+		vcc_NextToken(tl);
 		break;
 	default:
 		vsb_printf(tl->sb,
-		    "Assignments not possible for '%s'\n", vp->name);
+		    "Assignments not possible for type of '%s'\n", vp->name);
 		vcc_ErrWhere(tl, tl->t);
 		return;
 	}
@@ -355,6 +388,42 @@ parse_esi(struct tokenlist *tl)
 
 /*--------------------------------------------------------------------*/
 
+static void
+parse_panic(struct tokenlist *tl)
+{
+	vcc_NextToken(tl);
+	
+	Fb(tl, 1, "VRT_panic(sp, ");
+	if (!vcc_StringVal(tl)) {
+		vcc_ExpectedStringval(tl);
+		return;
+	}
+	do 
+		Fb(tl, 0, ", ");
+	while (vcc_StringVal(tl));
+	Fb(tl, 0, " vrt_magic_string_end);\n");
+}
+
+/*--------------------------------------------------------------------*/
+
+static void
+parse_synthetic(struct tokenlist *tl)
+{
+	vcc_NextToken(tl);
+	
+	Fb(tl, 1, "VRT_synth_page(sp, 0, ");
+	if (!vcc_StringVal(tl)) {
+		vcc_ExpectedStringval(tl);
+		return;
+	}
+	do 
+		Fb(tl, 0, ", ");
+	while (vcc_StringVal(tl));
+	Fb(tl, 0, " vrt_magic_string_end);\n");
+}
+
+/*--------------------------------------------------------------------*/
+
 typedef void action_f(struct tokenlist *tl);
 
 static struct action_table {
@@ -367,15 +436,18 @@ static struct action_table {
 #include "vcl_returns.h"
 #undef VCL_RET_MAC
 #undef VCL_RET_MAC_E
-	{ "call", 	parse_call },
-	{ "set", 	parse_set },
-	{ "unset", 	parse_unset },
-	{ "remove", 	parse_unset }, /* backward compatibility */
-	{ "purge_url",	parse_purge_url },
-	{ "purge_hash",	parse_purge_hash },
-	{ "esi",	parse_esi },
 
-	{ NULL,		NULL }
+	/* Keep list sorted from here */
+	{ "call", 		parse_call },
+	{ "esi",		parse_esi },
+	{ "panic",		parse_panic },
+	{ "purge_hash",		parse_purge_hash },
+	{ "purge_url",		parse_purge_url },
+	{ "remove", 		parse_unset }, /* backward compatibility */
+	{ "set", 		parse_set },
+	{ "synthetic", 		parse_synthetic },
+	{ "unset", 		parse_unset },
+	{ NULL,			NULL }
 };
 
 void

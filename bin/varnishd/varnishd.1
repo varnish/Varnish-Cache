@@ -239,8 +239,7 @@ The following storage types are available:
 .It Cm malloc
 Storage for each object is allocated with
 .Xr malloc 3 .
-Not recommended for production use.
-.It Cm file Ns Op Ns , Ns Ar path Ns Op Ns , Ns Ar size
+.It Cm file Ns Op Ns , Ns Ar path Ns Op Ns , Ns Ar size Ns Op Ns , Ns Ar granularity
 Storage for each object is allocated from an arena backed by a file.
 This is the default.
 .Pp
@@ -285,6 +284,18 @@ performance.
 Pre-creating the storage file using
 .Xr dd 1
 will reduce fragmentation to a minimum.
+.Pp
+The
+.Ar granularity
+parameter specifies the granularity of allocation.
+All allocations are rounded up to this size.
+The size is assumed to be in bytes, unless followed by one of the
+suffixes described for
+.Ar size
+except for %.
+.Pp
+The default size is the VM page size.
+The size should be reduced if you have many small objects.
 .El
 .Ss Management Interface
 If the
@@ -389,6 +400,10 @@ nor the configuration assign one.
 Note that changes to this parameter are not applied retroactively.
 .Pp
 The default is 120 seconds.
+.It Va err_ttl
+The default time-to-live assigned to the synthesized error pages.
+.Pp
+The default is 0 seconds.
 .It Va fetch_chunksize
 The default chunk size used when retrieving documents for which the
 backend server does not specify a content length.

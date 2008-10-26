@@ -43,6 +43,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
 #ifndef HAVE_ASPRINTF
 #include "compat/asprintf.h"
 #endif
@@ -79,86 +80,8 @@ char *mgt_cc_cmd;
  * Keep this in synch with man/vcl.7 and etc/default.vcl!
  */
 static const char *default_vcl =
-    "sub vcl_recv {\n"
-    "    if (req.request != \"GET\" &&\n"
-    "      req.request != \"HEAD\" &&\n"
-    "      req.request != \"PUT\" &&\n"
-    "      req.request != \"POST\" &&\n"
-    "      req.request != \"TRACE\" &&\n"
-    "      req.request != \"OPTIONS\" &&\n"
-    "      req.request != \"DELETE\") {\n"
-    "        /* Non-RFC2616 or CONNECT which is weird. */\n"
-    "        pipe;\n"
-    "    }\n"
-    "    if (req.http.Expect) {\n"
-    "        /* Expect is just too hard at present. */\n"
-    "        pipe;\n"
-    "    }\n"
-    "    if (req.request != \"GET\" && req.request != \"HEAD\") {\n"
-    "        /* We only deal with GET and HEAD by default */\n"
-    "        pass;\n"
-    "    }\n"
-    "    if (req.http.Authorization || req.http.Cookie) {\n"
-    "        /* Not cacheable by default */\n"
-    "        pass;\n"
-    "    }\n"
-    "    lookup;\n"
-    "}\n"
-    "\n"
-    "sub vcl_pipe {\n"
-    "    pipe;\n"
-    "}\n"
-    "\n"
-    "sub vcl_pass {\n"
-    "    pass;\n"
-    "}\n"
-    "\n"
-    "sub vcl_hash {\n"
-    "    set req.hash += req.url;\n"
-    "    if (req.http.host) {\n"
-    "        set req.hash += req.http.host;\n"
-    "    } else {\n"
-    "        set req.hash += server.ip;\n"
-    "    }\n"
-    "    hash;\n"
-    "}\n"
-    "\n"
-    "sub vcl_hit {\n"
-    "    if (!obj.cacheable) {\n"
-    "        pass;\n"
-    "    }\n"
-    "    deliver;\n"
-    "}\n"
-    "\n"
-    "sub vcl_miss {\n"
-    "    fetch;\n"
-    "}\n"
-    "\n"
-    "sub vcl_fetch {\n"
-    "    if (!obj.valid) {\n"
-    "        error obj.status;\n"
-    "    }\n"
-    "    if (!obj.cacheable) {\n"
-    "        pass;\n"
-    "    }\n"
-    "    if (obj.http.Set-Cookie) {\n"
-    "        pass;\n"
-    "    }\n"
-    "	 set obj.prefetch =  -30s;"
-    "    insert;\n"
-    "}\n"
-    "sub vcl_deliver {\n"
-    "    deliver;\n"
-    "}\n"
-    "sub vcl_discard {\n"
-    "    discard;\n"
-    "}\n"
-    "sub vcl_prefetch {\n"
-    "    fetch;\n"
-    "}\n"
-    "sub vcl_timeout {\n"
-    "    discard;\n"
-    "}\n";
+#include "default_vcl.h"
+    ""	;
 
 /*
  * Prepare the compiler command line
@@ -218,8 +141,9 @@ mgt_run_cc(const char *source, struct vsb *sb)
 	char cmdline[1024];
 	struct vsb cmdsb;
 	char sf[] = "./vcl.########.c";
-	char *of;
-	int p[2], sfd, srclen, status;
+	char of[sizeof sf + 1];
+	char *retval;
+	int rv, p[2], sfd, srclen, status;
 	pid_t pid;
 	void *dlh;
 	struct vlu *vlu;
@@ -244,10 +168,11 @@ mgt_run_cc(const char *source, struct vsb *sb)
 	AZ(close(sfd));
 
 	/* Name the output shared library by overwriting the final 'c' */
-	of = strdup(sf);
-	XXXAN(of);
-	assert(of[sizeof sf - 2] == 'c');
-	of[sizeof sf - 2] = 'o';
+	memcpy(of, sf, sizeof sf);
+	assert(sf[sizeof sf - 2] == 'c');
+	of[sizeof sf - 2] = 's';
+	of[sizeof sf - 1] = 'o';
+	of[sizeof sf] = '\0';
 	AN(vsb_new(&cmdsb, cmdline, sizeof cmdline, 0));
 	mgt_make_cc_cmd(&cmdsb, sf, of);
 	vsb_finish(&cmdsb);
@@ -258,7 +183,6 @@ mgt_run_cc(const char *source, struct vsb *sb)
 		vsb_printf(sb, "%s(): pipe() failed: %s",
 		    __func__, strerror(errno));
 		(void)unlink(sf);
-		free(of);
 		return (NULL);
 	}
 	assert(p[0] > STDERR_FILENO);
@@ -269,7 +193,6 @@ mgt_run_cc(const char *source, struct vsb *sb)
 		AZ(close(p[0]));
 		AZ(close(p[1]));
 		(void)unlink(sf);
-		free(of);
 		return (NULL);
 	}
 	if (pid == 0) {
@@ -290,13 +213,15 @@ mgt_run_cc(const char *source, struct vsb *sb)
 	AZ(close(p[0]));
 	VLU_Destroy(vlu);
 	(void)unlink(sf);
-	if (waitpid(pid, &status, 0) < 0) {
-		vsb_printf(sb, "%s(): waitpid() failed: %s",
-		    __func__, strerror(errno));
-		(void)unlink(of);
-		free(of);
-		return (NULL);
-	}
+	do {
+		rv = waitpid(pid, &status, 0);
+		if (rv < 0 && errno != EINTR) {
+			vsb_printf(sb, "%s(): waitpid() failed: %s",
+			    __func__, strerror(errno));
+			(void)unlink(of);
+			return (NULL);
+		}
+	} while (rv < 0);
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
 		vsb_printf(sb, "%s(): Compiler failed", __func__);
 		if (WIFEXITED(status))
@@ -306,7 +231,6 @@ mgt_run_cc(const char *source, struct vsb *sb)
 		if (WCOREDUMP(status))
 			vsb_printf(sb, ", core dumped");
 		(void)unlink(of);
-		free(of);
 		return (NULL);
 	}
 
@@ -316,7 +240,6 @@ mgt_run_cc(const char *source, struct vsb *sb)
 		    "%s(): failed to load compiled VCL program:\n  %s",
 		    __func__, dlerror());
 		(void)unlink(of);
-		free(of);
 		return (NULL);
 	}
 
@@ -326,7 +249,9 @@ mgt_run_cc(const char *source, struct vsb *sb)
 	 */
 
 	AZ(dlclose(dlh));
-	return (of);
+	retval = strdup(of);
+	XXXAN(retval);
+	return (retval);
 }
 
 /*--------------------------------------------------------------------*/
@@ -393,16 +318,27 @@ mgt_vcc_del(struct vclprog *vp)
 	free(vp);
 }
 
+static struct vclprog *
+mgt_vcc_byname(const char *name)
+{
+	struct vclprog *vp;
+
+	VTAILQ_FOREACH(vp, &vclhead, list)
+		if (!strcmp(name, vp->name))
+			return (vp);
+	return (NULL);
+}
+
+
 static int
 mgt_vcc_delbyname(const char *name)
 {
 	struct vclprog *vp;
 
-	VTAILQ_FOREACH(vp, &vclhead, list) {
-		if (!strcmp(name, vp->name)) {
-			mgt_vcc_del(vp);
-			return (0);
-		}
+	vp = mgt_vcc_byname(name);
+	if (vp != NULL) {
+		mgt_vcc_del(vp);
+		return (0);
 	}
 	return (1);
 }
@@ -541,9 +477,17 @@ mcf_config_inline(struct cli *cli, const char * const *av, void *priv)
 	char *vf, *p = NULL;
 	struct vsb *sb;
 	unsigned status;
+	struct vclprog *vp;
 
 	(void)priv;
 
+	vp = mgt_vcc_byname(av[2]);
+	if (vp != NULL) {
+		cli_out(cli, "Already a VCL program named %s", av[2]);
+		cli_result(cli, CLIS_PARAM);
+		return;
+	}
+	
 	sb = vsb_newauto();
 	XXXAN(sb);
 	vf = mgt_VccCompile(sb, av[3], NULL, 0);
@@ -575,8 +519,15 @@ mcf_config_load(struct cli *cli, const char * const *av, void *priv)
 	struct vsb *sb;
 	unsigned status;
 	char *p = NULL;
+	struct vclprog *vp;
 
 	(void)priv;
+	vp = mgt_vcc_byname(av[2]);
+	if (vp != NULL) {
+		cli_out(cli, "Already a VCL program named %s", av[2]);
+		cli_result(cli, CLIS_PARAM);
+		return;
+	}
 
 	sb = vsb_newauto();
 	XXXAN(sb);
@@ -607,9 +558,9 @@ mcf_find_vcl(struct cli *cli, const char *name)
 {
 	struct vclprog *vp;
 
-	VTAILQ_FOREACH(vp, &vclhead, list)
-		if (!strcmp(vp->name, name))
-			return (vp);
+	vp = mgt_vcc_byname(name);
+	if (vp != NULL)
+		return (vp);
 	cli_result(cli, CLIS_PARAM);
 	cli_out(cli, "No configuration named %s known.", name);
 	return (NULL);

@@ -44,6 +44,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
 #ifndef HAVE_STRLCPY
 #include "compat/strlcpy.h"
 #endif
@@ -65,6 +66,8 @@ struct vss_addr {
 		struct sockaddr		 sa;
 	} va_addr;
 };
+
+/*lint -esym(754, _storage) not ref */
 
 /*
  * Take a string provided by the user and break it up into address and

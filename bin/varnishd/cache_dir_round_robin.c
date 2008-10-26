@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2008 Linpro AS
+ * Copyright (c) 2008 Linpro AS
  * All rights reserved.
  *
  * Author: Petter Knudsen <petter@linpro.no>
@@ -26,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $Id: cache_dir_round_robin.c 2906 2008-07-08 10:29:07Z phk $
+ * $Id$
  *
  */
 
@@ -42,39 +41,67 @@
 
 #include "shmlog.h"
 #include "cache.h"
+#include "cache_backend.h"
 #include "vrt.h"
 
 /*--------------------------------------------------------------------*/
 
 struct vdi_round_robin_host {
-	struct backend		*backend;
+	struct backend			*backend;
 };
 
 struct vdi_round_robin {
-	unsigned		magic;
-#define VDI_ROUND_ROBIN_MAGIC	0x2114a178
-	struct director		dir;
+	unsigned			magic;
+#define VDI_ROUND_ROBIN_MAGIC		0x2114a178
+	struct director			dir;
 	struct vdi_round_robin_host	*hosts;
-	unsigned		nhosts;
-	unsigned		next_host;
+	unsigned			nhosts;
+	unsigned			next_host;
 };
 
-
-static struct backend *
-vdi_round_robin_choose(struct sess *sp)
+static struct vbe_conn *
+vdi_round_robin_getfd(struct sess *sp)
 {
+	int i;
 	struct vdi_round_robin *vs;
 	struct backend *backend;
+	struct vbe_conn *vbe;
 
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
 	CAST_OBJ_NOTNULL(vs, sp->director->priv, VDI_ROUND_ROBIN_MAGIC);
 
-	backend = vs->hosts[ vs->next_host ].backend;
-	vs->next_host = (vs->next_host + 1) % vs->nhosts;
+	for (i = 0; i < vs->nhosts; i++) {
+		backend = vs->hosts[vs->next_host].backend;
+		vs->next_host = (vs->next_host + 1) % vs->nhosts;
+		if (!backend->healthy)
+			continue;
+		vbe = VBE_GetVbe(sp, backend);
+		if (vbe != NULL)
+			return (vbe);
+	}
 
-	return (backend);
+	return (NULL);
 }
 
+static unsigned
+vdi_round_robin_healthy(const struct sess *sp)
+{
+	struct vdi_round_robin *vs;
+	int i;
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	CAST_OBJ_NOTNULL(vs, sp->director->priv, VDI_ROUND_ROBIN_MAGIC);
+
+	for (i = 0; i < vs->nhosts; i++) {
+		if (vs->hosts[i].backend->healthy)
+			return 1;
+	}
+	return 0;
+}
+
+/*lint -e{818} not const-able */
 static void
 vdi_round_robin_fini(struct director *d)
 {
@@ -89,6 +116,7 @@ vdi_round_robin_fini(struct director *d)
 	for (i = 0; i < vs->nhosts; i++, vh++)
 		VBE_DropRef(vh->backend);
 	free(vs->hosts);
+	free(vs->dir.vcl_name);
 	vs->dir.magic = 0;
 	vs->next_host = 0;
 	FREE_OBJ(vs);
@@ -112,8 +140,10 @@ VRT_init_dir_round_robin(struct cli *cli, struct director **bp, const struct vrt
 	vs->dir.magic = DIRECTOR_MAGIC;
 	vs->dir.priv = vs;
 	vs->dir.name = "round_robin";
-	vs->dir.choose = vdi_round_robin_choose;
+	REPLACE(vs->dir.vcl_name, t->name);
+	vs->dir.getfd = vdi_round_robin_getfd;
 	vs->dir.fini = vdi_round_robin_fini;
+	vs->dir.healthy = vdi_round_robin_healthy;
 
 	vh = vs->hosts;
 	te = t->members;

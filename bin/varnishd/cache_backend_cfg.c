@@ -56,19 +56,6 @@ MTX VBE_mtx;
  */
 static VTAILQ_HEAD(, backend) backends = VTAILQ_HEAD_INITIALIZER(backends);
 
-/*--------------------------------------------------------------------*/
-
-void
-VBE_SelectBackend(struct sess *sp)
-{
-	struct backend *bp;
-
-	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
-	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
-	bp = sp->director->choose(sp);
-	CHECK_OBJ_NOTNULL(bp, BACKEND_MAGIC);
-	sp->backend = bp;
-}
 
 /*--------------------------------------------------------------------
  */
@@ -76,13 +63,14 @@ VBE_SelectBackend(struct sess *sp)
 static void
 VBE_Nuke(struct backend *b)
 {
+
+	ASSERT_CLI();
 	VTAILQ_REMOVE(&backends, b, list);
 	free(b->ident);
 	free(b->hosthdr);
 	free(b->ipv4);
 	free(b->ipv6);
-	b->magic = 0;
-	free(b);
+	FREE_OBJ(b);
 	VSL_stats->n_backend--;
 }
 
@@ -141,6 +129,18 @@ VBE_DropRef(struct backend *b)
 	CHECK_OBJ_NOTNULL(b, BACKEND_MAGIC);
 
 	LOCK(&b->mtx);
+	VBE_DropRefLocked(b);
+}
+
+void
+VBE_DropRefConn(struct backend *b)
+{
+
+	CHECK_OBJ_NOTNULL(b, BACKEND_MAGIC);
+
+	LOCK(&b->mtx);
+	assert(b->n_conn > 0);
+	b->n_conn--;
 	VBE_DropRefLocked(b);
 }
 
@@ -222,6 +222,7 @@ VBE_AddBackend(struct cli *cli, const struct vrt_backend *vb)
 	REPLACE(b->hosthdr, vb->hosthdr);
 
 	b->connect_timeout = vb->connect_timeout;
+	b->max_conn = vb->max_connections;
 
 	/*
 	 * Copy over the sockaddrs
@@ -264,10 +265,9 @@ cli_debug_backend(struct cli *cli, const char * const *av, void *priv)
 	ASSERT_CLI();
 	VTAILQ_FOREACH(b, &backends, list) {
 		CHECK_OBJ_NOTNULL(b, BACKEND_MAGIC);
-		cli_out(cli, "%p %s %d\n",
-		    b,
-		    b->vcl_name,
-		    b->refcount);
+		cli_out(cli, "%p %s %d %d/%d\n",
+		    b, b->vcl_name, b->refcount,
+		    b->n_conn, b->max_conn);
 	}
 }
 

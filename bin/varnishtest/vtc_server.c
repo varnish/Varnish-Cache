@@ -28,6 +28,7 @@
 
 
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -56,7 +57,7 @@ struct server {
 	
 	int			depth;
 	int			sock;
-	const char		*listen;
+	char			*listen;
 	struct vss_addr		**vss_addr;
 	char			*addr;
 	char			*port;
@@ -96,8 +97,8 @@ server_thread(void *priv)
 		vtc_log(vl, 3, "Accepted socket fd is %d", fd);
 		http_process(vl, s->spec, fd, 0);
 		vtc_log(vl, 3, "shutting fd %d", fd);
-		AZ(shutdown(fd, SHUT_WR));
-		AZ(close(fd));
+		assert((shutdown(fd, SHUT_WR) == 0) || errno == ENOTCONN);
+		TCP_close(&fd);
 	}
 	vtc_log(vl, 2, "Ending");
 	return (NULL);
@@ -108,26 +109,42 @@ server_thread(void *priv)
  */
 
 static struct server *
-server_new(char *name)
+server_new(const char *name)
 {
 	struct server *s;
 
+	AN(name);
 	ALLOC_OBJ(s, SERVER_MAGIC);
 	AN(s);
-	s->name = name;
+	REPLACE(s->name, name);
 	s->vl = vtc_logopen(name);
 	AN(s->vl);
-	if (*name != 's') {
+	if (*s->name != 's')
 		vtc_log(s->vl, 0, "Server name must start with 's'");
-		exit (1);
-	}
-	s->listen = "127.0.0.1:9080";
+
+	REPLACE(s->listen, "127.0.0.1:9080");
 	AZ(VSS_parse(s->listen, &s->addr, &s->port));
 	s->repeat = 1;
 	s->depth = 1;
 	s->sock = -1;
 	VTAILQ_INSERT_TAIL(&servers, s, list);
 	return (s);
+}
+
+/**********************************************************************
+ * Clean up a server
+ */
+
+static void
+server_delete(struct server *s)
+{
+
+	CHECK_OBJ_NOTNULL(s, SERVER_MAGIC);
+	vtc_logclose(s->vl);
+	free(s->listen);
+	free(s->name);
+	/* XXX: MEMLEAK (?) (VSS ??) */
+	FREE_OBJ(s);
 }
 
 /**********************************************************************
@@ -175,8 +192,8 @@ server_wait(struct server *s)
 		    (char *)res);
 		exit (1);
 	}
-	s->tp = NULL;
-	AZ(close(s->sock));
+	s->tp = 0;
+	TCP_close(&s->sock);
 	s->sock = -1;
 }
 
@@ -210,6 +227,7 @@ cmd_server(CMD_ARGS)
 
 	(void)priv;
 	(void)cmd;
+	(void)vl;
 
 	if (av == NULL) {
 		/* Reset and free */
@@ -217,8 +235,7 @@ cmd_server(CMD_ARGS)
 			VTAILQ_REMOVE(&servers, s, list);
 			if (s->sock >= 0) 
 				server_wait(s);
-			FREE_OBJ(s);
-			/* XXX: MEMLEAK */
+			server_delete(s);
 		}
 		return;
 	}
@@ -240,7 +257,7 @@ cmd_server(CMD_ARGS)
 			continue;
 		}
 		if (!strcmp(*av, "-listen")) {
-			s->listen = av[1];
+			REPLACE(s->listen, av[1]);
 			AZ(VSS_parse(s->listen, &s->addr, &s->port));
 			av++;
 			continue;

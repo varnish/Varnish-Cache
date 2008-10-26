@@ -71,6 +71,7 @@
 #include <unistd.h>
 #include <limits.h>
 
+#include "config.h"
 #ifndef HAVE_DAEMON
 #include "compat/daemon.h"
 #endif
@@ -90,6 +91,7 @@ static struct logline {
 	char *df_Referer;		/* %{Referer}i */
 	char *df_Uq;			/* %U%q, URL path and query string */
 	char *df_User_agent;		/* %{User-agent}i */
+	char *df_X_Forwarded_For;	/* %{X-Forwarded-For}i */
 	char *df_b;			/* %b, Bytes */
 	char *df_h;			/* %h (host name / IP adress)*/
 	char *df_m;			/* %m, Request method*/
@@ -100,6 +102,7 @@ static struct logline {
 } **ll;
 
 static size_t nll;
+static int prefer_x_forwarded_for = 0;
 
 static int
 isprefix(const char *str, const char *prefix, const char *end, const char **next)
@@ -239,6 +242,8 @@ collect_backend(struct logline *lp, enum shmlogtag tag, unsigned spec,
 		else if (isprefix(ptr, "authorization:", end, &next) &&
 		    isprefix(next, "basic", end, &next))
 			lp->df_u = trimline(next, end);
+		else if (isprefix(ptr, "x-forwarded-for:", end, &next))
+			lp->df_X_Forwarded_For = trimline(next, end);
 		else if (isprefix(ptr, "host:", end, &next))
 			lp->df_Host = trimline(next, end);
 		break;
@@ -311,6 +316,8 @@ collect_client(struct logline *lp, enum shmlogtag tag, unsigned spec,
 		else if (isprefix(ptr, "authorization:", end, &next) &&
 		    isprefix(next, "basic", end, &next))
 			lp->df_u = trimline(next, end);
+		else if (isprefix(ptr, "x-forwarded-for:", end, &next))
+			lp->df_X_Forwarded_For = trimline(next, end);
 		else if (isprefix(ptr, "host:", end, &next))
 			lp->df_Host = trimline(next, end);
 		break;
@@ -395,6 +402,8 @@ h_ncsa(void *priv, enum shmlogtag tag, unsigned fd,
 		/* %h */
 		if (!lp->df_h && spec & VSL_S_BACKEND)
 			fprintf(fo, "127.0.0.1 ");
+		else if (lp->df_X_Forwarded_For && prefer_x_forwarded_for)
+			fprintf(fo, "%s ", lp->df_X_Forwarded_For);
 		else
 			fprintf(fo, "%s ", lp->df_h ? lp->df_h : "-");
 
@@ -451,9 +460,8 @@ h_ncsa(void *priv, enum shmlogtag tag, unsigned fd,
 		fprintf(fo, "\"%s\"\n",
 		    lp->df_User_agent ? lp->df_User_agent : "-");
 
-		/* hack: flush after every line if writing to file */
-		if (fo != stdout)
-			fflush(fo);
+		/* flush the stream */
+		fflush(fo);
 	}
 
 	/* clean up */
@@ -463,6 +471,7 @@ h_ncsa(void *priv, enum shmlogtag tag, unsigned fd,
 	freez(lp->df_Referer);
 	freez(lp->df_Uq);
 	freez(lp->df_User_agent);
+	freez(lp->df_X_Forwarded_For);
 	freez(lp->df_b);
 	freez(lp->df_h);
 	freez(lp->df_m);
@@ -502,7 +511,7 @@ static void
 usage(void)
 {
 
-	fprintf(stderr, "usage: varnishncsa %s [-aDV] [-n varnish_name] [-P file] [-w file]\n", VSL_ARGS);
+	fprintf(stderr, "usage: varnishncsa %s [-aDV] [-n varnish_name] [-P file] [-w file]\n", VSL_USAGE);
 	exit(1);
 }
 
@@ -520,10 +529,13 @@ main(int argc, char *argv[])
 
 	vd = VSL_New();
 
-	while ((c = getopt(argc, argv, VSL_ARGS "aDn:P:Vw:")) != -1) {
+	while ((c = getopt(argc, argv, VSL_ARGS "aDn:P:Vw:f")) != -1) {
 		switch (c) {
 		case 'a':
 			a_flag = 1;
+			break;
+		case 'f':
+			prefer_x_forwarded_for = 1;
 			break;
 		case 'D':
 			D_flag = 1;

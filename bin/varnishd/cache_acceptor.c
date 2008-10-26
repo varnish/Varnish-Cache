@@ -59,9 +59,10 @@ static struct acceptor *vca_acceptors[] = {
 #if defined(HAVE_EPOLL_CTL)
 	&acceptor_epoll,
 #endif
-#if defined(HAVE_POLL)
-	&acceptor_poll,
+#if defined(HAVE_PORT_CREATE)
+	&acceptor_ports,
 #endif
+	&acceptor_poll,
 	NULL,
 };
 
@@ -162,7 +163,7 @@ vca_acct(void *arg)
 	unsigned u;
 	double now;
 
-	THR_Name("cache-acceptor");
+	THR_SetName("cache-acceptor");
 	(void)arg;
 
 	/* Set up the poll argument */
@@ -220,10 +221,20 @@ vca_acct(void *arg)
 			addr = (void*)&addr_s;
 			i = accept(ls->sock, addr, &l);
 			if (i < 0) {
-				if (errno != EAGAIN && errno != ECONNABORTED) {
+				switch (errno) {
+				case EAGAIN:
+				case ECONNABORTED:
+					break;
+				case EMFILE:
 					VSL(SLT_Debug, ls->sock,
-					    "Accept failed errno=%d", errno);
+					    "Too many open files when accept(2)ing. Sleeping.");
+					TIM_sleep(params->accept_fd_holdoff * 1000.0);
+					break;
+				default:
+					VSL(SLT_Debug, ls->sock,
+					    "Accept failed: %s", strerror(errno));
 					/* XXX: stats ? */
+					break;
 				}
 				continue;
 			}

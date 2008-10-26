@@ -69,9 +69,33 @@
  */
 
 struct vbp_target;
+struct vbe_conn;
 struct vrt_backend_probe;
 
-/* Backend indstance */
+/*--------------------------------------------------------------------
+ * A director is a piece of code which selects one of possibly multiple
+ * backends to use.
+ */
+
+typedef struct vbe_conn *vdi_getfd_f(struct sess *sp);
+typedef void vdi_fini_f(struct director *d);
+typedef unsigned vdi_healthy(const struct sess *sp);
+
+struct director {
+	unsigned		magic;
+#define DIRECTOR_MAGIC		0x3336351d
+	const char		*name;
+	char			*vcl_name;
+	vdi_getfd_f		*getfd;
+	vdi_fini_f		*fini;
+	vdi_healthy		*healthy;
+	void			*priv;
+};
+
+/*--------------------------------------------------------------------
+ * An instance of a backend from a VCL program.
+ */
+
 struct backend {
 	unsigned		magic;
 #define BACKEND_MAGIC		0x64c4c7c6
@@ -92,17 +116,22 @@ struct backend {
 	struct sockaddr		*ipv6;
 	socklen_t		ipv6len;
 
+	unsigned		max_conn;
+	unsigned		n_conn;
 	VTAILQ_HEAD(, vbe_conn)	connlist;
 
 	struct vbp_target	*probe;
-	int			health;
+	unsigned		healthy;
 };
 
 /* cache_backend.c */
 void VBE_ReleaseConn(struct vbe_conn *vc);
+struct vbe_conn *VBE_GetVbe(struct sess *sp, struct backend *bp);
 
 /* cache_backend_cfg.c */
 extern MTX VBE_mtx;
+void VBE_DropRefConn(struct backend *);
+void VBE_DropRef(struct backend *);
 void VBE_DropRefLocked(struct backend *b);
 
 /* cache_backend_poll.c */

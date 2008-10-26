@@ -42,6 +42,7 @@
 .Op Fl c
 .Op Fl D
 .Op Fl d
+.Op Fl f
 .Op Fl I Ar regex
 .Op Fl i Ar tag
 .Op Fl n Ar varnish_name
@@ -92,6 +93,12 @@ Normally,
 .Nm
 will only process entries which are written to the log after it
 starts.
+.It Fl f
+Prefer the
+.Va X-Forwarded-For
+HTTP header over 
+.Va client.ip
+in the log output.
 .It Fl I Ar regex
 Include log entries which match the specified regular expression.
 If neither

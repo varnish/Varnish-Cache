@@ -1,6 +1,6 @@
 # $Id$
 
-test "VCL: test syntax/semantic checks on backend decls."
+test "VCL: test syntax/semantic checks on backend decls. (vcc_backend.c)"
 
 # Missing backend
 varnish v1 -badvcl {
@@ -9,7 +9,7 @@ varnish v1 -badvcl {
 # Reference to non-existent backend
 varnish v1 -badvcl {
 	backend b1 {
-		.host = "localhost";
+		.host = "127.0.0.1";
 	}
 	sub vcl_recv {
 		set req.backend = b2;
@@ -52,7 +52,7 @@ varnish v1 -badvcl {
 # unknown field
 varnish v1 -badvcl {
 	backend b1 {
-		.host = "localhost";
+		.host = "127.0.0.1";
 		.foobar = 123;
 	}
 }
@@ -89,7 +89,7 @@ varnish v1 -badvcl {
 # Old backend syntax
 varnish v1 -badvcl {
 	backend b1 {
-		set host = "localhost";
+		set host = "127.0.0.1";
 	}
 }
 
@@ -111,3 +111,77 @@ varnish v1 -badvcl {
 varnish v1 -badvcl {
 	director r1 anarchy { .host = "127.0.0.1"; }
 }
+
+varnish v1 -badvcl {
+	/* too many IP numbers */
+	backend b1 { .host = "cnn.com"; }
+}
+
+varnish v1 -badvcl {
+	backend b1 { .host = "////"; }
+}
+
+varnish v1 -badvcl {
+	backend b1 { .host = "127.0.0.1"; .port = "////"; }
+}
+
+varnish v1 -badvcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.foobar = "foo";
+	}
+}
+
+varnish v1 -badvcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = {
+			.ice = "vanilla";
+		}
+	}
+}
+
+varnish v1 -badvcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = { .window = 8; }
+	}
+}
+
+varnish v1 -badvcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = { .threshold = 65; }
+	}
+}
+
+varnish v1 -vcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = { .threshold = 64; }
+	}
+}
+
+varnish v1 -badvcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = { .threshold = 32; .window = 65; }
+	}
+}
+
+
+varnish v1 -vcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = { .threshold = 32; .window = 64; }
+	}
+}
+
+
+varnish v1 -badvcl {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = { .threshold = 32; .window = 31; }
+	}
+}
+

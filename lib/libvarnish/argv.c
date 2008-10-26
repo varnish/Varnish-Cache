@@ -45,35 +45,37 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#include "config.h"
 #include "libvarnish.h"
 
 static int
-BackSlash(const char *s, int *res)
+BackSlash(const char *s, char *res)
 {
-	int i, r;
+	int r;
+	char c;
 	unsigned u;
 
 	assert(*s == '\\');
-	r = i = 0;
+	r = c = 0;
 	switch(s[1]) {
 	case 'n':
-		i = '\n';
+		c = '\n';
 		r = 2;
 		break;
 	case 'r':
-		i = '\r';
+		c = '\r';
 		r = 2;
 		break;
 	case 't':
-		i = '\t';
+		c = '\t';
 		r = 2;
 		break;
 	case '"':
-		i = '"';
+		c = '"';
 		r = 2;
 		break;
 	case '\\':
-		i = '\\';
+		c = '\\';
 		r = 2;
 		break;
 	case '0': case '1': case '2': case '3':
@@ -83,13 +85,14 @@ BackSlash(const char *s, int *res)
 				break;
 			if (s[r] - '0' > 7)
 				break;
-			i <<= 3;
-			i |= s[r] - '0';
+			c <<= 3;	/*lint !e701 signed left shift */
+			c |= s[r] - '0';
 		}
 		break;
 	case 'x':
 		if (1 == sscanf(s + 1, "x%02x", &u)) {
-			i = u;
+			assert(!(u & ~0xff));
+			c = u;	/*lint !e734 loss of precision */
 			r = 4;
 		}
 		break;
@@ -97,7 +100,7 @@ BackSlash(const char *s, int *res)
 		break;
 	}
 	if (res != NULL)
-		*res = i;
+		*res = c;
 	return (r);
 }
 
@@ -106,7 +109,7 @@ BackSlashDecode(const char *s, const char *e)
 {
 	const char *q;
 	char *p, *r;
-	int i, j;
+	int i;
 
 	p = calloc((e - s) + 1, 1);
 	if (p == NULL)
@@ -116,16 +119,19 @@ BackSlashDecode(const char *s, const char *e)
 			*r++ = *q++;
 			continue;
 		}
-		i = BackSlash(q, &j);
+		i = BackSlash(q, r);
 		q += i;
-		*r++ = j;
+		r++;
 	}
 	*r = '\0';
 	return (p);
 }
 
+static char err_invalid_backslash[] = "Invalid backslash sequence";
+static char err_missing_quote[] = "Missing '\"'";
+
 char **
-ParseArgv(const char *s, int comment)
+ParseArgv(const char *s, int flag)
 {
 	char **argv;
 	const char *p;
@@ -146,7 +152,7 @@ ParseArgv(const char *s, int comment)
 			s++;
 			continue;
 		}
-		if (comment && *s == '#')
+		if ((flag & ARGV_COMMENT) && *s == '#')
 			break;
 		if (*s == '"') {
 			p = ++s;
@@ -159,7 +165,7 @@ ParseArgv(const char *s, int comment)
 			if (*s == '\\') {
 				i = BackSlash(s, NULL);
 				if (i == 0) {
-					argv[0] = (void*)(uintptr_t)"Invalid backslash sequence";
+					argv[0] = err_invalid_backslash;
 					return (argv);
 				}
 				s += i;
@@ -168,13 +174,15 @@ ParseArgv(const char *s, int comment)
 			if (!quote) {
 				if (*s == '\0' || isspace(*s))
 					break;
+				if ((flag & ARGV_COMMA) && *s == ',')
+					break;
 				s++;
 				continue;
 			}
 			if (*s == '"')
 				break;
 			if (*s == '\0') {
-				argv[0] = (void*)(uintptr_t)"Missing '\"'";
+				argv[0] = err_missing_quote;
 				return (argv);
 			}
 			s++;

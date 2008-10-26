@@ -41,20 +41,47 @@
 #include "stevedore.h"
 
 /*--------------------------------------------------------------------
+ * Per thread storage for the session currently being processed by
+ * the thread.  This is used for panic messages.
+ */
+
+static pthread_key_t sp_key;
+
+void
+THR_SetSession(const struct sess *sp)
+{
+
+	AZ(pthread_setspecific(sp_key, sp));
+}
+
+const struct sess *
+THR_GetSession(void)
+{
+
+	return (pthread_getspecific(sp_key));
+}
+
+/*--------------------------------------------------------------------
  * Name threads if our pthreads implementation supports it.
  */
 
+static pthread_key_t name_key;
+
 void
-THR_Name(const char *name)
+THR_SetName(const char *name)
 {
+
+	AZ(pthread_setspecific(name_key, name));
 #ifdef HAVE_PTHREAD_SET_NAME_NP
 	pthread_set_name_np(pthread_self(), name);
-#else
-	/*
-	 * XXX: we could stash it somewhere else (TLS ?)
-	 */
-	(void)name;
 #endif
+}
+
+const char *
+THR_GetName(void)
+{
+
+	return (pthread_getspecific(name_key));
 }
 
 /*--------------------------------------------------------------------
@@ -69,8 +96,12 @@ child_main(void)
 	setbuf(stderr, NULL);
 	printf("Child starts\n");
 
-	THR_Name("cache-main");
+	AZ(pthread_key_create(&sp_key, NULL));
+	AZ(pthread_key_create(&name_key, NULL));
 
+	THR_SetName("cache-main");
+
+	PAN_Init();
 	CLI_Init();
 	Fetch_Init();
 
@@ -81,6 +112,7 @@ child_main(void)
 	SES_Init();
 
 	VBE_Init();
+	VBP_Init();
 	VSL_Init();
 	WRK_Init();
 
@@ -90,6 +122,7 @@ child_main(void)
 
 	VCA_Init();
 
+	SMS_Init();
 	STV_open();
 
 	VSL_stats->start_time = (time_t)TIM_real();

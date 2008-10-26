@@ -53,7 +53,8 @@ struct cli_proto {
 };
 
 /* The implementation must provide these functions */
-void cli_out(const struct cli *cli, const char *fmt, ...);
+void cli_out(struct cli *cli, const char *fmt, ...);
+void cli_quote(struct cli *cli, const char *str);
 void cli_param(struct cli *cli);
 void cli_result(struct cli *cli, unsigned r);
 

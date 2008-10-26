@@ -43,45 +43,101 @@
 
 #include "shmlog.h"
 #include "cache.h"
+#include "cache_backend.h"
 #include "vrt.h"
 
 /*--------------------------------------------------------------------*/
 
 struct vdi_random_host {
 	struct backend		*backend;
-	unsigned		weight;
+	double			weight;
 };
 
 struct vdi_random {
 	unsigned		magic;
 #define VDI_RANDOM_MAGIC	0x3771ae23
 	struct director		dir;
-	struct backend		*backend;
+
+	unsigned		retries;
 	struct vdi_random_host	*hosts;
 	unsigned		nhosts;
 };
 
-
-static struct backend *
-vdi_random_choose(struct sess *sp)
+static struct vbe_conn *
+vdi_random_getfd(struct sess *sp)
 {
-	int i;
+	int i, j, k;
 	struct vdi_random *vs;
-	uint32_t r;
-	struct vdi_random_host *vh;
+	double r, s1, s2;
+	struct vbe_conn *vbe;
 
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
 	CAST_OBJ_NOTNULL(vs, sp->director->priv, VDI_RANDOM_MAGIC);
-	r = random();
-	r &= 0x7fffffff;
 
-	for (i = 0, vh = vs->hosts; i < vs->nhosts; vh++) 
-		if (r < vh->weight)
-			return (vh->backend);
-	assert(0 == __LINE__);
+	k = 0;
+	for (k = 0; k < vs->retries; ) {
+
+		r = random() / 2147483648.0;	/* 2^31 */
+		assert(r >= 0.0 && r < 1.0);
+
+		s1 = 0.0;
+		j = 0;
+		for (i = 0; i < vs->nhosts; i++) {
+			if (!vs->hosts[i].backend->healthy)
+				continue;
+			s1 += vs->hosts[i].weight;
+			j++;
+		}	
+
+		if (j == 0)		/* No healthy hosts */
+			return (NULL);
+
+		r *= s1;
+
+		s2 = 0;
+		for (i = 0; i < vs->nhosts; i++)  {
+			if (!vs->hosts[i].backend->healthy)
+				continue;
+			s2 += vs->hosts[i].weight;
+			if (r < s2)
+				break;
+		}
+
+		if (s2 != s1) {
+			/*
+			 * Health bit changed in an unusable way while we
+			 * worked the problem.  Usable changes are any that
+			 * result in the same sum we prepared for.
+			 */
+			continue;
+		}
+		vbe = VBE_GetVbe(sp, vs->hosts[i].backend);
+		if (vbe != NULL)
+			return (vbe);
+		k++;
+	} 
 	return (NULL);
 }
 
+static unsigned
+vdi_random_healthy(const struct sess *sp)
+{
+	struct vdi_random *vs;
+	int i;
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+	CAST_OBJ_NOTNULL(vs, sp->director->priv, VDI_RANDOM_MAGIC);
+
+	for (i = 0; i < vs->nhosts; i++) {
+		if (vs->hosts[i].backend->healthy)
+			return 1;
+	}
+	return 0;
+}
+
+/*lint -e{818} not const-able */
 static void
 vdi_random_fini(struct director *d)
 {
@@ -96,6 +152,7 @@ vdi_random_fini(struct director *d)
 	for (i = 0; i < vs->nhosts; i++, vh++)
 		VBE_DropRef(vh->backend);
 	free(vs->hosts);
+	free(vs->dir.vcl_name);
 	vs->dir.magic = 0;
 	FREE_OBJ(vs);
 }
@@ -106,8 +163,6 @@ VRT_init_dir_random(struct cli *cli, struct director **bp, const struct vrt_dir_
 	struct vdi_random *vs;
 	const struct vrt_dir_random_entry *te;
 	struct vdi_random_host *vh;
-	double s, a, b;
-	unsigned v;
 	int i;
 	
 	(void)cli;
@@ -120,32 +175,21 @@ VRT_init_dir_random(struct cli *cli, struct director **bp, const struct vrt_dir_
 	vs->dir.magic = DIRECTOR_MAGIC;
 	vs->dir.priv = vs;
 	vs->dir.name = "random";
-	vs->dir.choose = vdi_random_choose;
+	REPLACE(vs->dir.vcl_name, t->name);
+	vs->dir.getfd = vdi_random_getfd;
 	vs->dir.fini = vdi_random_fini;
+	vs->dir.healthy = vdi_random_healthy;
 
-	s = 0;
+	vs->retries = t->retries;
+	if (vs->retries == 0)
+		vs->retries = t->nmember;
 	vh = vs->hosts;
 	te = t->members;
 	for (i = 0; i < t->nmember; i++, vh++, te++) {
 		assert(te->weight > 0.0);
-		s += te->weight;
+		vh->weight = te->weight;
 		vh->backend = VBE_AddBackend(cli, te->host);
 	}
 	vs->nhosts = t->nmember;
-
-	/* Normalize weights */
-	i = 0;
-	a = 0.0;
-	assert(s > 0.0);
-	for (te = t->members; i < t->nmember; te++, i++) {
-		/* First normalize the specified weight in FP */
-		b = te->weight / s;	/*lint !e795 not zero division */
-		/* Then accumulate to eliminate rounding errors */
-		a += b;
-		/* Convert to unsigned in random() range */
-		v = (unsigned)((1U<<31) * a);
-		vs->hosts[i].weight = v;
-	}
-	assert(vs->hosts[t->nmember - 1].weight > 0x7fffffff);
 	*bp = &vs->dir;
 }

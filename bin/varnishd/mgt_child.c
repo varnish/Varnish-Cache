@@ -45,8 +45,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+#include "config.h"
 #ifndef HAVE_SETPROCTITLE
 #include "compat/setproctitle.h"
+#endif
+
+#ifdef __linux__
+#include <sys/prctl.h>
 #endif
 
 #include "heritage.h"
@@ -113,7 +118,7 @@ mgt_child_inherit(int fd, const char *what)
 {
 
 	assert(fd >= 0);
-	if(fd_map == NULL)
+	if (fd_map == NULL)
 		fd_map = vbit_init(128);
 	AN(fd_map);
 	if (what != NULL)
@@ -168,7 +173,10 @@ child_poker(const struct vev *e, int what)
 	REPORT(LOG_ERR,
 	    "Child (%d) not responding to ping, killing it.",
 	    child_pid);
-	(void)kill(child_pid, SIGKILL);
+	if (params->diag_bitmap & 0x1000)
+		(void)kill(child_pid, SIGKILL);
+	else
+		(void)kill(child_pid, SIGQUIT);
 	return (0);
 }
 
@@ -223,7 +231,7 @@ close_sockets(void)
 /*--------------------------------------------------------------------*/
 
 static void
-start_child(void)
+start_child(struct cli *cli)
 {
 	pid_t pid;
 	unsigned u;
@@ -235,10 +243,15 @@ start_child(void)
 		return;
 
 	if (open_sockets() != 0) {
+		child_state = CH_STOPPED;
+		if (cli != NULL) {
+			cli_result(cli, CLIS_CANT);
+			cli_out(cli, "Could not open sockets");
+			return;
+		}
 		REPORT0(LOG_ERR,
 		    "Child start failed: could not open sockets");
-		child_state = CH_STOPPED;
-		return;	/* XXX ?? */
+		return;
 	}
 
 	child_state = CH_STARTING;
@@ -273,6 +286,15 @@ start_child(void)
 			XXXAZ(setgid(params->gid));
 			XXXAZ(setuid(params->uid));
 		}
+
+		/* On Linux >= 2.4, you need to set the dumpable flag
+		   to get core dumps after you have done a setuid. */
+#ifdef __linux__
+		if (prctl(PR_SET_DUMPABLE, 1) != 0) {
+		  printf("Could not set dumpable bit.  Core dumps turned "
+			 "off\n");
+		}
+#endif
 
 		/* Redirect stdin/out/err */
 		AZ(close(STDIN_FILENO));
@@ -375,6 +397,20 @@ mgt_stop_child(void)
 
 /*--------------------------------------------------------------------*/
 
+static void
+mgt_report_panic(pid_t r)
+{
+	int l;
+	char *p;
+
+	VSL_Panic(&l, &p);
+	if (*p == '\0')
+		return;
+	REPORT(LOG_ERR, "Child (%d) Panic message: %s", r, p);
+}
+
+/*--------------------------------------------------------------------*/
+
 static int
 mgt_sigchld(const struct vev *e, int what)
 {
@@ -411,6 +447,8 @@ mgt_sigchld(const struct vev *e, int what)
 	REPORT(LOG_INFO, "%s", vsb_data(vsb));
 	vsb_delete(vsb);
 
+	mgt_report_panic(r);
+
 	child_pid = -1;
 
 	if (child_state == CH_RUNNING) {
@@ -432,7 +470,7 @@ mgt_sigchld(const struct vev *e, int what)
 	REPORT0(LOG_DEBUG, "Child cleanup complete");
 
 	if (child_state == CH_DIED && params->auto_restart)
-		start_child();
+		start_child(NULL);
 	else if (child_state == CH_DIED) {
 		child_state = CH_STOPPED;
 	} else if (child_state == CH_STOPPING)
@@ -512,9 +550,11 @@ mgt_run(int dflag, const char *T_arg)
 
 	if (!dflag && !mgt_has_vcl()) 
 		REPORT0(LOG_ERR, "No VCL loaded yet");
-	else if (!dflag)
-		start_child();
-	else
+	else if (!dflag) {
+		start_child(NULL);
+		if (child_state == CH_STOPPED)
+			exit(2);
+	} else
 		fprintf(stderr,
 		    "Debugging mode, enter \"start\" to start child\n");
 
@@ -528,6 +568,7 @@ mgt_run(int dflag, const char *T_arg)
 
 /*--------------------------------------------------------------------*/
 
+/*lint -e{818} priv could be const */
 void
 mcf_server_startstop(struct cli *cli, const char * const *av, void *priv)
 {
@@ -536,9 +577,9 @@ mcf_server_startstop(struct cli *cli, const char * const *av, void *priv)
 	if (priv != NULL && child_state == CH_RUNNING)
 		mgt_stop_child();
 	else if (priv == NULL && child_state == CH_STOPPED) {
-		if (mgt_has_vcl())
-			start_child();
-		else {
+		if (mgt_has_vcl()) {
+			start_child(cli);
+		} else {
 			cli_result(cli, CLIS_CANT);
 			cli_out(cli, "No VCL available");
 		}

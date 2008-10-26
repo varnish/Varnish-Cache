@@ -40,6 +40,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <limits.h>
+#include <unistd.h>
 
 #include "vqueue.h"
 
@@ -76,6 +77,7 @@ enum {
 struct cli;
 struct vsb;
 struct sess;
+struct director;
 struct object;
 struct objhead;
 struct objexp;
@@ -135,6 +137,7 @@ struct http {
 	unsigned char		conds;		/* If-* headers present */
 	enum httpwhence 	logtag;
 	int			status;
+	double			protover;
 
 	txt 			hd[HTTP_HDR_MAX];
 	unsigned char		hdf[HTTP_HDR_MAX];
@@ -173,7 +176,7 @@ struct worker {
 	struct objhead		*nobjhead;
 	struct object		*nobj;
 
-	double			used;
+	double			lastused;
 
 	pthread_cond_t		cond;
 
@@ -258,7 +261,6 @@ struct object {
 
 	unsigned		response;
 
-	unsigned		valid;
 	unsigned		cacheable;
 
 	unsigned		busy;
@@ -284,6 +286,8 @@ struct object {
 	/* Prefetch */
 	struct object		*parent;
 	struct object		*child;
+
+	int			hits;
 };
 
 struct objhead {
@@ -354,7 +358,7 @@ struct sess {
 	VTAILQ_ENTRY(sess)	list;
 
 	struct director		*director;
-	struct backend		*backend;
+	struct vbe_conn		*vbe;
 	struct bereq		*bereq;
 	struct object		*obj;
 	struct objhead		*objhead;
@@ -373,22 +377,6 @@ struct sess {
 	const char		**hashptr;
 };
 
-/* -------------------------------------------------------------------
- * A director is a piece of code which selects one of possibly multiple
- * backends to use.
- */
-
-typedef struct backend *vdi_choose_f(struct sess *sp);
-typedef void vdi_fini_f(struct director *d);
-
-struct director {
-	unsigned		magic;
-#define DIRECTOR_MAGIC		0x3336351d
-	const char		*name;
-	vdi_choose_f		*choose;
-	vdi_fini_f		*fini;
-	void			*priv;
-};
 
 /* -------------------------------------------------------------------*/
 
@@ -413,20 +401,20 @@ extern int vca_pipes[2];
 
 /* cache_backend.c */
 
-struct vbe_conn *VBE_GetFd(const struct sess *sp);
-void VBE_ClosedFd(struct worker *w, struct vbe_conn *vc);
-void VBE_RecycleFd(struct worker *w, struct vbe_conn *vc);
+void VBE_GetFd(struct sess *sp);
+void VBE_ClosedFd(struct sess *sp);
+void VBE_RecycleFd(struct sess *sp);
 struct bereq * VBE_new_bereq(void);
 void VBE_free_bereq(struct bereq *bereq);
-void VBE_UpdateHealth(const struct sess *sp, const struct vbe_conn *, int);
 void VBE_AddHostHeader(const struct sess *sp);
 void VBE_Poll(void);
 
 /* cache_backend_cfg.c */
 void VBE_Init(void);
-void VBE_DropRef(struct backend *);
-void VBE_SelectBackend(struct sess *sp);
 struct backend *VBE_AddBackend(struct cli *cli, const struct vrt_backend *vb);
+
+/* cache_backend_poll.c */
+void VBP_Init(void);
 
 /* cache_ban.c */
 int BAN_Add(struct cli *cli, const char *regexp, int hash);
@@ -448,7 +436,7 @@ extern pthread_t cli_thread;
 #define ASSERT_CLI() do {assert(pthread_self() == cli_thread);} while (0)
 
 /* cache_expiry.c */
-void EXP_Insert(struct object *o, double now);
+void EXP_Insert(struct object *o);
 void EXP_Init(void);
 void EXP_Rearm(const struct object *o);
 void EXP_Touch(const struct object *o, double now);
@@ -461,10 +449,11 @@ void Fetch_Init(void);
 
 /* cache_hash.c */
 void HSH_Prealloc(struct sess *sp);
+void HSH_Freestore(struct object *o);
 int HSH_Compare(const struct sess *sp, const struct objhead *o);
 void HSH_Copy(const struct sess *sp, const struct objhead *o);
 struct object *HSH_Lookup(struct sess *sp);
-void HSH_Unbusy(struct sess *sp);
+void HSH_Unbusy(const struct sess *sp);
 void HSH_Ref(struct object *o);
 void HSH_Deref(struct object *o);
 double HSH_Grace(double g);
@@ -485,6 +474,7 @@ void http_PutResponse(struct worker *w, int fd, struct http *to, const char *res
 void http_PrintfHeader(struct worker *w, int fd, struct http *to, const char *fmt, ...);
 void http_SetHeader(struct worker *w, int fd, struct http *to, const char *hdr);
 void http_SetH(struct http *to, unsigned n, const char *fm);
+void http_ForceGet(struct http *to);
 void http_Setup(struct http *ht, struct ws *ws);
 int http_GetHdr(const struct http *hp, const char *hdr, char **ptr);
 int http_GetHdrField(const struct http *hp, const char *hdr, const char *field, char **ptr);
@@ -510,7 +500,13 @@ int HTC_Complete(struct http_conn *htc);
 #undef HTTPH
 
 /* cache_main.c */
-void THR_Name(const char *name);
+void THR_SetName(const char *name);
+const char* THR_GetName(void);
+void THR_SetSession(const struct sess *sp);
+const struct sess * THR_GetSession(void);
+
+/* cache_panic.c */
+void PAN_Init(void);
 
 /* cache_pipe.c */
 void PipeSession(struct sess *sp);
@@ -535,7 +531,6 @@ void SES_RefSrcAddr(struct sess *sp);
 void SES_Charge(struct sess *sp);
 
 /* cache_shmlog.c */
-
 void VSL_Init(void);
 #ifdef SHMLOGHEAD_MAGIC
 void VSL(enum shmlogtag tag, int id, const char *fmt, ...);
@@ -565,9 +560,6 @@ void WSL_Flush(struct worker *w, int overflow);
 /* cache_response.c */
 void RES_BuildHttp(struct sess *sp);
 void RES_WriteObj(struct sess *sp);
-
-/* cache_synthetic.c */
-void SYN_ErrorPage(struct sess *sp, int status, const char *reason);
 
 /* cache_vary.c */
 void VRY_Create(const struct sess *sp);
@@ -602,10 +594,14 @@ void WS_Reset(struct ws *ws, char *p);
 char *WS_Alloc(struct ws *ws, unsigned bytes);
 char *WS_Dup(struct ws *ws, const char *);
 char *WS_Snapshot(struct ws *ws);
-unsigned WS_Free(struct ws *ws);
+unsigned WS_Free(const struct ws *ws);
 
 /* rfc2616.c */
 int RFC2616_cache_policy(const struct sess *sp, const struct http *hp);
+
+/* storage_synth.c */
+struct vsb *SMS_Makesynth(struct object *obj);
+void SMS_Finish(struct object *obj);
 
 #define MTX			pthread_mutex_t
 #define MTX_INIT(foo)		AZ(pthread_mutex_init(foo, NULL))
@@ -705,21 +701,3 @@ Tadd(txt *t, const char *p, int l)
 		t->b = t->e;
 	}
 }
-
-#ifdef WITHOUT_ASSERTS
-#define spassert(cond) ((void)(cond))
-#define SPAZ(val) ((void)(val) == 0)
-#define SPAN(val) ((void)(val) != 0)
-#else
-void panic(const char *, int, const char *,
-    const struct sess *, const char *, ...);
-#define spassert(cond)						\
-	do {							\
-		int ok = !!(cond);				\
-		if (!ok)					\
-			panic(__FILE__, __LINE__, __func__, sp,	\
-			    "assertion failed: %s\n", #cond);	\
-	} while (0)
-#define SPAZ(val) spassert((val) == 0)
-#define SPAN(val) spassert((val) != 0)
-#endif

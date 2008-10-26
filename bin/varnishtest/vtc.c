@@ -32,7 +32,6 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <err.h>
 
 #include "libvarnish.h"
 #include "vsb.h"
@@ -42,7 +41,8 @@
 #define		MAX_FILESIZE		(1024 * 1024)
 #define		MAX_TOKENS		100
 
-static struct vtclog	*vl;
+const char	*vtc_file;
+char		*vtc_desc;
 
 /**********************************************************************
  * Read a file into memory
@@ -57,13 +57,17 @@ read_file(const char *fn)
 	int fd;
 
 	fd = open(fn, O_RDONLY);
-	if (fd < 0)
-		err(1, "Cannot open %s", fn);
+	if (fd < 0) {
+		fprintf(stderr, "Cannot open %s: %s", fn, strerror(errno));
+		exit (1);
+	}
 	buf = malloc(sz);
 	assert(buf != NULL);
 	s = read(fd, buf, sz - 1);
-	if (s <= 0) 
-		err(1, "Cannot read %s", fn);
+	if (s <= 0) {
+		fprintf(stderr, "Cannot read %s: %s", fn, strerror(errno));
+		exit (1);
+	}
 	AZ(close (fd));
 	assert(s < sz);		/* XXX: increase MAX_FILESIZE */
 	buf[s] = '\0';
@@ -77,7 +81,7 @@ read_file(const char *fn)
  */
 
 void
-parse_string(char *buf, const struct cmds *cmd, void *priv)
+parse_string(char *buf, const struct cmds *cmd, void *priv, struct vtclog *vl)
 {
 	char *token_s[MAX_TOKENS], *token_e[MAX_TOKENS];
 	char *p, *q;
@@ -134,7 +138,7 @@ parse_string(char *buf, const struct cmds *cmd, void *priv)
 						p++;
 					} else {
 						if (*p == '\n')
-							fprintf(stderr, "Unterminated quoted string\n");
+							fprintf(stderr, "Unterminated quoted string in line:\n%s", p);
 						assert(*p != '\n');
 						*q++ = *p;
 					}
@@ -175,11 +179,12 @@ parse_string(char *buf, const struct cmds *cmd, void *priv)
 			for (tn = 0; token_s[tn] != NULL; tn++)
 				fprintf(stderr, "%s ", token_s[tn]);
 			fprintf(stderr, "\n");
-			errx(1, "Unknown command: \"%s\"", token_s[0]);
+			fprintf(stderr, "Unknown command: \"%s\"", token_s[0]);
+			exit (1);
 		}
 	
 		assert(cp->cmd != NULL);
-		cp->cmd(token_s, priv, cmd);
+		cp->cmd(token_s, priv, cmd, vl);
 	}
 }
 
@@ -192,7 +197,7 @@ reset_cmds(const struct cmds *cmd)
 {
 
 	for (; cmd->name != NULL; cmd++)
-		cmd->cmd(NULL, NULL, NULL);
+		cmd->cmd(NULL, NULL, NULL, NULL);
 }
 
 /**********************************************************************
@@ -205,6 +210,7 @@ cmd_test(CMD_ARGS)
 
 	(void)priv;
 	(void)cmd;
+	(void)vl;
 
 	if (av == NULL)
 		return;
@@ -212,6 +218,7 @@ cmd_test(CMD_ARGS)
 
 	printf("#    TEST %s\n", av[1]);
 	AZ(av[2]);
+	vtc_desc = strdup(av[1]);
 }
 
 /**********************************************************************
@@ -249,6 +256,7 @@ cmd_delay(CMD_ARGS)
 	AN(av[1]);
 	AZ(av[2]);
 	f = strtod(av[1], NULL);
+	vtc_log(vl, 3, "delaying %g second(s)", f);
 	if (f > 100.) {
 		(void)sleep((int)f);
 	} else {
@@ -265,6 +273,7 @@ cmd_dump(CMD_ARGS)
 {
 
 	(void)cmd;
+	(void)vl;
 	if (av == NULL)
 		return;
 	printf("cmd_dump(%p)\n", priv);
@@ -288,16 +297,31 @@ static struct cmds cmds[] = {
 };
 
 static void
-exec_file(const char *fn)
+exec_file(const char *fn, struct vtclog *vl)
 {
 	char *buf;
 
-	printf("#    TEST %s starting\n", fn);
+	vtc_file = fn;
+	vtc_desc = NULL;
+	vtc_log(vl, 1, "TEST %s starting", fn);
 	buf = read_file(fn);
-	parse_string(buf, cmds, NULL);
-	printf("#    RESETTING after %s\n", fn);
+	parse_string(buf, cmds, NULL, vl);
+	vtc_log(vl, 1, "RESETTING after %s", fn);
 	reset_cmds(cmds);
-	printf("#    TEST %s completed\n", fn);
+	vtc_log(vl, 1, "TEST %s completed", fn);
+	vtc_file = NULL;
+	free(vtc_desc);
+}
+
+/**********************************************************************
+ * Print usage
+ */
+
+static void
+usage(void)
+{
+	fprintf(stderr, "usage: varnishtest [-n iter] [-qv] file ...\n");
+	exit(1);
 }
 
 /**********************************************************************
@@ -307,31 +331,40 @@ exec_file(const char *fn)
 int
 main(int argc, char * const *argv)
 {
-	int ch;
+	int ch, i, ntest = 1;
 	FILE *fok;
+	static struct vtclog	*vl;
 
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
-	vl = vtc_logopen("");
+	vl = vtc_logopen("top");
 	AN(vl);
-	while ((ch = getopt(argc, argv, "qv")) != -1) {
+	while ((ch = getopt(argc, argv, "n:qv")) != -1) {
 		switch (ch) {
+		case 'n':
+			ntest = strtoul(optarg, NULL, 0);
+			break;
 		case 'q':
 			vtc_verbosity--;
 			break;
 		case 'v':
 			vtc_verbosity++;
 			break;
-		case '?':
 		default:
-			errx(1, "Usage");
+			usage();
 		}
 	}
 	argc -= optind;
 	argv += optind;
+
+	if (argc == 0)
+		usage();
+
 	init_sema();
-	for (ch = 0; ch < argc; ch++)
-		exec_file(argv[ch]);
+	for (i = 0; i < ntest; i++) {
+		for (ch = 0; ch < argc; ch++)
+			exec_file(argv[ch], vl);
+	}
 	fok = fopen("_.ok", "w");
 	if (fok != NULL)
 		fclose(fok);
