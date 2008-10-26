@@ -93,7 +93,7 @@ varnish_ask_cli(const struct varnish *v, const char *cmd, char **repl)
 	assert(i == strlen(cmd));
 	i = write(v->cli_fd, "\n", 1);
 	assert(i == 1);
-	i = cli_readres(v->cli_fd, &retval, &r, 60.0);
+	i = cli_readres(v->cli_fd, &retval, &r, 10.0);
 	assert(i == 0);
 	vtc_dump(v->vl, 4, "CLI RX", r);
 	vtc_log(v->vl, 3, "CLI STATUS %u", retval);
