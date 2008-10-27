@@ -124,3 +124,6 @@ MAC_STAT(n_purge_add,		uint64_t, 'a', "N new purges added")
 MAC_STAT(n_purge_retire,	uint64_t, 'a', "N old purges deleted")
 MAC_STAT(n_purge_obj_test,	uint64_t, 'a', "N objects tested")
 MAC_STAT(n_purge_re_test,	uint64_t, 'a', "N regexps tested against")
+
+MAC_STAT(n_nuke_hit,            uint64_t, 'a', "N object headers marked as nuked")
+MAC_STAT(n_nuke_miss,           uint64_t, 'a', "N object headers not in cache")

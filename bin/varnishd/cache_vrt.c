@@ -723,6 +723,54 @@ VRT_purge(const char *regexp, int hash)
 		(void)BAN_Add(NULL, regexp, hash);
 }
 
+
+/*--------------------------------------------------------------------*/
+
+int
+VRT_nuke(struct sess *sp, const char *str, ...)
+{
+        int retval;
+        va_list ap;
+        struct object *obj      = sp->obj;
+        struct objhead *objhead = sp->objhead;
+        struct objhead *oh;
+        const char *vp;
+	char *p;
+	uintptr_t u;
+
+        sp->obj = NULL;
+        sp->objhead = NULL;
+
+        /* code lifted from cnt_lookup -- should probably be a common function */
+        /* Allocate the pointers we need, align properly. */
+        sp->lhashptr = 1;       /* space for NUL */
+        sp->ihashptr = 0;
+        sp->nhashptr = sp->vcl->nhashcount * 2;
+        p = WS_Alloc(sp->http->ws,
+            sizeof(const char *) * (sp->nhashptr + 1));
+        XXXAN(p);
+        /* Align pointer properly (?) */
+        u = (uintptr_t)p;
+        u &= sizeof(const char *) - 1;
+        if (u)
+                p += sizeof(const char *) - u;
+        sp->hashptr = (void*)p;
+
+        VRT_l_req_hash(sp, str);
+
+        va_start(ap, str);
+        vp = va_arg(ap, const char *);
+        while (vp != vrt_magic_string_end) {
+                VRT_l_req_hash(sp, vp);
+                vp = va_arg(ap, const char *);
+        }
+
+        retval = HSH_Nuke(sp);
+        sp->obj = obj;
+        sp->objhead = objhead;
+        return retval;
+}
+
 /*--------------------------------------------------------------------
  * Simple stuff
  */

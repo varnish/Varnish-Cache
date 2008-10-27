@@ -92,6 +92,7 @@ SLTM(HitPass)
 SLTM(ExpBan)
 SLTM(ExpPick)
 SLTM(ExpKill)
+SLTM(ExpNuked)
 SLTM(WorkThread)
 SLTM(Terminate)
 

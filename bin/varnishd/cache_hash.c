@@ -184,6 +184,21 @@ HSH_Copy(const struct sess *sp, const struct objhead *obj)
 	assert(b <= obj->hash + obj->hashlen);
 }
 
+int
+HSH_Nuke(struct sess *sp)
+{
+	struct objhead *oh = hash->lookup(sp, NULL);
+	if (oh) {
+		VSL_stats->n_nuke_hit++;
+		oh->hash[0] = "\n";
+		hash->deref(oh);
+		return 1;
+	} else {
+		VSL_stats->n_nuke_miss++;
+		return 0;
+	}
+}
+
 struct object *
 HSH_Lookup(struct sess *sp)
 {
@@ -223,7 +238,7 @@ HSH_Lookup(struct sess *sp)
 		}
 		if (!o->cacheable)
 			continue;
-		if (o->ttl == 0) 
+		if (o->ttl == 0)
 			continue;
 		if (BAN_CheckObject(o, h->hd[HTTP_HDR_URL].b, oh->hash)) {
 			o->ttl = 0;

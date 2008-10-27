@@ -453,6 +453,7 @@ void HSH_Freestore(struct object *o);
 int HSH_Compare(const struct sess *sp, const struct objhead *o);
 void HSH_Copy(const struct sess *sp, const struct objhead *o);
 struct object *HSH_Lookup(struct sess *sp);
+int HSH_Nuke(struct sess *sp);
 void HSH_Unbusy(const struct sess *sp);
 void HSH_Ref(struct object *o);
 void HSH_Deref(struct object *o);

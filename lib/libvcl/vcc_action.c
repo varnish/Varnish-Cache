@@ -379,6 +379,39 @@ parse_purge_hash(struct tokenlist *tl)
 }
 
 static void
+parse_nuke(struct tokenlist *tl)
+{
+
+	vcc_NextToken(tl);
+
+	Fb(tl, 1, "VRT_nuke(sp, ");
+
+	vcc_NextToken(tl);
+
+	if (!vcc_StringVal(tl)) {
+		vcc_ExpectedStringval(tl);
+		return;
+	}
+
+
+	while (tl->t->tok == ',') {
+		vcc_NextToken(tl);
+		Fb(tl, 0, ", ");
+		if (!vcc_StringVal(tl)) {
+			vcc_ExpectedStringval(tl);
+			return;
+		}
+	}
+
+	Expect(tl, ')');
+	vcc_NextToken(tl);
+	Fb(tl, 0, ", vrt_magic_string_end);\n");
+}
+
+
+
+
+static void
 parse_esi(struct tokenlist *tl)
 {
 
@@ -440,6 +473,7 @@ static struct action_table {
 	/* Keep list sorted from here */
 	{ "call", 		parse_call },
 	{ "esi",		parse_esi },
+	{ "nuke",		parse_nuke },
 	{ "panic",		parse_panic },
 	{ "purge_hash",		parse_purge_hash },
 	{ "purge_url",		parse_purge_url },

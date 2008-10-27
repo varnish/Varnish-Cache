@@ -141,6 +141,7 @@ const char *VRT_regsub(const struct sess *sp, int all, const char *, void *, con
 
 void VRT_panic(struct sess *sp,  const char *, ...);
 void VRT_purge(const char *, int hash);
+int VRT_nuke(struct sess *sp,const char *, ...);
 
 void VRT_count(const struct sess *, unsigned);
 int VRT_rewrite(const char *, const char *);
