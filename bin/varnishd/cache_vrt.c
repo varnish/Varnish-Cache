@@ -603,6 +603,48 @@ VRT_r_req_xid(struct sess *sp)
 }
 
 /*--------------------------------------------------------------------*/
+void
+VRT_l_client_gzip(struct sess *sp, unsigned enabled) {
+	if (enabled > 0) 
+		sp->compression = HTTP_COMPRESSION_GZIP;
+	else
+		sp->compression = HTTP_COMPRESSION_NONE;
+}
+
+unsigned
+VRT_r_client_gzip(struct sess *sp) {
+	if (sp->compression == HTTP_COMPRESSION_GZIP)
+		return 1;
+	else
+		return 0;
+}
+
+void
+VRT_l_client_deflate(struct sess *sp, unsigned enabled) {
+	if (enabled > 0) 
+		sp->compression = HTTP_COMPRESSION_DEFLATE;
+	else
+		sp->compression = HTTP_COMPRESSION_NONE;
+}
+
+unsigned
+VRT_r_client_deflate(struct sess *sp) {
+	if (sp->compression == HTTP_COMPRESSION_DEFLATE)
+		return 1;
+	else
+		return 0;
+}
+
+const char*
+VRT_r_client_compression(const struct sess *sp) {
+	if (sp->compression == HTTP_COMPRESSION_NONE)
+		return "";
+	else if (sp->compression == HTTP_COMPRESSION_GZIP)
+		return "gzip";
+	else
+		return "deflate";
+		
+}
 
 struct sockaddr *
 VRT_r_client_ip(const struct sess *sp)

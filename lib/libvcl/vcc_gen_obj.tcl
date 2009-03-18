@@ -46,6 +46,21 @@ set spobj {
 	{ }
 	"const struct sess *"
     }
+    { client.gzip
+	RW BOOL
+	{recv pipe pass hash miss hit fetch deliver                error }
+	"struct sess *"
+    }
+    { client.deflate
+	RW BOOL
+	{recv pipe pass hash miss hit fetch deliver                error }
+	"struct sess *"
+    }
+    { client.compression
+	RO STRING
+	{recv pipe pass hash miss hit fetch deliver                error }
+	"const struct sess *"
+    }
     { server.ip
 	RO IP
 	{recv pipe pass hash miss hit fetch deliver                error }

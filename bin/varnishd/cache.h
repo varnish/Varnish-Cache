@@ -106,6 +106,13 @@ typedef struct {
 	char			*e;
 } txt;
 
+
+enum compression {
+	HTTP_COMPRESSION_NONE,
+	HTTP_COMPRESSION_GZIP,
+	HTTP_COMPRESSION_DEFLATE
+};
+
 /*--------------------------------------------------------------------*/
 
 enum step {
@@ -414,6 +421,8 @@ struct sess {
 	unsigned		ihashptr;
 	unsigned		lhashptr;
 	const char		**hashptr;
+
+	enum compression        compression;
 };
 
 

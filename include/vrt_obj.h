@@ -7,6 +7,11 @@
  */
 
 struct sockaddr * VRT_r_client_ip(const struct sess *);
+unsigned VRT_r_client_gzip(struct sess *);
+void VRT_l_client_gzip(struct sess *, unsigned);
+unsigned VRT_r_client_deflate(struct sess *);
+void VRT_l_client_deflate(struct sess *, unsigned);
+const char * VRT_r_client_compression(const struct sess *);
 struct sockaddr * VRT_r_server_ip(struct sess *);
 const char * VRT_r_server_hostname(struct sess *);
 const char * VRT_r_server_identity(struct sess *);

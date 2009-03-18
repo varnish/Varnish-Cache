@@ -159,10 +159,10 @@ vcl_output_lang_h(struct vsb *sb)
 
 	/* ../../include/vcl.h */
 
-	vsb_cat(sb, "/*\n * $Id: vcc_gen_fixed_token.tcl 3781 2009-02-17 10");
-	vsb_cat(sb, ":29:20Z phk $\n *\n * NB:  This file is machine genera");
-	vsb_cat(sb, "ted, DO NOT EDIT!\n *\n * Edit and run vcc_gen_fixed_t");
-	vsb_cat(sb, "oken.tcl instead\n */\n\nstruct sess;\n");
+	vsb_cat(sb, "/*\n * $Id: vcc_gen_fixed_token.tcl 3948 2009-03-18 11");
+	vsb_cat(sb, ":25:43Z kristian $\n *\n * NB:  This file is machine g");
+	vsb_cat(sb, "enerated, DO NOT EDIT!\n *\n * Edit and run vcc_gen_fi");
+	vsb_cat(sb, "xed_token.tcl instead\n */\n\nstruct sess;\n");
 	vsb_cat(sb, "struct cli;\n\ntypedef void vcl_init_f(struct cli *);\n");
 	vsb_cat(sb, "typedef void vcl_fini_f(struct cli *);\n");
 	vsb_cat(sb, "typedef int vcl_func_f(struct sess *sp);\n");
@@ -326,11 +326,14 @@ vcl_output_lang_h(struct vsb *sb)
 	vsb_cat(sb, " *\n * NB:  This file is machine generated, DO NOT EDI");
 	vsb_cat(sb, "T!\n *\n * Edit vcc_gen_obj.tcl instead\n");
 	vsb_cat(sb, " */\n\nstruct sockaddr * VRT_r_client_ip(const struct ");
-	vsb_cat(sb, "sess *);\nstruct sockaddr * VRT_r_server_ip(struct ses");
-	vsb_cat(sb, "s *);\n<<<<<<< .mine\nconst char * VRT_r_server_hostna");
-	vsb_cat(sb, "me(struct sess *);\nconst char * VRT_r_server_identity");
-	vsb_cat(sb, "(struct sess *);\n=======\nconst char * VRT_r_server_h");
-	vsb_cat(sb, "ostname(struct sess *);\n>>>>>>> .r3947\n");
+	vsb_cat(sb, "sess *);\nunsigned VRT_r_client_gzip(struct sess *);\n");
+	vsb_cat(sb, "void VRT_l_client_gzip(struct sess *, unsigned);\n");
+	vsb_cat(sb, "unsigned VRT_r_client_deflate(struct sess *);\n");
+	vsb_cat(sb, "void VRT_l_client_deflate(struct sess *, unsigned);\n");
+	vsb_cat(sb, "const char * VRT_r_client_compression(const struct ses");
+	vsb_cat(sb, "s *);\nstruct sockaddr * VRT_r_server_ip(struct sess *");
+	vsb_cat(sb, ");\nconst char * VRT_r_server_hostname(struct sess *);");
+	vsb_cat(sb, "\nconst char * VRT_r_server_identity(struct sess *);\n");
 	vsb_cat(sb, "int VRT_r_server_port(struct sess *);\n");
 	vsb_cat(sb, "const char * VRT_r_req_request(const struct sess *);\n");
 	vsb_cat(sb, "void VRT_l_req_request(const struct sess *, const char");
