@@ -70,95 +70,114 @@ SVNID("$Id: cache_pool.c 4069 2009-05-11 08:57:00Z phk $")
  * thread to complete the request without holding stuff locked.
  */
 
+struct wrw_context *
+WRW_New(struct sess *sp, int *fd)
+{
+	struct wrw_context *wrw;
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+
+	wrw = (struct wrw_context *) WS_Alloc(sp->ws, (unsigned int) sizeof(struct wrw_context));
+	wrw->magic = WRW_MAGIC;
+	wrw->fd = fd;
+	wrw->err = 0;
+	wrw->liov = 0;
+	wrw->niov = 0;
+	
+	return wrw;
+}
+
 void
-WRW_Reserve(struct worker *w, int *fd)
+WRW_Reserve(struct wrw_context *wrw, int *fd)
 {
 
-	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-	AZ(w->wfd);
-	w->werr = 0;
-	w->liov = 0;
-	w->niov = 0;
-	w->wfd = fd;
+	CHECK_OBJ_NOTNULL(wrw, WRW_MAGIC);
+	AZ(wrw->fd);
+	wrw->err = 0;
+	wrw->liov = 0;
+	wrw->niov = 0;
+	wrw->fd = fd;
 }
 
 static void
-WRW_Release(struct worker *w)
+WRW_Release(struct wrw_context *wrw)
 {
 
-	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-	w->werr = 0;
-	w->liov = 0;
-	w->niov = 0;
-	w->wfd = NULL;
+	CHECK_OBJ_NOTNULL(wrw, WRW_MAGIC);
+	wrw->err = 0;
+	wrw->liov = 0;
+	wrw->niov = 0;
+	wrw->fd = NULL;
 }
 
 unsigned
-WRW_Flush(struct worker *w)
+WRW_Flush(struct wrw_context *wrw, struct worker *w)
 {
 	ssize_t i;
 
+	CHECK_OBJ_NOTNULL(wrw, WRW_MAGIC);
 	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-	AN(w->wfd);
-	if (*w->wfd >= 0 && w->niov > 0 && w->werr == 0) {
-		i = writev(*w->wfd, w->iov, w->niov);
-		if (i != w->liov) {
-			w->werr++;
-			WSL(w, SLT_Debug, *w->wfd,
+	AN(wrw->fd);
+	if (*wrw->fd >= 0 && wrw->niov > 0 && wrw->err == 0) {
+		i = writev(*wrw->fd, wrw->iov, wrw->niov);
+		if (i != wrw->liov) {
+			wrw->err++;
+			WSL(w, SLT_Debug, *wrw->fd,
 			    "Write error, len = %d/%d, errno = %s",
-			    i, w->liov, strerror(errno));
+			    i, wrw->liov, strerror(errno));
 		}
 	}
-	w->liov = 0;
-	w->niov = 0;
-	return (w->werr);
+	wrw->liov = 0;
+	wrw->niov = 0;
+	return (wrw->err);
 }
 
 unsigned
-WRW_FlushRelease(struct worker *w)
+WRW_FlushRelease(struct wrw_context *wrw, struct worker *w)
 {
 	unsigned u;
 
-	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-	AN(w->wfd);
-	u = WRW_Flush(w);
-	WRW_Release(w);
+	CHECK_OBJ_NOTNULL(wrw, WRW_MAGIC);
+	AN(wrw->fd);
+	u = WRW_Flush(wrw, w);
+	WRW_Release(wrw);
 	return (u);
 }
 
 unsigned
-WRW_WriteH(struct worker *w, const txt *hh, const char *suf)
+WRW_WriteH(struct wrw_context *wrw, struct worker *w, const txt *hh, const char *suf)
 {
 	unsigned u;
 
-	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-	AN(w->wfd);
-	AN(w);
+	CHECK_OBJ_NOTNULL(wrw, WRW_MAGIC);
+	AN(wrw->fd);
+	AN(wrw);
 	AN(hh);
 	AN(hh->b);
 	AN(hh->e);
-	u = WRW_Write(w, hh->b, hh->e - hh->b);
+	u = WRW_Write(wrw, w, hh->b, hh->e - hh->b);
 	if (suf != NULL)
-		u += WRW_Write(w, suf, -1);
+		u += WRW_Write(wrw, w, suf, -1);
 	return (u);
 }
 
 unsigned
-WRW_Write(struct worker *w, const void *ptr, int len)
+WRW_Write(struct wrw_context *wrw, struct worker *w, const void *ptr, int len)
 {
 
 	CHECK_OBJ_NOTNULL(w, WORKER_MAGIC);
-	AN(w->wfd);
-	if (len == 0 || *w->wfd < 0)
+	CHECK_OBJ_NOTNULL(wrw, WRW_MAGIC);
+
+	AN(wrw->fd);
+	if (len == 0 || *wrw->fd < 0)
 		return (0);
 	if (len == -1)
 		len = strlen(ptr);
-	if (w->niov == MAX_IOVS)
-		(void)WRW_Flush(w);
-	w->iov[w->niov].iov_base = TRUST_ME(ptr);
-	w->iov[w->niov].iov_len = len;
-	w->liov += len;
-	w->niov++;
+	if (wrw->niov == MAX_IOVS)
+		(void)WRW_Flush(wrw, w);
+	wrw->iov[wrw->niov].iov_base = TRUST_ME(ptr);
+	wrw->iov[wrw->niov].iov_len = len;
+	wrw->liov += len;
+	wrw->niov++;
 	return (len);
 }
 

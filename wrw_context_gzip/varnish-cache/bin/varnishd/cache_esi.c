@@ -760,27 +760,29 @@ ESI_Deliver(struct sess *sp)
 {
 	struct esi_bit *eb;
 	struct object *obj;
+	struct wrw_context *wrw;
 	struct worker *w;
 	char *ws_wm;
 	struct http http_save;
 
 	w = sp->wrk;
-	WRW_Reserve(w, &sp->fd);
+	wrw = sp->resp_wrw;
+
 	http_save.magic = 0;
 	VTAILQ_FOREACH(eb, &sp->obj->esibits, list) {
 		if (Tlen(eb->verbatim)) {
 			if (sp->http->protover >= 1.1)
-				(void)WRW_Write(w, eb->chunk_length, -1);
-			sp->acct_req.bodybytes += WRW_Write(w,
+				(void)WRW_Write(wrw, w, eb->chunk_length, -1);
+			sp->acct_req.bodybytes += WRW_Write(wrw, w,
 			    eb->verbatim.b, Tlen(eb->verbatim));
 			if (sp->http->protover >= 1.1)
-				(void)WRW_Write(w, "\r\n", -1);
+				(void)WRW_Write(wrw, w, "\r\n", -1);
 		}
 		if (eb->include.b == NULL ||
 		    sp->esis >= params->max_esi_includes)
 			continue;
 
-		if (WRW_FlushRelease(w)) {
+		if (WRW_Flush(wrw, w)) {
 			vca_close_session(sp, "remote closed");
 			return;
 		}
@@ -839,7 +841,6 @@ ESI_Deliver(struct sess *sp)
 		/* Reset the workspace */
 		WS_Reset(sp->ws, ws_wm);
 
-		WRW_Reserve(sp->wrk, &sp->fd);
 		if (sp->fd < 0)
 			break;
 	}
@@ -847,8 +848,8 @@ ESI_Deliver(struct sess *sp)
 	if (http_save.magic)
 		*sp->http = http_save;
 	if (sp->esis == 0 && sp->http->protover >= 1.1)
-		(void)WRW_Write(sp->wrk, "0\r\n\r\n", -1);
-	if (WRW_FlushRelease(sp->wrk))
+		(void)WRW_Write(wrw, w, "0\r\n\r\n", -1);
+	if (WRW_Flush(sp->resp_wrw, sp->wrk))
 		vca_close_session(sp, "remote closed");
 }
 

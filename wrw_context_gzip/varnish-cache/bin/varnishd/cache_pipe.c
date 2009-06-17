@@ -68,6 +68,7 @@ PipeSession(struct sess *sp)
 {
 	struct vbe_conn *vc;
 	struct worker *w;
+	struct wrw_context *wrw;
 	struct pollfd fds[2];
 	int i;
 
@@ -81,14 +82,15 @@ PipeSession(struct sess *sp)
 	vc = sp->vbe;
 	TCP_blocking(vc->fd);
 
-	WRW_Reserve(w, &vc->fd);
-	sp->acct_req.hdrbytes += http_Write(w, sp->wrk->bereq, 0);
+	
+	wrw = WRW_New(sp, &vc->fd);
+	sp->acct_req.hdrbytes += http_Write(w, wrw, sp->wrk->bereq, 0);
 
 	if (sp->htc->pipeline.b != NULL)
 		sp->acct_req.bodybytes +=
-		    WRW_Write(w, sp->htc->pipeline.b, Tlen(sp->htc->pipeline));
+		    WRW_Write(wrw, w, sp->htc->pipeline.b, Tlen(sp->htc->pipeline));
 
-	i = WRW_FlushRelease(w);
+	i = WRW_FlushRelease(wrw, w);
 
 	if (i) {
 		vca_close_session(sp, "pipe");

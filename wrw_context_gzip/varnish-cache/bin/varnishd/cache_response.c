@@ -139,15 +139,15 @@ RES_WriteObj(struct sess *sp)
 	char lenbuf[20];
 
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
-	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 
-	WRW_Reserve(sp->wrk, &sp->fd);
+	if (!sp->resp_wrw)
+		sp->resp_wrw = WRW_New(sp, &sp->fd);
 
 	if (sp->disable_esi || !sp->esis)
-		sp->acct_req.hdrbytes += http_Write(sp->wrk, sp->wrk->resp, 1);
+		sp->acct_req.hdrbytes += http_Write(sp->wrk, sp->resp_wrw, sp->wrk->resp, 1);
 
 	if (!sp->disable_esi && sp->wantbody && !VTAILQ_EMPTY(&sp->obj->esibits)) {
-		if (WRW_FlushRelease(sp->wrk)) {
+		if (WRW_Flush(sp->resp_wrw, sp->wrk)) {
 			vca_close_session(sp, "remote closed");
 			return;
 		}
@@ -161,7 +161,7 @@ RES_WriteObj(struct sess *sp)
 		    sp->http->protover >= 1.1 &&
 		    sp->obj->len > 0) {
 			sprintf(lenbuf, "%x\r\n", sp->obj->len);
-			(void)WRW_Write(sp->wrk, lenbuf, -1);
+			(void)WRW_Write(sp->resp_wrw, sp->wrk, lenbuf, -1);
 		}
 
 		VTAILQ_FOREACH(st, &sp->obj->store, list) {
@@ -185,15 +185,18 @@ RES_WriteObj(struct sess *sp)
 			}
 #endif /* SENDFILE_WORKS */
 			VSL_stats->n_objwrite++;
-			(void)WRW_Write(sp->wrk, st->ptr, st->len);
+			(void)WRW_Write(sp->resp_wrw, sp->wrk, st->ptr, st->len);
 		}
 		assert(u == sp->obj->len);
 		if (!sp->disable_esi &&
 		    sp->esis > 0 &&
 		    sp->http->protover >= 1.1 &&
 		    sp->obj->len > 0)
-			(void)WRW_Write(sp->wrk, "\r\n", -1);
+			(void)WRW_Write(sp->resp_wrw, sp->wrk, "\r\n", -1);
 	}
-	if (WRW_FlushRelease(sp->wrk))
+	if (WRW_Flush(sp->resp_wrw, sp->wrk))
 		vca_close_session(sp, "remote closed");
+
+	if (!sp->esis)
+		sp->resp_wrw = 0;
 }

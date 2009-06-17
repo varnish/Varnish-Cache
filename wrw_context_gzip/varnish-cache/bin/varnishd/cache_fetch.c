@@ -293,8 +293,8 @@ FetchReqBody(struct sess *sp)
 			content_length -= rdcnt;
 			if (!sp->sendbody)
 				continue;
-			(void)WRW_Write(sp->wrk, buf, rdcnt); /* XXX: stats ? */
-			if (WRW_Flush(sp->wrk))
+			(void)WRW_Write(sp->wrw, sp->wrk, buf, rdcnt); /* XXX: stats ? */
+			if (WRW_Flush(sp->wrw, sp->wrk))
 				return (2);
 		}
 	}
@@ -313,6 +313,7 @@ FetchHdr(struct sess *sp)
 {
 	struct vbe_conn *vc;
 	struct worker *w;
+
 	char *b;
 	struct http *hp;
 	int i;
@@ -348,12 +349,12 @@ FetchHdr(struct sess *sp)
 		VBE_AddHostHeader(sp);
 
 	TCP_blocking(vc->fd);	/* XXX: we should timeout instead */
-	WRW_Reserve(w, &vc->fd);
-	(void)http_Write(w, hp, 0);	/* XXX: stats ? */
+	sp->wrw = WRW_New(sp, &vc->fd);
+	(void)http_Write(w, sp->wrw, hp, 0);	/* XXX: stats ? */
 
 	/* Deal with any message-body the request might have */
 	i = FetchReqBody(sp);
-	if (WRW_FlushRelease(w) || i > 0) {
+	if (WRW_FlushRelease(sp->wrw, w) || i > 0) {
 		VBE_ClosedFd(sp);
 		/* XXX: other cleanup ? */
 		return (__LINE__);

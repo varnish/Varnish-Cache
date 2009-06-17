@@ -95,6 +95,8 @@ struct cli_proto;
 struct ban;
 struct SHA256Context;
 
+struct wrw_context;
+
 struct smp_object;
 struct smp_seg;
 
@@ -194,6 +196,18 @@ struct dstat {
 
 /*--------------------------------------------------------------------*/
 
+
+struct wrw_context {
+	unsigned               magic;
+#define WRW_MAGIC              0x6395adce
+
+	int			*fd;
+	unsigned		err;	/* valid after WRK_Flush() */
+	struct iovec		iov[MAX_IOVS];
+	int			niov;
+	ssize_t			liov;
+};
+
 struct worker {
 	unsigned		magic;
 #define WORKER_MAGIC		0x6391adcf
@@ -207,12 +221,6 @@ struct worker {
 
 	VTAILQ_ENTRY(worker)	list;
 	struct workreq		*wrq;
-
-	int			*wfd;
-	unsigned		werr;	/* valid after WRK_Flush() */
-	struct iovec		iov[MAX_IOVS];
-	int			niov;
-	ssize_t			liov;
 
 	struct VCL_conf		*vcl;
 
@@ -352,6 +360,10 @@ struct sess {
 
 	struct worker		*wrk;
 
+	/* used for the delivery phase */
+	struct wrw_context      *wrw;
+	struct wrw_context      *resp_wrw;
+	
 	socklen_t		sockaddrlen;
 	socklen_t		mysockaddrlen;
 	struct sockaddr		*sockaddr;
@@ -502,7 +514,7 @@ void Fetch_Init(void);
 const char *http_StatusMessage(unsigned);
 void HTTP_Init(void);
 void http_ClrHeader(struct http *to);
-unsigned http_Write(struct worker *w, const struct http *hp, int resp);
+unsigned http_Write(struct worker *w, struct wrw_context *wrw, const struct http *hp, int resp);
 void http_CopyResp(struct http *to, const struct http *fm);
 void http_SetResp(struct http *to, const char *proto, const char *status,
     const char *response);
@@ -583,11 +595,12 @@ int WRK_Queue(struct workreq *wrq);
 void WRK_QueueSession(struct sess *sp);
 void WRK_SumStat(const struct worker *w);
 
-void WRW_Reserve(struct worker *w, int *fd);
-unsigned WRW_Flush(struct worker *w);
-unsigned WRW_FlushRelease(struct worker *w);
-unsigned WRW_Write(struct worker *w, const void *ptr, int len);
-unsigned WRW_WriteH(struct worker *w, const txt *hh, const char *suf);
+struct wrw_context *WRW_New(struct sess *sp, int *fd);
+void WRW_Reserve(struct wrw_context *wrw, int *fd);
+unsigned WRW_Flush(struct wrw_context *wrw, struct worker *w);
+unsigned WRW_FlushRelease(struct wrw_context *wrw, struct worker *w);
+unsigned WRW_Write(struct wrw_context *wrw, struct worker *w, const void *ptr, int len);
+unsigned WRW_WriteH(struct wrw_context *wrw, struct worker *w, const txt *hh, const char *suf);
 #ifdef SENDFILE_WORKS
 void WRW_Sendfile(struct worker *w, int fd, off_t off, unsigned len);
 #endif  /* SENDFILE_WORKS */

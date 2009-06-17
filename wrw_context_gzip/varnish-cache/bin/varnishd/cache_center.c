@@ -199,7 +199,7 @@ cnt_deliver(struct sess *sp)
 	sp->restarts = 0;
 
 	RES_WriteObj(sp);
-	AZ(sp->wrk->wfd);
+	//	AZ(sp->wrk->wfd);
 	HSH_Deref(sp->wrk, &sp->obj);
 	sp->wrk->resp = NULL;
 	sp->step = STP_DONE;
@@ -531,7 +531,7 @@ cnt_fetch(struct sess *sp)
 		sp->obj->last_modified = TIM_parse(b);
 	
 	i = FetchBody(sp);
-	AZ(sp->wrk->wfd);
+	//	AZ(sp->wrk->wfd);
 	AZ(sp->vbe);
 	AN(sp->director);
 
@@ -936,7 +936,7 @@ cnt_pipe(struct sess *sp)
 	assert(sp->handling == VCL_RET_PIPE);
 
 	PipeSession(sp);
-	AZ(sp->wrk->wfd);
+	//	AZ(sp->wrk->wfd);
 	sp->wrk->bereq = NULL;
 	sp->step = STP_DONE;
 	return (0);
@@ -1174,7 +1174,7 @@ CNT_Session(struct sess *sp)
 		CHECK_OBJ_ORNULL(w->nobjhead, OBJHEAD_MAGIC);
 	}
 	WSL_Flush(w, 0);
-	AZ(w->wfd);
+	//	AZ(w->wfd);
 }
 
 /*

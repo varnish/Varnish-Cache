@@ -179,7 +179,6 @@ wrk_thread_real(struct wq *qp, unsigned shm_workspace, unsigned sess_workspace)
 		AZ(w->beresp);
 		AZ(w->resp);
 		WS_Assert(w->ws);
-		AZ(w->wfd);
 		assert(w->wlp == w->wlb);
 		w->wrq = NULL;
 		if (!Lck_Trylock(&wstat_mtx)) {
