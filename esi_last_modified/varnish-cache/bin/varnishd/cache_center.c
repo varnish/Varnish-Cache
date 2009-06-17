@@ -976,6 +976,8 @@ cnt_recv(struct sess *sp)
 	AN(sp->director);
 
       	sp->disable_esi = 0;
+	if(!sp->esis)
+		sp->cache_last_modified = 0;
 	
 	VCL_recv_method(sp);
 	if (sp->restarts >= params->max_restarts) {

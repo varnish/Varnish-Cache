@@ -1,0 +1,37 @@
+# $Id: e00015.vtc 4068 2009-05-11 08:50:45Z sky $
+
+test "Test last-modified with intial ESI payload where there is no cached-last modified in which case we can't 304"
+
+server s1 {
+	rxreq 
+	txresp -hdr "Last-Modified: Mon, 18 May 2009 23:33:01 GMT" -body {
+		<html>
+		Before include
+		<esi:include src="/body"/>
+		After include
+	}
+	rxreq 
+	expect req.url == "/body"   
+	txresp -hdr "Last-Modified: Mon, 18 May 2009 23:34:01 GMT" -body {
+	        Inside ESI
+	}
+} -start
+
+varnish v1 -vcl+backend {
+	sub vcl_fetch {
+	     set beresp.ttl = 600s;
+		esi;
+	}
+} -start
+
+client c1 {
+	txreq -hdr "If-Modified-Since: Mon, 18 May 2009 23:33:01 GMT"
+	rxresp
+	expect resp.status == 200
+	txreq -hdr "If-Modified-Since: Mon, 18 May 2009 23:34:01 GMT"
+	rxresp
+	expect resp.status == 304
+}
+
+client c1 -run
+varnish v1 -expect esi_errors == 0

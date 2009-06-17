@@ -1,0 +1,50 @@
+# $Id$
+
+test "Nested last-modified with ESI"
+
+server s1 {
+	rxreq 
+	txresp -hdr "Last-Modified: Mon, 18 May 2009 23:34:01 GMT" -body {
+		<html>
+		Before include
+		<esi:include src="/body"/>
+		After include
+	}
+	rxreq 
+	expect req.url == "/body"   
+	txresp -hdr "Last-Modified: Mon, 18 May 2009 23:33:01 GMT" -body {
+                <foo>Inside ESI
+                <esi:include src="/body2"/>
+	}
+	rxreq
+	expect req.url == "/body2"   
+	txresp -hdr "Last-Modified: Mon, 18 May 2009 23:35:01 GMT" -body {
+                Inside ESI2
+	}
+} -start
+
+varnish v1 -vcl+backend {
+	sub vcl_fetch {
+	     set beresp.ttl = 600s;
+             esi;
+	}
+} -start
+
+client c1 {
+	txreq
+	rxresp
+	expect resp.http.last-modified == "Mon, 18 May 2009 23:34:01 GMT"
+	delay 1
+	txreq
+	rxresp
+	expect resp.http.last-modified == "Mon, 18 May 2009 23:35:01 GMT"
+	txreq -hdr "If-Modified-Since: Mon, 18 May 2009 23:34:01 GMT"
+	rxresp
+	expect resp.status == 200
+	txreq -hdr "If-Modified-Since: Mon, 18 May 2009 23:35:01 GMT"
+	rxresp
+	expect resp.status == 304
+}
+
+client c1 -run
+varnish v1 -expect esi_errors == 0

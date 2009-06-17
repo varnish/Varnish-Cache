@@ -324,6 +324,8 @@ struct object {
 	double			grace;
 
 	double			last_modified;
+	double                  cache_last_modified;
+
 	double			last_lru;
 
 	struct http		http[1];
@@ -386,6 +388,9 @@ struct sess {
 
 	/* Acceptable grace period */
 	double			grace;
+
+	/* Cache last-modified for ESI purposes */
+	double                  cache_last_modified;
 
 	enum step		step;
 	unsigned		cur_method;

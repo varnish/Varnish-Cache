@@ -57,7 +57,9 @@ res_do_304(struct sess *sp)
 	http_PrintfHeader(sp->wrk, sp->fd, sp->wrk->resp, "Date: %s", lm);
 	http_SetHeader(sp->wrk, sp->fd, sp->wrk->resp, "Via: 1.1 varnish");
 	http_PrintfHeader(sp->wrk, sp->fd, sp->wrk->resp, "X-Varnish: %u", sp->xid);
-	TIM_format(sp->obj->last_modified, lm);
+	TIM_format(sp->obj->cache_last_modified ?
+	    sp->obj->cache_last_modified :
+	    sp->obj->last_modified, lm);
 	http_PrintfHeader(sp->wrk, sp->fd, sp->wrk->resp, "Last-Modified: %s", lm);
 	http_PrintfHeader(sp->wrk, sp->fd, sp->wrk->resp, "Connection: %s",
 	    sp->doclose ? "close" : "keep-alive");
@@ -76,6 +78,13 @@ res_do_conds(struct sess *sp)
 	    http_GetHdr(sp->http, H_If_Modified_Since, &p)) {
 		ims = TIM_parse(p);
 		if (ims > sp->t_req)	/* [RFC2616 14.25] */
+			return (0);
+
+		/* If we don't know the correct last-modified it is better to just send
+		   back the full page -- else we risk stale displays on the client side */
+		if (!sp->disable_esi && !VTAILQ_EMPTY(&sp->obj->esibits) && !sp->obj->cache_last_modified)
+			return (0);
+		if (sp->obj->cache_last_modified > ims)
 			return (0);
 		if (sp->obj->last_modified > ims) {
 			return (0);
@@ -137,12 +146,32 @@ RES_WriteObj(struct sess *sp)
 	struct storage *st;
 	unsigned u = 0;
 	char lenbuf[20];
+	char lm[64];
 
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 
 	WRW_Reserve(sp->wrk, &sp->fd);
 
+	/* Assemble the highest modified in ESI chains */
+	if (sp->obj->last_modified > sp->cache_last_modified)
+		sp->cache_last_modified = sp->obj->last_modified;
+
+	/* We don't actually always have the correct last-modified 
+	 * If we have a cached version, then we use it
+	 * Otherwise the worst case is we send a older header
+	 * Which is fine
+	 */
+
+	if (!sp->disable_esi &&
+	    !VTAILQ_EMPTY(&sp->obj->esibits) &&
+	    sp->esis == 0 &&
+	    sp->obj->cache_last_modified) {
+		TIM_format(sp->obj->cache_last_modified, lm);
+		http_Unset(sp->wrk->resp, H_Last_Modified);	
+		http_PrintfHeader(sp->wrk, sp->fd, sp->wrk->resp, "Last-Modified: %s", lm);
+	}
+	
 	if (sp->disable_esi || !sp->esis)
 		sp->acct_req.hdrbytes += http_Write(sp->wrk, sp->wrk->resp, 1);
 

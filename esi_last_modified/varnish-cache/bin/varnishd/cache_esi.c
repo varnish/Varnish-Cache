@@ -836,6 +836,8 @@ ESI_Deliver(struct sess *sp)
 		sp->esis--;
 		sp->obj = obj;
 
+		sp->obj->cache_last_modified = sp->cache_last_modified;
+		
 		/* Reset the workspace */
 		WS_Reset(sp->ws, ws_wm);
 
