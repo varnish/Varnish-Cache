@@ -1,0 +1,30 @@
+
+This is a four-page A5 handout I use with my Varnish talks.
+
+It can be printed on a single A4 sheet and folded along the
+middle, but the procedure is pretty involved:
+
+export as pdf from openoffice
+open in acrobat
+	select print
+	change paper size to A4, then A5 (don't ask, acroread bug).
+	unselect "Auto Rotate & Centre"
+	print to file /tmp/_.ps
+run
+	psselect -p4,1,2,3 /tmp/_.ps |
+	    psnup -2 -pa4 -Pa5 > handout.ps
+
+and print handout.ps on a4 paper.
+
+If your printer can print duplex (both sides) use this script to
+print two-sided:
+
+	:
+	echo '%!'
+	echo 'statusdict begin true setduplexmode true settumble'
+	cat $*
+
+Otherwise use psselect to print first the front, then refeed
+the paper, and then print the back.
+
+Poul-Henning

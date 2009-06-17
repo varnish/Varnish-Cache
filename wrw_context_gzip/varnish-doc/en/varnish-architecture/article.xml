@@ -1,0 +1,359 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet type="text/css" href="../../share/docbook-xml.css"?>
+<!DOCTYPE article
+ PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+ "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+<article lang="en">
+  <articleinfo>
+    <releaseinfo role="cvs">$Id$</releaseinfo>
+    <title>Varnish HTTP Accelerator Architecture</title>
+  </articleinfo>
+
+  <section>
+    <title>Application structure</title>
+
+    <section>
+      <title>Overview</title>
+
+      <para>
+	The Varnish binary contains code for two co-operating
+	processes: the manager and the cache engine.
+      </para>
+
+      <para>
+	The manager process is what takes control when the binary
+	is executed, and after parsing command line arguments it
+	will compile the VCL code and fork(2) a child process which
+	executes the cache-engine code.
+      </para>
+
+      <para>
+	A pipe connects the two processes and allows the manager
+	to relay and inject CLI commands to the cache process.
+      </para>
+    </section>
+
+    <section>
+      <title>Manager Process Components</title>
+      <para>
+	The manager process is a basic multiplexing process, of relatively
+	low complexity.  The only major component apart from the CLI stream
+	multiplexer is the VCL compiler.
+      </para>
+    </section>
+
+    <section>
+      <title>Cache Process Components</title>
+
+      <para>
+	The cache process is where all the fun happens and its components
+	have been constructed for maximum efficiency at the cost of some
+	simplicity of structure.
+      </para>
+
+      <section>
+	<title>Acceptor</title>
+
+	<para>
+	  The Acceptor monitors the listening sockets and accepts
+	  incoming client connections.  For each connection a session
+	  is created and once enough bytes have been received to indicate
+	  a valid HTTP request header the established, the session is
+	  passed to the Worker Pool for processing.
+	</para>
+
+	<para>
+	  If supported by the platform, the Acceptor will use the
+	  accept filters facility.
+	</para>
+      </section>
+
+      <section>
+	<title>Worker Pool</title>
+
+	<para>
+	  The Worker Pool maintains a pool of worker threads which
+	  can process requests through the State engine.  Threads
+	  are created as necessary if possible, and if they have seen
+	  no work for a preconfigured amount of time, they will
+	  selfdestruct to reduce resource usage.
+	</para>
+
+	<para>
+	  Threads are used in most-recently-used order to improve
+	  cache efficiencies and minimize working set.
+	</para>
+      </section>
+
+      <section>
+	<title>State Engine</title>
+
+	<para>
+	  The state engine is responsible for taking each request
+	  through the steps.  This is done with a simple finite
+	  state engine which is able to give up the worker thread
+	  if the session is waiting for reasons where having the
+	  worker thread is not necessary for the waiting.
+	</para>
+
+	<para>
+	  XXX: either list the major steps from cache_central.c here
+	  or have a major section on the flow after the components.
+	  (phk prefers the latter.)
+	</para>
+      </section>
+
+      <section>
+	<title>Hash and Hash methods</title>
+
+	<para>
+	  The cache of objects are hashed using a pluggable algorithm.
+	  A central hash management does the high level work while
+	  the actual lookup is done by the pluggable method.
+	</para>
+      </section>
+
+      <section>
+	<title>Storage and Storage methods</title>
+
+	<para>
+	  Like hashing, storage is split into a high level layer
+	  which calls into pluggable methods.
+	</para>
+      </section>
+
+      <section>
+	<title>Pass and Pipe modes</title>
+
+	<para>
+	  Requests which the can not or should not be handled by
+	  Varnish can be either passed through or piped through to
+	  the backend.
+	</para>
+
+	<para>
+	  Passing acts on a per-request basis and tries to make the
+	  connection to both the client and the backend reusable.
+	</para>
+
+	<para>
+	  Piping acts as a transparent tunnel and whatever happens
+	  for the rest of the lifetime of the client and backend
+	  connection is not interpreted by Varnish.
+	</para>
+      </section>
+
+      <section>
+	<title>Backend sessions</title>
+
+	<para>
+	  Connections to the backend are managed in a pool by the
+	  backend session module.
+	</para>
+
+      </section>
+
+      <section>
+	<title>Logging and Statistics</title>
+
+	<para>
+	  Logging and statistics is done through a shared memory
+	  data segment to which other processes can attach to subscribe
+	  to the data.  A library provides the documented interface
+	  for this.
+	</para>
+
+	<para>
+	  Logging is done in round-robin form and is therefore unaffected
+	  by disk-I/O or other expensive log-handling.
+	</para>
+      </section>
+
+      <section>
+	<title>Purge/Ban procssing</title>
+
+	<para>
+	  When a purge is requested via the CLI interface, the regular
+	  expression is added to the purge list, and all requests are
+	  checked against this list before they are served from cache.
+	  The most recently checked purge is cached in the objects to
+	  avoid repeated checks against the same expression.
+	</para>
+      </section>
+
+      <section>
+	<title>VCL calls and VCL runtime</title>
+
+	<para>
+	  The state engine uses calls to VCL functions to determine
+	  desired processing of each request.  The compiled VCL code
+	  is loaded as a dynamic object and executes at the speed
+	  of compiled code.
+	</para>
+
+	<para>
+	  The VCL and VRT code is responsible for managing the VCL
+	  codes loaded and to provide the proper runtime environement
+	  for them.
+	</para>
+      </section>
+
+      <section>
+	<title>Expiry (and prefetch)</title>
+
+	<para>
+	  Objects in the cache are sorted in "earliest expiry" order
+	  in a binary heap which is monitored.  When an object is
+	  a configurable number of seconds from expiring the VCL
+	  code will be asked to determine if the object should be
+	  discarded or prefetched.  (Prefetch is not yet implemented).
+	</para>
+      </section>
+
+    </section>
+  </section>
+
+  <section>
+    <title>Configuration</title>
+
+    <para>Policy is configured in a simple unidirectional (no loops,
+    no goto) programming language which is compiled into 'C' and from
+    there binary modules which are dlopen'ed by the main Varnish
+    process.</para>
+
+    <para>The dl object contains one exported symbol, a pointer to a
+    structure which contains a reference count, a number of function
+    pointers, a couple of string variables with identifying
+    information.</para>
+
+    <para>All access into the config is protected by the reference
+    counts.</para>
+
+    <para>Multiple policy configurations can be loaded at the same
+    time but only one is the "active configuration".  Loading,
+    switching and unloading of policy configurations happen via the
+    managment process.</para>
+
+    <para>A global config sequence number is incremented on each
+    switch and policy modified object attributes (ttl, cache/nocache)
+    are all qualified by the config-sequence under which they were
+    calculated and invalid if a different policy is now in
+    effect.</para>
+  </section>
+
+  <section id="sect.logging">
+    <title>Logging</title>
+
+    <para>
+    </para>
+  </section>
+
+  <section id="sect.invalidation">
+    <title>Invalidation</title>
+
+    <para>When a purge request comes in, the regexp is tagged with the
+    next generation number and added to the tail of the list of purge
+    regexps.</para>
+
+    <para>Before a sender transmits an object, it is checked against
+    any purge-regexps which have higher generation number than the
+    object and if it matches the request is sent to a fetcher and the
+    object purged.</para>
+
+    <para>If there were purge regexps with higher generation to match,
+    but they didn't match, the object is tagged with the current
+    generation number and moved to the tail of the list.</para>
+
+    <para>Otherwise, the object does not change generation number and
+    is not moved on the generation list.</para>
+
+    <para>New Objects are tagged with the current generation number
+    and put at the tail of the list.</para>
+
+    <para>Objects are removed from the generation list when
+    deleted.</para>
+
+    <para>When a purge object has a lower generation number than the
+    first object on the generation list, the purge object has been
+    completed and will be removed.  A log entry is written with number
+    of compares and number of hits.</para>
+  </section>
+
+  <section id="sect.management">
+    <title>Management</title>
+
+    <section>
+      <title>Management commands</title>
+
+      <itemizedlist>
+	<listitem>
+	  <para>object_query url -&gt; TTL, size, checksum</para>
+	</listitem>
+	<listitem>
+	  <para>{purge,invalidate} regexp</para>
+	</listitem>
+	<listitem>
+	  <para>object_status url -&gt; object metadata</para>
+	</listitem>
+	<listitem>
+	  <para>load_config filename</para>
+	</listitem>
+	<listitem>
+	  <para>switch_config configname</para>
+	</listitem>
+	<listitem>
+	  <para>list_configs</para>
+	</listitem>
+	<listitem>
+	  <para>unload_config</para>
+	</listitem>
+	<listitem>
+	  <para>freeze 	# stop the clock, freezes the object store</para>
+	</listitem>
+	<listitem>
+	  <para>thaw</para>
+	</listitem>
+	<listitem>
+	  <para>suspend	# stop acceptor accepting new requests</para>
+	</listitem>
+	<listitem>
+	  <para>resume</para>
+	</listitem>
+	<listitem>
+	  <para>stop	# forced stop (exits) varnish process</para>
+	</listitem>
+	<listitem>
+	  <para>start</para>
+	</listitem>
+	<listitem>
+	  <para>restart = "stop;start"</para>
+	</listitem>
+	<listitem>
+	  <para>ping $utc_time -&gt; pong $utc_time</para>
+	</listitem>
+	<listitem>
+	  <para>stats [-mr] -&gt; $data</para>
+	</listitem>
+	<listitem>
+	  <para>zero stats</para>
+	</listitem>
+	<listitem>
+	  <para>help</para>
+	</listitem>
+      </itemizedlist>
+
+      <para>Cluster only:</para>
+      <itemizedlist>
+	<listitem>
+	  <para>config_contents filename $inline -> compilation messages</para>
+	</listitem>
+      </itemizedlist>
+    </section>
+  </section>
+
+  <bibliography>
+    <title>References</title>
+
+    <bibliomixed id="RFC2616"/>
+  </bibliography>
+</article>

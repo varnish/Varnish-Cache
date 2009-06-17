@@ -1,0 +1,48 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+ "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>Varnish automatic build and test summary</title>
+    <meta name="svnid" content="$Id$"/>
+    <style type="text/css">
+table { border-collapse: collapse; border: none; }
+td, th { border: thin solid black; padding: 3pt; text-align: left; white-space: nowrap; }
+thead, tfoot { background-color: #eeeeff; }
+tr.pass { background-color: #eeffee; }
+tr.fail { background-color: #ffeeee; }
+.time { text-align: right; }
+    </style>
+  </head>
+  <body>
+    <h1 class="title">Varnish automatic build and test summary</h1>
+    <table>
+      <thead>
+	<tr>
+	  <th>Build and test time</th>
+	  <th>Revision</th>
+	  <th class="tests">Tests</th>
+	  <th class="pass">Pass</th>
+	  <th class="fail">Fail</th>
+	  <th class="time">Test duration</th>
+	  <th></th>
+	</tr>
+      </thead>
+<!-- FOREACH test = tests -->
+<!-- IF test.fail == 0 -->
+      <tr class="pass">
+<!-- ELSE -->
+      <tr class="fail">
+<!-- END -->
+	<td><a href="<!-- test.link -->/regress.html"><!-- test.title --></a></td>
+	<td><!-- test.revision --></td>
+	<td class="count"><!-- test.count --></td>
+	<td class="pass"><!-- test.pass --></td>
+	<td class="fail"><!-- test.fail --></td>
+	<td class="time"><!-- test.time --></td>
+	<td><a href="<!-- test.link -->/">working directory</a></td>
+      </tr>
+<!-- END -->
+    </table>
+  </body>
+</html>
