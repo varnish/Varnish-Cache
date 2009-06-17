@@ -1,0 +1,3 @@
+# $Id$
+content varnish chrome/content/
+overlay chrome://browser/content/browser.xul chrome://varnish/content/varnish.xul
