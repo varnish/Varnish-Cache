@@ -1,0 +1,703 @@
+.\"-
+.\" Copyright (c) 2006 Verdens Gang AS
+.\" Copyright (c) 2006-2009 Linpro AS
+.\" All rights reserved.
+.\"
+.\" Author: Dag-Erling Smørgrav <des@des.no>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $Id$
+.\"
+.Dd February 17, 2008
+.Dt VARNISHD 1
+.Os
+.Sh NAME
+.Nm varnishd
+.Nd HTTP accelerator daemon
+.Sh SYNOPSIS
+.Nm
+.Op Fl a Ar address Ns Op : Ns Ar port
+.Op Fl b Ar host Ns Op : Ns Ar port
+.Op Fl d
+.Op Fl F
+.Op Fl f Ar config
+.Op Fl g Ar group
+.Op Fl h Ar type Ns Op , Ns Ar options
+.Op Fl l Ar shmlogsize
+.Op Fl n Ar name
+.Op Fl P Ar file
+.Op Fl p Ar param Ns = Ns Ar value
+.Op Fl s Ar type Ns Op , Ns Ar options
+.Op Fl T Ar address Ns Op : Ns Ar port
+.Op Fl t Ar ttl
+.Op Fl u Ar user
+.Op Fl V
+.Op Fl w Ar min Ns Op , Ns Ar max Ns Op , Ns Ar timeout
+.Sh DESCRIPTION
+The
+.Nm
+daemon accepts HTTP requests from clients, passes them on to a backend
+server and caches the returned documents to better satisfy future
+requests for the same document.
+.Pp
+The following options are available:
+.Bl -tag -width Fl
+.It Xo
+.Fl a Ar address Ns Op : Ns Ar port Ns
+.Op , Ns Ar address Ns Op : Ns Ar port Ns
+.Op ...
+.Xc
+Listen for client requests on the specified
+.Ar address
+and
+.Ar port .
+The
+.Ar address
+can be a host name
+.Pq Dq localhost ,
+an IPv4 dotted-quad
+.Pq Dq 127.0.0.1 ,
+or an IPv6 address enclosed in square brackets
+.Pq Dq [::1] .
+If
+.Ar address
+is not specified,
+.Nm
+will listen on all available IPv4 and IPv6 interfaces.
+If
+.Ar port
+is not specified, the default HTTP port as listed in
+.Pa /etc/services
+is used.
+Multiple listening addresses and ports can be specified as a
+whitespace- or comma-separated list.
+.It Fl b Ar host Ns Op : Ns Ar port
+Use the specified
+.Ar host
+as backend server.
+If
+.Ar port
+is not specified, the default is 8080.
+.It Fl d
+Enables debugging mode.
+This causes
+.Nm
+to fork; the child process daemonizes and runs as usual, while the
+parent process remains attached to the console and will accept
+management commands from
+.Dv stdin .
+If the parent process receives
+.Dv EOF ,
+it will terminate, but the child process will continue to run.
+.Pp
+The child process will not start accepting client connections until
+the
+.Cm start
+command is given.
+.Pp
+If the
+.Fl d
+flag is specified twice, the child process will not daemonize, and
+terminating the parent process will also terminate the child.
+.It Fl F
+Run in the foreground.
+.It Fl f Ar config
+Use the specified VCL configuration file instead of the builtin
+default.
+See
+.Xr vcl 7
+for details on VCL syntax.
+.It Fl g Ar group
+Specifies the name of an unprivileged group to which the child process
+should switch before it starts accepting connections.
+This is a shortcut for specifying the
+.Va group
+run-time parameter.
+.It Fl h Ar type Ns Op , Ns Ar options
+Specifies the hash algorithm.
+See
+.Sx Hash Algorithms
+for a list of supported algorithms.
+.It Fl l Ar shmlogsize
+Specify size of shmlog file.
+Scaling suffixes like 'k', 'm' can be used up to (e)tabytes.
+Default is 80 Megabytes.
+Specifying less than 8 Megabytes is unwise.
+.It Fl n
+Specify a name for this instance.
+Amonst other things, this name is used to construct the name of the
+directory in which
+.Nm
+keeps temporary files and persistent state.
+If the specified name begins with a forward slash, it is interpreted
+as the absolute path to the directory which should be used for this
+purpose.
+.It Fl P Ar file
+Write the process's PID to the specified
+.Ar file .
+.It Fl p Ar param Ns = Ns Ar value
+Set the parameter specified by
+.Ar param
+to the specified
+.Ar value .
+See
+.Sx Run-Time Parameters
+for a list of parameters.
+.It Fl s Ar type Ns Op , Ns Ar options
+Use the specified storage backend.
+See
+.Sx Storage Types
+for a list of supported storage types.
+This option can be used multiple times to specify multiple storage
+files.
+.It Fl T Ar address Ns Op : Ns Ar port
+Offer a management interface on the specified
+.Ar address
+and
+.Ar port .
+See
+.Sx Management Interface
+for a list of management commands.
+.It Fl t Ar ttl
+Specifies a hard minimum time to live for cached documents.
+This is a shortcut for specifying the
+.Va default_ttl
+run-time parameter.
+.It Fl u Ar user
+Specifies the name of an unprivileged user to which the child process
+should switch before it starts accepting connections.
+This is a shortcut for specifying the
+.Va user
+run-time parameter.
+.Pp
+If specifying both a user and a group, the user should be specified
+first.
+.It Fl V
+Display the version number and exit.
+.It Fl w Ar min Ns Op , Ns Ar max Ns Op , Ns Ar timeout
+Start at least
+.Ar min
+but no more than
+.Ar max
+worker threads with the specified idle timeout.
+This is a shortcut for specifying the
+.Va thread_pool_min ,
+.Va thread_pool_max
+and
+.Va thread_pool_timeout
+run-time parameters.
+.Pp
+If only one number is specified,
+.Va thread_pool_min
+and
+.Va thread_pool_max
+are both set to this number, and
+.Va thread_pool_timeout
+has no effect.
+.El
+.Ss Hash Algorithms
+The following hash algorithms are available:
+.Bl -tag -width 4n
+.It Cm simple_list
+A simple doubly-linked list.
+Not recommended for production use.
+.It Cm classic Ns Op Ns , Ns Ar buckets
+A standard hash table.
+This is the default.
+.Pp
+The hash key is the CRC32 of the object's URL modulo the size of the
+hash table.
+Each table entry points to a list of elements which share the same
+hash key.
+.Pp
+The
+.Ar buckets
+parameter specifies the number of entries in the hash table.
+The default is 16383.
+.El
+.Ss Storage Types
+The following storage types are available:
+.Bl -tag -width 4n
+.It Cm malloc Ns Op Ns , Ns Ar size Ns
+Storage for each object is allocated with
+.Xr malloc 3 .
+.Pp
+The
+.Ar size
+parameter specifies the maximum amount of memory varnishd will allocate.
+The size is assumed to be in bytes, unless followed by one of the
+following suffixes:
+.Bl -tag -width indent
+.It K, k
+The size is expressed in kibibytes.
+.It M, m
+The size is expressed in mebibytes.
+.It G, g
+The size is expressed in gibibytes.
+.It T, t
+The size is expressed in tebibytes.
+.El
+.Pp
+The default size is unlimited.
+.It Cm file Ns Op Ns , Ns Ar path Ns Op Ns , Ns Ar size Ns Op Ns , Ns Ar granularity
+Storage for each object is allocated from an arena backed by a file.
+This is the default.
+.Pp
+The
+.Ar path
+parameter specifies either the path to the backing file or the path to
+a directory in which
+.Nm
+will create the backing file.
+The default is
+.Pa /tmp .
+.Pp
+The
+.Ar size
+parameter specifies the size of the backing file.
+The size is assumed to be in bytes, unless followed by one of the
+following suffixes:
+.Bl -tag -width indent
+.It K, k
+The size is expressed in kibibytes.
+.It M, m
+The size is expressed in mebibytes.
+.It G, g
+The size is expressed in gibibytes.
+.It T, t
+The size is expressed in tebibytes.
+.It %
+The size is expressed as a percentage of the free space on the file
+system where it resides.
+.El
+.Pp
+The default size is 50%.
+.Pp
+If the backing file already exists, it will be truncated or expanded
+to the specified size.
+.Pp
+Note that if
+.Nm
+has to create or expand the file, it will not pre-allocate the added
+space, leading to fragmentation, which may adversely impact
+performance.
+Pre-creating the storage file using
+.Xr dd 1
+will reduce fragmentation to a minimum.
+.Pp
+The
+.Ar granularity
+parameter specifies the granularity of allocation.
+All allocations are rounded up to this size.
+The size is assumed to be in bytes, unless followed by one of the
+suffixes described for
+.Ar size
+except for %.
+.Pp
+The default size is the VM page size.
+The size should be reduced if you have many small objects.
+.El
+.Ss Management Interface
+If the
+.Fl T
+option was specified,
+.Nm
+will offer a command-line management interface on the specified
+address and port.
+The following commands are available:
+.Bl -tag -width 4n
+.It Cm help Op Ar command
+Display a list of available commands.
+.Pp
+If the
+.Ar command
+is specified, display help for this command.
+.It Cm param.set Ar param Ar value
+Set the parameter specified by
+.Ar param
+to the specified
+.Ar value .
+See
+.Sx Run-Time Parameters
+for a list of parameters.
+.It Xo
+.Cm param.show
+.Op Fl l
+.Op Ar param
+.Xc
+Display a list if run-time parameters and their values. 
+.Pp
+If the
+.Fl l
+option is specified, the list includes a brief explanation of each
+parameter.
+.Pp
+If a
+.Ar param
+is specified, display only the value and explanation for this
+parameter.
+.It Cm ping Op Ns Ar timestamp
+Ping the Varnish cache process, keeping the connection alive.
+.It Cm purge Ar field Ar operator Ar argument Op && Ar field Ar operator Ar argument Op ...
+Immediately invalidate all documents matching the purge expression.
+See
+.Va Purge expressions
+for more documentation and examples.
+.It Cm purge.hash Ar regex
+Immediately invalidate all documents where
+.Va obj.hash
+matches the
+.Va regex .
+The default object hash contains the values from
+.Va req.url
+and either
+.Va req.http.host
+or
+.Va server.ip
+depending on the presence of a Host: header in the request sent by the
+client.  The object hash may be modified further by
+.Va VCL.
+.It Cm purge.list
+Display the purge list.
+.Pp
+All requests for objects from the cache are matched against items on
+the purge list.  If an object in the cache is older than a matching
+purge list item, it is considered "purged", and will be fetched from
+the backend instead.
+.Pp
+When a purge expression is older than all the objects in the cache, it
+is removed from the list.
+.It Cm purge.url Ar regexp
+Immediately invalidate all documents whose URL matches the specified
+regular expression.
+.It Cm quit
+Close the connection to the varnish admin port.
+.It Cm start
+Start the Varnish cache process if it is not already running.
+.It Cm stats
+Show summary statistics.
+.Pp
+All the numbers presented are totals since server startup; for a
+better idea of the current situation, use the
+.Xr varnishstat 1
+utility.
+.It Cm status
+Check the status of the Varnish cache process.
+.It Cm stop
+Stop the Varnish cache process.
+.It Cm url.purge Ar regexp
+Deprecated, see
+.Cm purge.url
+instead.
+.It Cm vcl.discard Ar configname
+Discard the configuration specified by
+.Ar configname .
+This will have no effect if the specified configuration has a non-zero
+reference count.
+.It Cm vcl.inline Ar configname Ar vcl
+Create a new configuration named
+.Ar configname
+with the VCL code specified by
+.Ar vcl ,
+which must be a quoted string.
+.It Cm vcl.list
+List available configurations and their respective reference counts.
+The active configuration is indicated with an asterisk ("*").
+.It Cm vcl.load Ar configname Ar filename
+Create a new configuration named
+.Ar configname
+with the contents of the specified file.
+.It Cm vcl.show Ar configname
+Display the source code for the specified configuration.
+.It Cm vcl.use Ar configname
+Start using the configuration specified by
+.Ar configname
+for all new requests.
+Existing requests will continue using whichever configuration was in
+use when they arrived.
+.El
+.Ss Run-Time Parameters
+.\" Keep in synch with parspec[] in mgt_param.c
+.Bl -tag -width 4n
+.It Va auto_restart
+Whether to automatically restart the child process if it dies.
+.Pp
+The default is
+.Dv on .
+.It Va backend_http11
+Whether to force the use of HTTP/1.1 when requesting documents from
+the server, or just use the same protocol version as the client which
+triggered the retrieval.
+.Pp
+The default is
+.Dv off .
+.It Va between_bytes_timeout
+Default timeout between bytes when receiving data from backend.
+We only wait for this many seconds between bytes before giving up.
+A value of 0 means it will never time out.
+VCL can override this default value for each backend and backend request.
+This parameter does not apply to pipe.
+.Pp
+The default is
+.Dv 60 seconds
+.It Va cli_banner
+Whether to print a banner whenever a client connects to the CLI interface.
+.Pp
+The default is
+.Dv on .
+.It Va client_http11
+Whether to force the use of HTTP/1.1 when responding to client
+requests, or just use the same protocol version as that used by the
+backend server which delivered the requested document.
+.Pp
+The default is
+.Dv off .
+.It Va connect_timeout
+Default connection timeout for backend connections.
+We only try to connect to the backend for this many seconds before giving up.
+VCL can override this default value for each backend and backend request.
+.Pp
+The default is
+.Dv 0.4 seconds
+.It Va default_ttl
+The default time-to-live assigned to objects if neither the backend
+nor the configuration assign one.
+Note that changes to this parameter are not applied retroactively.
+.Pp
+The default is 120 seconds.
+.It Va err_ttl
+The default time-to-live assigned to the synthesized error pages.
+.Pp
+The default is 0 seconds.
+.It Va fetch_chunksize
+The default chunk size used when retrieving documents for which the
+backend server does not specify a content length.
+.Pp
+The default is 128 kilobytes.
+.It Va first_byte_timeout
+Default timeout for receiving first byte from backend.
+We only wait for this many seconds for the first byte before giving up.
+A value of 0 means it will never time out.
+VCL can override this default value for each backend and backend request.
+This parameter does not apply to pipe.
+.Pp
+The default is
+.Dv 60 seconds
+.It Va group
+The name of an unprivileged group to which the child process should
+switch before it starts accepting connections.
+Note that setting
+.Va user
+will automatically set
+.Va group
+to the primary group of the specified user, so if both
+.Va user
+and
+.Va group
+are specified, the latter should be specified last.
+.Pp
+The default is "nogroup".
+.It Va http_workspace
+The size of the per-session workspace for HTTP protocol data.
+For performance reasons, this space is preallocated, so any change to
+this parameter will only apply to new client sessions.
+.Pp
+The default is 8192 bytes.
+.It Va listen_address
+The address at which to listen for client connections.
+Changes to this parameter will only take effect when the child process
+is restarted.
+.Pp
+The default is 0.0.0.0:80.
+.It Va listen_depth
+The depth of the TCP listen queue.
+.Pp
+The default is 512.
+.It Va overflow_max
+The maximum depth of the overflow queue as a percentage of
+.Va thread_pool_max .
+The overflow queue holds requests waiting for a worker thread to
+become available.
+If the overflow queue fills up,
+.Nm
+will start dropping new connections.
+.Pp
+The default is 100%.
+.It Va ping_interval
+The interval at which the parent process will ping the child process
+to ascertain that it is still present and functioning.
+.Pp
+The default is 3 seconds.
+.It Va pipe_timeout
+The time to wait before dropping an idle pipe mode connection.
+.Pp
+The default is 60 seconds.
+.It Va sendfile_threshold
+The size threshold beyond which documents are sent to the client using
+.Xr sendfile 2
+instead of
+.Xr writev 2 .
+This is not likely to have any effect unless the working set is too
+large to fit in physical memory.
+.Pp
+Note that several operating systems have known bugs which make it
+inadvisable to use this.
+.Pp
+The default is \-1, which disables the use of sendfile altogether.
+.It Va send_timeout
+The time to wait before dropping the connection to a client which is
+not accepting data sent to it.
+.Pp
+The default is 600 seconds.
+.It Va sess_timeout
+The time to wait before dropping an idle client session.
+.Pp
+The default is 5 seconds.
+.It Va srcaddr_hash
+The size of the hash table used to store per-client accounting data.
+This should preferably be a prime number.
+.Pp
+The default is 1049.
+.It Va srcaddr_ttl
+The length of time to keep per-client accounting records.
+Setting this to 0 will disable per-client accounting.
+.It Va thread_pool_max
+The maximum total number of worker threads.
+If the number of concurrent requests rises beyond this number,
+requests will start queueing up waiting for a worker thread to pick
+them up.
+Higher values may improve response time but will increase pressure on
+the scheduler.
+.Pp
+The default is 1000.
+.It Va thread_pool_min
+The minimum total number of worker threads.
+Higher values may allow
+.Nm
+to respond faster to a sudden increase in traffic.
+.Pp
+The default is 5.
+.It Va thread_pools
+The number of worker thread pools.
+Higher values reduce lock contention but increase pressure on the
+scheduler.
+Note that a decrease of this parameter will only take effect after a
+restart.
+.Pp
+The default is 2.
+.It Va thread_pool_timeout
+The amount of time a worker thread can be idle before it is killed,
+when the number of worker threads exceeds
+.Va thread_pool_min .
+.Pp
+The default is 120 seconds.
+.It Va user
+The name of an unprivileged user to which the child process should
+switch before it starts accepting connections.
+Note that setting
+.Va user
+will automatically set
+.Va group
+to the primary group of the specified user, so if both
+.Va user
+and
+.Va group
+are specified, the latter should be specified last.
+.Pp
+The default is "nobody".
+.It Va vcl_trace
+Whether to issue log entries for calls to VCL code and their results.
+Note that this will generate large amounts of log data.
+.Pp
+The default is
+.Dv off .
+.El
+.Ss Purge expressions
+A purge expression consists of one or more conditions.  A condition
+consists of a field, a operator, and an argument. Conditions can be
+ANDed together with "&&".
+.Pp
+A field can be any of the variables from VCL, for instance
+.Va req.url ,
+.Va req.http.host
+or
+.Va obj.set-cookie .
+.Pp
+Operators are "==" for direct comparision, "~" for a regular
+expression match, and ">" or "<" for size comparisons.  Prepending an
+operator with "!" negates the expression.
+.Pp
+The argument could be a quoted string, a regexp, or an integer.
+Integers can have "KB", "MB", "GB" or "TB" appended for size related
+fields.
+.Pp
+Simple example: All requests where
+.Va req.url
+exactly matches the string
+.Va /news
+are purged from the cache.
+.Bd -literal -offset 4n
+req.url == "/news"
+.Ed
+.Pp
+Example: Purge all documents where the name does not end with ".ogg",
+and where the size of the object is greater than 10 megabytes.
+.Bd -literal -offset 4n
+req.url !~ "\\.ogg$" && obj.size > 10MB
+.Ed
+.Pp
+Example: Purge all documents where the serving host is "example.com"
+or "www.example.com", and where the Set-Cookie header received from
+the backend contains "USERID=1663".
+.Bd -literal -offset 4n
+req.http.host ~ "^(www\\.)example.com$" && obj.set-cookie ~ "USERID=1663"
+.Ed
+.Sh SEE ALSO
+.Xr varnishlog 1 ,
+.Xr varnishhist 1 ,
+.Xr varnishncsa 1 ,
+.Xr varnishstat 1 ,
+.Xr varnishtop 1 ,
+.Xr vcl 7
+.\" .Sh STANDARDS
+.\" .Rs
+.\" .%A R. Fielding
+.\" .%A J. Gettys
+.\" .%A J. Mogul
+.\" .%A H. Frystyk
+.\" .%A L. Masinter
+.\" .%A P. Leach
+.\" .%A T. Berners-Lee
+.\" .%D January 1999
+.\" .%B Hypertext Transfer Protocol -- HTTP/1.1
+.\" .%O RFC2616
+.Sh HISTORY
+The
+.Nm
+daemon was developed by
+.An Poul-Henning Kamp Aq phk@phk.freebsd.dk
+in cooperation with Verdens Gang AS and Linpro AS.
+This manual page was written by
+.An Dag-Erling Sm\(/orgrav Aq des@des.no
+with updates by
+.An Stig Sandbeck Mathisen Aq ssm@debian.org

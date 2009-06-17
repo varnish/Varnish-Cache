@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- $Id$ -->
+<RDF xmlns="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+ xmlns:em="http://www.mozilla.org/2004/em-rdf#">
+  <Description about="urn:mozilla:install-manifest">
+    <em:id>firefox-extension@varnish-cache.org</em:id>
+    <em:version>1.0</em:version>
+    <em:type>2</em:type>
+
+    <em:targetApplication>
+      <Description>
+	<em:id>{ec8030f7-c20a-464f-9b0e-13a3a9e97384}</em:id>
+	<em:minVersion>2.0</em:minVersion>
+	<em:maxVersion>2.0.0.*</em:maxVersion>
+      </Description>
+    </em:targetApplication>
+
+    <em:name>Varnish</em:name>
+    <em:description>Displays information about a Varnish HTTP accelerator</em:description>
+    <em:creator>Dag-Erling Smørgrav</em:creator>
+    <em:homepageURL>http://www.varnish-cache.org/</em:homepageURL>
+    <em:iconURL>chrome://varnish/content/varnish-icon-red-32.gif</em:iconURL>
+  </Description>
+</RDF>
