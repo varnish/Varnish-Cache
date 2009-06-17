@@ -26,18 +26,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * We maintain a number of worker thread pools, to spread lock contention.
- *
- * Pools can be added on the fly, as a means to mitigate lock contention,
- * but can only be removed again by a restart. (XXX: we could fix that)
- *
- * Two threads herd the pools, one eliminates idle threads and aggregates
- * statistics for all the pools, the other thread creates new threads
- * on demand, subject to various numerical constraints.
- *
- * The algorithm for when to create threads needs to be reactive enough
- * to handle startup spikes, but sufficiently attenuated to not cause
- * thread pileups.  This remains subject for improvement.
  */
 
 #include "config.h"
