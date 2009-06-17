@@ -1,0 +1,42 @@
+# $Id$
+
+test "Test VCL regsub()"
+
+server s1 {
+	rxreq 
+	txresp \
+		-hdr "Foobar: _barf_" \
+		-hdr "Connection: close" \
+		-body "012345\n"
+} -start
+
+varnish v1 -vcl+backend { 
+	sub vcl_fetch {
+		set beresp.http.Snafu1 = regsub(beresp.http.Foobar, "ar", "\0\0");
+		set beresp.http.Snafu2 =
+		    regsub(beresp.http.Foobar, "(b)(a)(r)(f)", "\4\3\2p");
+		set beresp.http.Snafu3 =
+		    regsub(beresp.http.Foobar, "(b)(a)(r)(f)", "\4\\\3\2p");
+		set beresp.http.Snafu4 =
+		    regsub(beresp.http.Foobar, "(b)(a)(r)(f)", "\4\&\3\2p");
+		set beresp.http.Snafu5 =
+		    regsub(beresp.http.Foobar, "(b)(a)(r)(f)", "\0\4\3\2\\p");
+		set beresp.http.Snafu6 =
+		    regsub(beresp.http.Foobar, "(b)(a)(r)(f)", "\4\&\3\2p\");
+	}
+} -start 
+
+client c1 {
+	txreq -url "/"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.X-Varnish == "1001"
+	expect resp.http.foobar == "_barf_"
+	expect resp.http.snafu1 == "_bararf_"
+	expect resp.http.snafu2 == "_frap_"
+	expect resp.http.snafu3 == "_f\\rap_"
+	expect resp.http.snafu4 == "_f&rap_"
+	expect resp.http.snafu5 == "_barffra\p_"
+	# NB: have to escape the \\ in the next line
+	expect resp.http.snafu6 == "_f&rap\\_"
+} -run

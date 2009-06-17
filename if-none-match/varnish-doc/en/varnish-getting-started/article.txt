@@ -1,0 +1,261 @@
+Getting started with Varnish
+
+1. What is Varnish?
+
+Varnish is a state-of-the-art, high-performance HTTP accelerator for server-side caching of web-pages. 
+
+Many Content Management systems (CMS) suffer from performance problems on the HTTP-server side. This is a natural result of the complex content generation process which requires many database look-ups and a CPU intensive page composition. Varnish reduces the load on the CMS by caching frequently used pages, images and other web-objects and serving these cached copies to the clients.
+
+Varnish is written bottom up to be a server side cache, designed to exploit computer hardware and operating system facilities to the very limit of their performance. 
+
+Varnish is also written as a content provider tool, to give full and precise control over the content and offers unlimited flexibility to improve on the service of the CMS system backend.
+
+Features of Varnish 
+* Very fast
+* Web-acceleration for slow CMS systems
+* Written as a reverse proxy from the ground up 
+* Narrow focus on server side speedup
+* Content provider features
+* SMP/Multicore friendly architecture
+* Blablabla 
+
+
+2. Installing Varnish
+
+Varnish packages are readily available for the major Linux distributions, such as Redhat, Suse and Debian. For other Linux distributions, FreeBSD and other supported platforms, Varnish must be compiled and installed from the source. The source ban be obtained from the Varnish web site, either by downloading a release tar ball or by checking out the source from the Subversion repository. For instructions on building Varnish, please refer to the project website.
+
+3. Configuring Varnish
+
+The Varnish daemon is configured by using command line options and the powerful Varnish Configuration Language (VCL). The location of the default VCL configuration file and the command line options varies, depending on what platform you have installed Varnish on. Blablablabla.
+
+3.x Command line options
+
+The command line options configures the basics of the Varnish daemon, like the listen address and port, which VCL script to use and the working directory. The following options can be set (taken from the on-line help):
+
+-a address:port              # HTTP listen address and port
+-b address:port              # backend address and port
+							 #    -b <hostname_or_IP>
+							 #    -b '<hostname_or_IP>:<port_or_service>'
+-d                           # debug
+-f file                      # VCL script
+-F                           # Run in foreground
+-h kind[,hashoptions]        # Hash specification
+							 #   -h simple_list
+							 #   -h classic  [default]
+							 #   -h classic,<buckets>
+-l bytesize                  # Size of shared memory log
+-n dir                       # varnishd working directory
+-P file                      # PID file
+-p param=value               # set parameter
+-s kind[,storageoptions]     # Backend storage specification
+							 #   -s malloc
+							 #   -s file  [default: use /tmp]
+							 #   -s file,<dir_or_file>
+							 #   -s file,<dir_or_file>,<size>
+							 #   -s file,<dir_or_file>,<size>,<granularity>
+-t                           # Default TTL
+-T address:port              # Telnet listen address and port
+-V                           # version
+-w int[,int[,int]]           # Number of worker threads
+							 #   -w <fixed_count>
+							 #   -w min,max
+							 #   -w min,max,timeout [default: -w2,500,300]
+-u user                      # Priviledge separation user id
+
+The -f option points to the VCL script to use. If it is omitted, the -b option must be used to define a backend to use with the default configuration. To enable the command-line management interface, the -T option must be used. This will enable telneting to the defined port to pass commands to the running Varnish daemon either using varnishadm or use telnet directly to the port to access the command-line interface.
+
+3.x VCL
+
+VCL is a small domain-specific language designed to be used to define request handling and document caching policies for the Varnish HTTP accelerator. Some of the features of VCL are:
+
+* simple syntax, similar to that of Perl and C
+* access to and manipulation of requests
+* regular expressions for matching
+* user defined sub-routines
+* access control lists
+* 
+
+The VCl configuration mainly consists of the backend and ACL definitions and a number of special sub-routines that hook into the Varnish workflow. These sub-routines may inspect and manipulate HTTP headers and various other aspects of each request, and to a certain extent decide how the request should be handled. The Varnish workflow looks like this:
+
+Request -> vcl_recv -> vcl_pass ---------------------
+              |                                     |
+		      |                                     v
+		      |----->  vcl_hash -> vcl_miss -> vcl_fetch
+              |             |                       |
+	          |             |                       v
+		      |			    -----> vcl_hit  -> vcl_deliver
+		      |                                     |
+		      |                                     v
+		      |------> vcl_pipe                 Response
+                    |
+					v                         
+ 		     <- Move bytes ->
+
+The direction in the workflow is determined in each sub-routine by a given keyword.
+
+Function	| Description							| Possible keywords
+------------------------------------------------------------------------------
+vcl_recv	| Called after receiving a request. 	| error, pass, pipe
+			| Decides how to serve the request		| 
+ 			|										|
+vcl_pipe	| Called after entering pipe mode. 		| error, pipe
+			| Creates a direct connection between   |
+			| the client and the backend, bypassing |
+			| Varnish all together.					|
+			|									 	|	
+vcl_pass	| Called after entering pass mode. 		| error, pass
+			| Unlike pipe mode, only the current    |
+			| request bypasses Varnish. Subsequent  | 
+			| requests for the same connection are  |
+			| handled normally.                     |
+			|									 	|	
+vcl_hash	| Called when computing the hash key    | hash
+			| for an object. 						|
+			|										|
+vcl_hit		| Called after a cache hit.				| error, pass, deliver
+			|									 	|	
+vcl_miss 	| Called after a cache miss.			| error, pass, fetch
+			|									 	|	
+vcl_fetch 	| Called after a successful retrieval  | error, pass, insert
+			| from the backend. An 'insert' will 	| 
+			| add the retrieved object in the cache |
+			| and then continue to vcl_deliver		|
+			|										|
+vcl_deliver | Called before the cached object is    | error, deliver
+			| delivered to the client.				|
+			|										|
+vcl_timeout | Called by the reaper thread shortly	| discard, fetch
+			| before an object expires in the cache	|
+			| 'discard' will discard the object and |
+			| 'fetch' will retrieve a fresh copy	|
+			|										|
+vcl_discard	| Called by the reaper thread when a    | discard, keep
+			| cached object is about to be 			|
+			| discarded due to expiration or space  |
+			| is running low						|
+
+Varnish comes with a default configuration built in (ref til default VCL?), so it is not necessary to define all the sub-routines. The default is fairly reasonable, so Varnish should work right out of the box pretty much works right out of the box after defining a backend. It should be noted that the default sub-routines will be invoked even if the custom configuration does not terminate the sub-routine with one of the valid keywords.
+
+
+3.x.y Defining  a backend and the use of directors
+
+A backend can either be set by using the -b command line option, or by defining it in the VCL configuration file. A backend declaration in VCL is defined like this:
+
+backend www {
+	.host = "www.example.com";
+	.port = "http";
+}
+
+The backend object can later be used to select a backend at request time:
+
+if (req.http.host ~ "^(www.)?example.com$") {
+
+	set req.backend = www;
+}
+
+If there are several backends delivering the same content, they can be grouped together using a director declaration:
+
+director www-director round-robin {
+	{ .backend = www; }
+	{ .backend = { .host = "www2.example.com; .port = "http"; } }
+}
+
+A director will choose one of the defined backend depending on its policy. A 'random' director will choose a random backend, biased by a weight for each backend, and a 'round-robin' backend will choose a backend in a round robin fashion.  The director object can be used in the same way as the backend object for selecting a backend:
+
+if (req.http.host ~ "^(www.)?example.com$") {
+
+	set req.backend = www-director;
+}
+
+3.x.y Access Control Lists 
+
+An Access Control List (ACL) declaration creates and initializes a named access control list which can later be used to match client addresses:
+
+acl local {
+	"localhost";         /* myself */
+	"192.0.2.0"/24;      /* and everyone on the local network */
+	! "192.0.2.23";      /* except for the dialin router */
+}
+
+To match an IP address against an ACL, simply use the match operator:
+
+if (client.ip ~ local) {
+	pipe;
+}
+
+3.x.y Examples
+
+As previously mentioned, Varnish comes with a default set of sub-routines which are used if they are missing or does not terminate with a keyword. Tuning is of course an important part of implementing a cache, so a custom configuration is most likely needed. Here are some examples to get you going.
+
+Selecting a backend based on the type of document can be done with the regular expression matching operator.
+
+sub vcl_recv {
+	if (req.url ~ ”\.(gif|jpg|swf|css|j)$”) {
+		unset req.http.cookie;
+		unset req.http.authenticate;
+		set req.backend = b1;
+	} else {
+		set req.backend = b2;
+	}
+}
+
+Retrying with another backend if one backend reports a non-200 response.
+
+sub vcl_recv {
+	if (req.restarts == 0) {
+		set req.backend = b1;
+	} else {
+		set req.backend = b2;
+	}
+}
+
+sub vcl_fetch {
+	if (obj.status != 200) {
+		restart;
+	}  
+}
+
+Preventing search engines from populating the cache with old documents can easily be done by checking the user-agent header in the HTTP request.
+
+sub vcl_miss {
+	if (req.http.user-agent ~ ”spider”) {
+		error 503 ”Not presently in cache”;
+	}
+}
+
+Since it is possible to rewrite the request, fixing typos can be done in VCL.
+
+sub vcl_recv {
+	if (req.url == ”index.hmtl”) {
+		set req.url = ”index.html”;
+	}
+}
+
+
+Blablablabla. More examples?
+
+4. Running Varnish
+
+Varnish is typically invoked from a init-script, depending on how you installed Varnish. Blablablabla.
+
+
+5. Varnish tools
+
+Varnish comes bundled with a set of command line tools which are useful for monitoring and administrating Varnish. These are
+
+* varnishncsa: Displays the varnishd shared memory logs in Apache / NCSA combined log format
+* varnishlog:  Reads and presents varnishd shared memory logs.
+* varnishstat: Displays statistics from a running varnishd instance.
+* varnishadm: Sends a command to the running varnishd instance.
+* varnishhist: Reads varnishd(1) shared memory logs and presents a continuously updated histogram showing the distribution of the last N requests by their processing.  
+* varnishtop:  Reads varnishd shared memory logs and presents a continuously updated list of the most commonly occurring log entries.
+* varnishreplay: Parses varnish logs and attempts to reproduce the traffic.
+
+For further information and example of usage, please refer to the man-pages.
+
+
+6. Further documentation
+
+The project web site is a good source for information about Varnish, with updated news, mailings lists and more. The web site is located at http://www.varnish-cache.org.
+
+For on-line reference manual, man-pages exists for both the VCL language as well as all the Varnish command line tools.

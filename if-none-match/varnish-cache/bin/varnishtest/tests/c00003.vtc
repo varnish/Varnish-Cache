@@ -1,0 +1,23 @@
+# Test that we get anything through at all
+#
+# $Id$
+
+test "Check that we start if at least one listen address works"
+
+server s1 {
+	rxreq 
+	txresp -hdr "Connection: close" -body "012345\n"
+} -start
+
+# 198.18.1.1 is IANA-reserved for Network Interconnect Device
+# Benchmark Testing
+varnish v1 -cliok "param.set listen_address 198.18.1.1:9082"
+varnish v1 -vcl+backend {} -clierr 300 start
+varnish v1 -cliok "param.set listen_address :9081,127.0.0.2:9082"
+varnish v1 -start
+
+client c1 {
+	txreq -url "/"
+	rxresp
+	expect resp.status == 200
+} -run

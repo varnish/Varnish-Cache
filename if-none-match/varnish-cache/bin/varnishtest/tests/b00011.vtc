@@ -1,0 +1,20 @@
+# $Id$
+
+test "Check HTTP/1.0 EOF transmission"
+
+server s1 {
+	rxreq 
+	txresp -hdr "Connection: close" 
+	send "Body line 1\n"
+	send "Body line 2\n"
+	send "Body line 3\n"
+} -start
+
+varnish v1 -vcl+backend {} -start
+
+client c1 {
+	txreq -url "/"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.content-length == 36
+} -run
