@@ -377,6 +377,12 @@ FetchHdr(struct sess *sp)
 
 	if (i < 0) {
 		VBE_ClosedFd(sp);
+		if (i == -2)
+			WSL(sp->wrk, SLT_Debug, sp->fd, "Session workspace overflow (%s:%d)",
+			    __FILE__, __LINE__);
+		if (i == -1)
+			WSL(sp->wrk, SLT_Debug, sp->fd, "Read error (%s:%d)",
+			    __FILE__, __LINE__);
 		/* XXX: other cleanup ? */
 		return (__LINE__);
 	}
