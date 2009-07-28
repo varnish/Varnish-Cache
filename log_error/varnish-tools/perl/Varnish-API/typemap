@@ -1,0 +1,46 @@
+__const char *					T_PTROBJ
+__const char * __restrict			T_PTROBJ
+__const struct itimerspec * __restrict		T_PTROBJ
+__const struct timespec *			T_PTROBJ
+__const struct tm *				T_PTROBJ
+__const struct tm * __restrict			T_PTROBJ
+__const time_t *				T_PTROBJ
+__const time_t * __restrict			T_PTROBJ
+__locale_t					T_PTROBJ
+char * __restrict				T_PTROBJ
+clock_t						T_PTROBJ
+clockid_t					T_IV
+clockid_t *					T_PTROBJ
+
+pid_t						T_IV
+struct VSL_data *				T_PTROBJ
+struct itimerspec *				T_PTROBJ
+struct itimerspec * __restrict			T_OPAQUE_STRUCT
+struct sigevent * __restrict			T_OPAQUE_STRUCT
+struct timespec *				T_PTROBJ
+struct tm *					T_PTROBJ
+struct tm * __restrict				T_OPAQUE_STRUCT
+struct varnish_stats *				T_PTROBJ
+time_t *					T_PTROBJ
+timer_t						T_PTR
+timer_t * __restrict				T_PTROBJ
+unsigned char **				T_PTROBJ
+vsl_handler *					T_PTROBJ
+#############################################################################
+INPUT
+T_OPAQUE_STRUCT
+	if (sv_derived_from($arg, \"${ntype}\")) {
+	    STRLEN len;
+	    char  *s = SvPV((SV*)SvRV($arg), len);
+
+	    if (len != sizeof($var))
+		croak(\"Size %d of packed data != expected %d\",
+			len, sizeof($var));
+	    $var = *($type *)s;
+	}
+	else
+	    croak(\"$var is not of type ${ntype}\")
+#############################################################################
+OUTPUT
+T_OPAQUE_STRUCT
+	sv_setref_pvn($arg, \"${ntype}\", (char *)&$var, sizeof($var));

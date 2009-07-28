@@ -1,0 +1,129 @@
+# $Id$
+
+test "VCL compiler coverage test: vcc_action.c"
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_hit { restart ; }
+	sub vcl_miss { restart rollback; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_hit { restart 2 ; }
+}
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { error beresp.status ; }
+}
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_miss { error req.url ; }
+	sub vcl_pass { error "the butter please" ; }
+	sub vcl_fetch { error beresp.status req.url; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { error 404 req.grace; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_miss { set server.port = 1000; }
+}
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { set beresp.ttl /= 2; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { set beresp.ttl >>= 2; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { set req.backend += b; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { set req.url += server.port; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	/* XXX: This should not really be an error */
+	sub vcl_recv { set req.url = "foo" if "bar"; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_hash { set req.hash += 1; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { set req.url = 1; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { set obj.cacheable += 1; }
+}
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { set beresp.cacheable = true; }
+}
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { set beresp.cacheable = false; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { set beresp.cacheable = mu; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_fetch { unset beresp.cacheable; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { purge_url (if); }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { purge_hash (if); }
+}
+
+varnish v1 -vcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { purge_hash ("foo"); }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { panic if; }
+}
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_recv { kluf ; }
+}
+
+
+varnish v1 -badvcl {
+	backend b { .host = "127.0.0.1"; }
+	sub vcl_error { synthetic if "foo"; }
+}
+

@@ -1,0 +1,2 @@
+address=Address to varnish,3,localhost
+port=Port number varnish listens for telnet connections on,3,23
