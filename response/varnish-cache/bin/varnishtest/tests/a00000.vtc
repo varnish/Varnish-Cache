@@ -1,0 +1,19 @@
+# $Id$
+
+test "basic default HTTP transactions"
+
+server s1 -listen 127.0.0.1:9080 {
+	rxreq
+	txresp 
+}
+
+server s1 -start 
+
+client c1 -connect 127.0.0.1:9080 {
+	txreq 
+	rxresp
+}
+
+client c1 -run
+
+server s1 -wait

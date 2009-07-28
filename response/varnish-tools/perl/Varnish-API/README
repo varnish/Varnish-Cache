@@ -1,0 +1,30 @@
+Varnish-API version 1.99
+========================
+
+This module is an interface to the Varnish log file and stats.
+Varnish a high performance reverse proxy at varnish.projects.linpro.no
+
+INSTALLATION
+
+To install this module type the following:
+
+   perl Makefile.PL
+   make
+   make test
+   make install
+
+DEPENDENCIES
+
+This module requires these other modules and libraries:
+
+     libvarnish
+
+COPYRIGHT AND LICENCE
+
+Copyright (C) 2009 by Artur Bergman
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.8 or,
+at your option, any later version of Perl 5 you may have available.
+
+

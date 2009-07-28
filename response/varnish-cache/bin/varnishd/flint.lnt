@@ -1,0 +1,158 @@
+
+-d__flexelint_v9__=1
+
+//-sem (pthread_mutex_lock, thread_lock)
+-sem (pthread_mutex_trylock, thread_lock)
+-sem (VBE_DropRefLocked, thread_unlock)
+-e459	// unlocked access from func-ptr
+-e454	// mutex not released (...ReleaseLocked)
+-e457	// unprotected access
+-e777	// float equality comparison
+
+-esym(458, lbv_assert)	// unlocked access
+-esym(458, params)	// unlocked access
+
+-emacro(835, HTTPH)	// Info 835: A zero has been given as left argument to operator '&'
+-emacro(845, HTTPH)	// Info 845: The left argument to operator '&&' is certain to be 0
+//////////////
+-efunc(1791, pdiff)	// return last on line
+//////////////
+-efile(451, "sys/*.h")	// No include guard
+-efile(451, "machine/*.h")	// No include guard
+-efile(451, "vcl_returns.h")	// No include guard
+-efile(451, "cache_backend_poll.h")	// No include guard
+-efile(451, "steps.h")	// No include guard
+-efile(451, "http_headers.h")	// No include guard
+-efile(451, "stat_field.h")	// No include guard
+-efile(451, "acct_fields.h")	// No include guard
+-efile(451, "config.h")	// No include guard
+//////////////
+// -e458			// unprotected access
+// -e456			// merged locking paths
+-sem(vca_thread_acct, thread_mono)
+-sem(vca_epoll_thread, thread_mono)
+-sem(vca_kqueue_thread, thread_mono)
+-sem(vca_poll_thread, thread_mono)
+-sem(vca_ports_thread, thread_mono)
+-sem(exp_timer, thread_mono)
+-sem(wrk_herdtimer_thread, thread_mono)
+-sem(wrk_herder_thread, thread_mono)
+-esym(458, VSL_stats)
+-esym(458, heritage)
+-esym(458, name_key)
+-esym(528, svnid)
+//////////////
+-passes=3
+
++libh mgt_event.h
++libh ../../config.h
+
+-emacro((???),va_arg)   // the va_arg() macro can yield 415, 416, 661, 662
+                        // 796 and 797 (out-of-bounds errors).
+-elib(123)  // size is both a variable and a macro with args
+-emacro(736, isnan)  // isnanf
+-efile(766, ../../config.h)
+-emacro(413, offsetof)	// likely null pointer
+-emacro(527, WRONG)	// unreachable code
+
+-emacro(702, WEXITSTATUS)	// signed shift right 
+-efunc(525, VCC_Return_Name)	// Negative indent
+
+
+
+// -header(../../config.h)
+
+// Fix strchr() semtics, it can only return NULL if arg2 != 0
+-sem(strchr, 1p, type(1), 2n == 0 ? (@p < 1p) : (@p < 1p || @p == 0 ))
+
+-sem(vsb_new, @p == (1p ? 1p : malloc(1)))
+-sem(vsb_delete, custodial(1))
+-sem(pthread_create, custodial(4))
+-sem(lbv_assert, r_no)
+-sem(lbv_xxxassert, r_no)
+-sem(WS_Init, custodial(2))
+-sem(http_Setup, custodial(2))
+
+-ffc	// No automatic custody
+
+-e455	// thread lock
+-e458	// unprotected read
+-e763	// Redundant declaration for symbol '...' previously declared
+-e726	// Extraneous comma ignored
+-e728	// Symbol ... not explicitly initialized
+-e716	// while(1) ... 
+-e785	// Too few initializers for aggregate 
+-e786	// String concatenation within initializer
+
+-emacro(740, VTAILQ_PREV) // Unusual pointer cast (incompatible indirect types)
+-emacro(740, VTAILQ_LAST) // Unusual pointer cast (incompatible indirect types)
+-emacro((826), VTAILQ_PREV) // Suspicious pointer-to-pointer conversion (area too small)
+-emacro((826), VTAILQ_LAST) // Suspicious pointer-to-pointer conversion (area too small)
+-emacro(506, VTAILQ_FOREACH_SAFE) // constant value boolean
+
+-esym(765, vcc_ProcAction) // could be made static
+-esym(759, vcc_ProcAction) // could be moved to module
+-esym(714, vcc_ProcAction) // not ref.
+
+-esym(534, sprintf)	// Ignoring return value of function
+-esym(534, asprintf)	// Ignoring return value of function
+-esym(534, printf)	// Ignoring return value of function
+-esym(534, fprintf)	// Ignoring return value of function
+-esym(534, memset)	// Ignoring return value of function
+-esym(534, memcpy)	// Ignoring return value of function
+-esym(534, memmove)	// Ignoring return value of function
+-esym(534, strcpy)	// Ignoring return value of function
+-esym(534, vsb_printf)	// Ignoring return value of function
+-esym(534, vsb_vprintf)	// Ignoring return value of function
+-esym(534, vsb_cat)	// Ignoring return value of function
+-esym(534, vsb_bcat)	// Ignoring return value of function
+-esym(534, vsb_putc)	// Ignoring return value of function
+-esym(534, strcat)	// Ignoring return value of function
+-esym(534, strcpy)	// Ignoring return value of function
+-esym(534, strlcpy)	// Ignoring return value of function
+-esym(765, panicstr)	// Could be static
+
+-emacro(506, isnan, isfinite)	// constant value boolean
+-emacro(736, isfinite)	// loss of precision
+-emacro(747, isnan)	// significant coersion
+-emacro(506, assert)	// constant value boolean
+-emacro(827, assert)	// loop not reachable
+-emacro(774, assert)	// booelan always true
+-emacro(774, HTTPH)	// always false
+-emacro(527, ARGV_ERR)	// unreachable
+
+-e788			// enum value not used in defaulted switch
+
+// cache.h
+-emacro(506, INCOMPL) // Constant value Boolean
+
+// cache_center.c
+-efunc(525, CNT_Session)	// Negative indentation from line
+-efunc(525, http_FilterFields)	// Negative indentation from line
+-efunc(539, http_FilterFields)	// Positive indentation from line
+
+// cache_vcl.c
+-efunc(525, vcl_handlingname)	// Negative indentation from line
+-esym(528, vcl_handlingname)	// Not referenced
+-e641	// Converting enum 'cli_status_e' to int
+
+// Review all below this line ///////////////////////////////////////////////
+
+-e732   // Loss of sign (arg. no. 2) (int to unsigned
+-e737	// [45]  Loss of sign in promotion from int to unsigned
+-e713	// Loss of precision (assignment) (unsigned long long to long long)
+-e574	// Signed-unsigned mix with relational
+-e712	// Loss of precision (assignment) (long long to
+-e747	// Significant prototype coercion (arg. no. 2) long
+
+/*
+
+-e767	// Macro redef (system queue.h vs ours )
+
+-e506	// Constant value boolean
+-e818	// Pointer parameter '...' could be declared as pointing to const
+-e774	// Boolean within 'if' always evaluates to False
+-e534	// Ignoring return value of function
+-e557	// unrecog format
+
+*/

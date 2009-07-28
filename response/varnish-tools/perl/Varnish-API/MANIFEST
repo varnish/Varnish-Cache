@@ -1,0 +1,16 @@
+API.xs
+Changes
+fallback/const-c.inc
+fallback/const-xs.inc
+lib/Varnish/API.pm
+Makefile.PL
+MANIFEST
+ppport.h
+README
+t/api.t
+t/log.t
+t/logtag.t
+t/stats.t
+t/Varnish-API.t
+t/vsl_tags.t
+typemap

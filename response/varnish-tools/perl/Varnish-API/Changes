@@ -1,0 +1,6 @@
+Revision history for Perl extension Varnish::API.
+
+1.99  Mon Jul 13 20:33:22 2009
+	- original version; created by h2xs 1.23 with options
+		-x -n Varnish::API /usr/include/varnish/varnishapi.h
+
