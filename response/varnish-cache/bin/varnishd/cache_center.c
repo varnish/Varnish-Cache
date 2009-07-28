@@ -341,14 +341,20 @@ cnt_error(struct sess *sp)
 	TIM_format(TIM_real(), date);
 	http_PrintfHeader(w, sp->fd, h, "Date: %s", date);
 	http_PrintfHeader(w, sp->fd, h, "Server: Varnish");
-	http_PrintfHeader(w, sp->fd, h, "Retry-After: %d", params->err_ttl);
+	if (sp->step != STP_RESP)
+		http_PrintfHeader(w, sp->fd, h, "Retry-After: %d", params->err_ttl);
 
 	if (sp->err_reason != NULL)
 		http_PutResponse(w, sp->fd, h, sp->err_reason);
 	else
 		http_PutResponse(w, sp->fd, h,
 		    http_StatusMessage(sp->err_code));
-	VCL_error_method(sp);
+
+	if (sp->step == STP_RESP) {
+		VCL_resp_method(sp);
+	} else {
+		VCL_error_method(sp);
+	}
 
 	if (sp->handling == VCL_RET_RESTART) {
 		HSH_Drop(sp);
@@ -359,7 +365,9 @@ cnt_error(struct sess *sp)
 	}
 
 	/* We always close when we take this path */
-	sp->doclose = "error";
+	if (sp->step != STP_RESP)
+		sp->doclose = "error";
+	
 	sp->wantbody = 1;
 
 	assert(sp->handling == VCL_RET_DELIVER);
@@ -368,6 +376,26 @@ cnt_error(struct sess *sp)
 	sp->wrk->bereq = NULL;
 	sp->step = STP_DELIVER;
 	return (0);
+}
+
+/*--------------------------------------------------------------------
+ * Emit a synthetic response without closing the connection
+ *
+DOT subgraph xcluster_resp {
+DOT	vcl_resp [
+DOT		shape=record
+DOT		label="vcl_resp()|resp|req"
+DOT	]
+DOT	RESP -> vcl_resp
+DOT	vcl_resp-> deliver [label=deliver]
+DOT }
+ */
+
+static int
+cnt_resp(struct sess *sp)
+{
+	sp->err_code = 200;
+	return cnt_error(sp);
 }
 
 /*--------------------------------------------------------------------
@@ -1012,6 +1040,9 @@ cnt_recv(struct sess *sp)
 	case VCL_RET_ERROR:
 		/* XXX: discard req body, if any */
 		sp->step = STP_ERROR;
+		return (0);
+	case VCL_RET_RESP:
+		sp->step = STP_RESP;
 		return (0);
 	default:
 		WRONG("Illegal action in vcl_recv{}");

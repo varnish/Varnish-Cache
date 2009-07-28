@@ -34,7 +34,7 @@
 # Second element is list of valid return actions.
 #
 set methods {
-	{recv		{error pass pipe lookup}}
+	{recv		{error resp pass pipe lookup}}
 	{pipe		{error pipe}}
 	{pass		{error restart pass}}
 	{hash		{hash}}
@@ -43,6 +43,7 @@ set methods {
 	{fetch		{error restart pass deliver}}
 	{deliver	{restart deliver}}
 	{error		{restart deliver}}
+	{resp		{restart deliver}}
 }
 
 # These are the return actions
@@ -58,6 +59,7 @@ set returns {
 	discard
 	keep
 	restart
+	resp    
 }
 
 # Language keywords

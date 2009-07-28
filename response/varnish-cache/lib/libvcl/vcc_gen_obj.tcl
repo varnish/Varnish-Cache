@@ -38,7 +38,7 @@ set spobj {
     # Connection related parameters
     { client.ip
 	RO IP
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"const struct sess *"
     }
     { client.bandwidth				 # Not implemented yet
@@ -48,47 +48,47 @@ set spobj {
     }
     { server.ip
 	RO IP
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"struct sess *"
     }
     { server.hostname
 	RO STRING
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"struct sess *"
     }
     { server.identity
 	RO STRING
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"struct sess *"
     }
     { server.port
 	RO INT
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"struct sess *"
     }
     # Request paramters
     { req.request
 	RW STRING
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"const struct sess *"
     }
     { req.url
 	RW STRING
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"const struct sess *"
     }
     { req.proto
 	RW STRING
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"const struct sess *"
     }
     { req.http.
 	RW HDR_REQ
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"const struct sess *"
     }
 
-    # Possibly misnamed, not really part of the request
+    # Possibly misnamed, not really part of the request resp
     { req.hash
 	WO HASH
 	{               hash                                       error }
@@ -96,12 +96,12 @@ set spobj {
     }
     { req.backend
 	RW BACKEND
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"struct sess *"
     }
     { req.restarts
 	RO INT
-	{recv pipe pass hash miss hit fetch deliver                error }
+	{recv pipe pass hash miss hit fetch deliver resp           error }
 	"const struct sess *"
     }
     { req.grace
@@ -112,7 +112,7 @@ set spobj {
 
     { req.xid
 	RO STRING
-	{recv pipe pass hash miss hit fetch deliver		   error}
+	{recv pipe pass hash miss hit fetch deliver resp	   error}
 	"struct sess *"
     }
 
@@ -202,27 +202,27 @@ set spobj {
     # The (possibly) cached object
     { obj.proto
 	RW STRING
-	{                         hit                               error}
+	{                         hit       resp                    error}
 	"const struct sess *"
     }
     { obj.status
 	RW INT
-	{                                                           error}
+	{                                   resp                    error}
 	"const struct sess *"
     }
     { obj.response
 	RW STRING
-	{                                                           error}
+	{                                   resp                    error}
 	"const struct sess *"
     }
     { obj.hits
 	RO INT
-	{			  hit       deliver                      }
+	{			  hit       deliver   resp               }
 	"const struct sess *"
     }
     { obj.http.
 	RW HDR_OBJ
-	{                         hit       			    error}
+	{                         hit       	resp		    error}
 	"const struct sess *"
     }
 

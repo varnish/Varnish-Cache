@@ -134,3 +134,8 @@ sub vcl_error {
 "};
     return (deliver);
 }
+
+sub vcl_resp {
+
+    return (deliver);
+}

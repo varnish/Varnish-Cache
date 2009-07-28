@@ -23,8 +23,9 @@ typedef int vcl_func_f(struct sess *sp);
 #define VCL_MET_FETCH		(1 << 6)
 #define VCL_MET_DELIVER		(1 << 7)
 #define VCL_MET_ERROR		(1 << 8)
+#define VCL_MET_RESP		(1 << 9)
 
-#define VCL_MET_MAX		9
+#define VCL_MET_MAX		10
 
 /* VCL Returns */
 #define VCL_RET_ERROR		0
@@ -37,8 +38,9 @@ typedef int vcl_func_f(struct sess *sp);
 #define VCL_RET_DISCARD		7
 #define VCL_RET_KEEP		8
 #define VCL_RET_RESTART		9
+#define VCL_RET_RESP		10
 
-#define VCL_RET_MAX		10
+#define VCL_RET_MAX		11
 
 struct VCL_conf {
 	unsigned	magic;
@@ -69,4 +71,5 @@ struct VCL_conf {
 	vcl_func_f	*fetch_func;
 	vcl_func_f	*deliver_func;
 	vcl_func_f	*error_func;
+	vcl_func_f	*resp_func;
 };

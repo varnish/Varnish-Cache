@@ -17,11 +17,13 @@ VCL_RET_MAC(deliver, DELIVER)
 VCL_RET_MAC(discard, DISCARD)
 VCL_RET_MAC(keep, KEEP)
 VCL_RET_MAC(restart, RESTART)
+VCL_RET_MAC(resp, RESP)
 #endif
 
 #ifdef VCL_MET_MAC
 VCL_MET_MAC(recv,RECV,
      ((1 << VCL_RET_ERROR)
+    | (1 << VCL_RET_RESP)
     | (1 << VCL_RET_PASS)
     | (1 << VCL_RET_PIPE)
     | (1 << VCL_RET_LOOKUP)
@@ -61,6 +63,10 @@ VCL_MET_MAC(deliver,DELIVER,
     | (1 << VCL_RET_DELIVER)
 ))
 VCL_MET_MAC(error,ERROR,
+     ((1 << VCL_RET_RESTART)
+    | (1 << VCL_RET_DELIVER)
+))
+VCL_MET_MAC(resp,RESP,
      ((1 << VCL_RET_RESTART)
     | (1 << VCL_RET_DELIVER)
 ))
