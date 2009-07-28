@@ -223,9 +223,11 @@ VBE_GetFd(struct sess *sp)
 
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
-
 	AN (sp->director->getfd);
 	sp->vbe = sp->director->getfd(sp);
+	if (!sp->vbe)
+		WSL(sp->wrk, SLT_Debug, sp->fd, "No backend available from %s (%s:%d)",
+		    sp->director->vcl_name, __FILE__, __LINE__);
 }
 
 /*--------------------------------------------------------------------
