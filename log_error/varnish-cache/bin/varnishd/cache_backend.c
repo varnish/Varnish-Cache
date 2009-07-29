@@ -223,6 +223,7 @@ VBE_GetFd(struct sess *sp)
 
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CHECK_OBJ_NOTNULL(sp->director, DIRECTOR_MAGIC);
+
 	AN (sp->director->getfd);
 	sp->vbe = sp->director->getfd(sp);
 	if (!sp->vbe)
