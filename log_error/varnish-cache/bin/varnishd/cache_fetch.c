@@ -431,9 +431,15 @@ FetchBody(struct sess *sp)
 		/* nothing */
 	} else if (http_GetHdr(hp, H_Content_Length, &b)) {
 		cls = fetch_straight(sp, sp->wrk->htc, b);
+		if (cls < 0)
+			WSL(sp->wrk, SLT_Debug, vc->fd, "Couldn't fetch straight reply (%s:%d)",
+			    __FILE__, __LINE__);
 		mklen = 1;
 	} else if (http_HdrIs(hp, H_Transfer_Encoding, "chunked")) {
 		cls = fetch_chunked(sp, sp->wrk->htc);
+		if (cls < 0)
+			WSL(sp->wrk, SLT_Debug, vc->fd, "Couldn't fetch chunked reply (%s:%d)",
+			    __FILE__, __LINE__);
 		mklen = 1;
 	} else if (http_GetHdr(hp, H_Transfer_Encoding, &b)) {
 		/* XXX: AUGH! */
@@ -453,12 +459,18 @@ FetchBody(struct sess *sp)
 		 * comes in any case.
 		 */
 		cls = fetch_eof(sp, sp->wrk->htc);
+		if (cls < 0)
+			WSL(sp->wrk, SLT_Debug, vc->fd, "Couldn't fetch eof reply (%s:%d)",
+			    __FILE__, __LINE__);
 		mklen = 1;
 	} else if (hp->protover < 1.1) {
 		/*
 		 * With no Connection header, assume EOF
 		 */
 		cls = fetch_eof(sp, sp->wrk->htc);
+		if (cls < 0)
+			WSL(sp->wrk, SLT_Debug, vc->fd, "Couldn't fetch eof reply (%s:%d)",
+			    __FILE__, __LINE__);
 		mklen = 1;
 	} else {
 		/*
