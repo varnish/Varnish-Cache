@@ -981,6 +981,7 @@ cnt_recv(struct sess *sp)
 	if (sp->restarts >= params->max_restarts) {
 		if (sp->err_code == 0)
 			sp->err_code = 503;
+		WSL(sp->wrk, SLT_Debug, sp->id, "Max restarts (%s:%d)", __FILE__, __LINE__);
 		sp->step = STP_ERROR;
 		return (0);
 	}
@@ -1079,6 +1080,7 @@ cnt_start(struct sess *sp)
 		if (strcmp(p, "100-continue")) {
 			sp->err_code = 417;
 			sp->step = STP_ERROR;
+			WSL(sp->wrk, SLT_Debug, sp->id, "Expect 100-continue not supported (%s:%d)", __FILE__, __LINE__);
 			return (0);
 		}
 
