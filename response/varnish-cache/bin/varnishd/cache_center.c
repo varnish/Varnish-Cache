@@ -341,7 +341,7 @@ cnt_error(struct sess *sp)
 	TIM_format(TIM_real(), date);
 	http_PrintfHeader(w, sp->fd, h, "Date: %s", date);
 	http_PrintfHeader(w, sp->fd, h, "Server: Varnish");
-	if (sp->step != STP_RESP)
+	if (sp->step != STP_RESPONSE)
 		http_PrintfHeader(w, sp->fd, h, "Retry-After: %d", params->err_ttl);
 
 	if (sp->err_reason != NULL)
@@ -350,8 +350,8 @@ cnt_error(struct sess *sp)
 		http_PutResponse(w, sp->fd, h,
 		    http_StatusMessage(sp->err_code));
 
-	if (sp->step == STP_RESP) {
-		VCL_resp_method(sp);
+	if (sp->step == STP_RESPONSE) {
+		VCL_response_method(sp);
 	} else {
 		VCL_error_method(sp);
 	}
@@ -365,7 +365,7 @@ cnt_error(struct sess *sp)
 	}
 
 	/* We always close when we take this path */
-	if (sp->step != STP_RESP)
+	if (sp->step != STP_RESPONSE)
 		sp->doclose = "error";
 	
 	sp->wantbody = 1;
@@ -392,7 +392,7 @@ DOT }
  */
 
 static int
-cnt_resp(struct sess *sp)
+cnt_response(struct sess *sp)
 {
 	sp->err_code = 200;
 	return cnt_error(sp);
@@ -1041,8 +1041,8 @@ cnt_recv(struct sess *sp)
 		/* XXX: discard req body, if any */
 		sp->step = STP_ERROR;
 		return (0);
-	case VCL_RET_RESP:
-		sp->step = STP_RESP;
+	case VCL_RET_RESPONSE:
+		sp->step = STP_RESPONSE;
 		return (0);
 	default:
 		WRONG("Illegal action in vcl_recv{}");
