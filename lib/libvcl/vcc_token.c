@@ -348,13 +348,26 @@ vcc_decstr(struct vcc *tl)
 {
 	char *q;
 	unsigned int l;
+	unsigned int i, o;
 
 	assert(tl->t->tok == CSTR);
 	l = (tl->t->e - tl->t->b) - 2;
 	tl->t->dec = TlAlloc(tl, l + 1);
 	assert(tl->t->dec != NULL);
 	q = tl->t->dec;
-	memcpy(q, tl->t->b + 1, l);
+	i = 1;
+	o = 0;
+	while (i <= l) {
+		if (tl->t->b[i] == '\\') {
+			i += BackSlash(&tl->t->b[i], &q[o]);
+			o++;
+			continue;
+		}
+		q[o] = tl->t->b[i];
+		i++;
+		o++;
+	}
+	printf("%s\n", q);
 	q[l] = '\0';
 	return (0);
 }
@@ -495,6 +508,11 @@ vcc_Lexer(struct vcc *tl, struct source *sp)
 		/* Match strings, with \\ and \" escapes */
 		if (*p == '"') {
 			for (q = p + 1; q < sp->e; q++) {
+				if (q+1 < sp->e && q[0] == '\\' &&
+				    (q[1] == '\\' || q[1] == '"')) {
+					q += 2;
+					continue;
+				}
 				if (*q == '"') {
 					q++;
 					break;
