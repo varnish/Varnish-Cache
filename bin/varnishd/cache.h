@@ -437,13 +437,12 @@ struct objcore {
 	unsigned		priv2;
 	struct objhead		*objhead;
 	struct busyobj		*busyobj;
-	double			timer_when;
+	struct binheap_entry	*exp_entry;
 	unsigned		flags;
 #define OC_F_BUSY		(1<<1)
 #define OC_F_PASS		(1<<2)
 #define OC_F_LRUDONTMOVE	(1<<4)
 #define OC_F_PRIV		(1<<5)		/* Stevedore private flag */
-	unsigned		timer_idx;
 	VTAILQ_ENTRY(objcore)	list;
 	VTAILQ_ENTRY(objcore)	lru_list;
 	VTAILQ_ENTRY(objcore)	ban_list;
