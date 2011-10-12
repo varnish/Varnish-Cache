@@ -165,7 +165,7 @@ get_when(const struct object *o)
 	if (w2 > when)
 		when = w2;
 	assert(!isnan(when));
-	return when;
+	return (when);
 }
 
 /*--------------------------------------------------------------------*/

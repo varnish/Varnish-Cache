@@ -216,7 +216,7 @@ tim_epoch(const struct vev_base *evb, double t)
 {
 	CHECK_OBJ_NOTNULL(evb, VEV_BASE_MAGIC);
 	assert(t >= evb->epoch_start);
-	return (t - evb->epoch_start) * 1e3;
+	return ((t - evb->epoch_start) * 1e3);
 }
 
 /*--------------------------------------------------------------------*/
