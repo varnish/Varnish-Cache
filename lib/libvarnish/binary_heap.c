@@ -564,12 +564,13 @@ alloc_be_row(struct binheap_entry *prev_malloc_list)
 	 * Construct freelist from entries 1..ROW_WIDTH-1, while using
 	 * the first entry for storing pointer to prev_malloc_list.
 	 */
+        row->idx = NOIDX;
+        row->p = prev_malloc_list;
 	for (u = 1; u < ROW_WIDTH; u++) {
 		row[u].idx = NOIDX;
 		row[u].p = row + u + 1;
 	}
 	row[ROW_WIDTH - 1].p = NULL;
-	row->p = prev_malloc_list;
 	return (row);
 }
 
@@ -582,6 +583,7 @@ acquire_be(struct binheap *bh)
 	if (bh->free_list == NULL) {
 		bh->malloc_list = alloc_be_row(bh->malloc_list);
 		AN(bh->malloc_list);
+		assert(bh->malloc_list->idx == NOIDX);
 		bh->free_list = bh->malloc_list + 1;
 	}
 	be = bh->free_list;
@@ -628,6 +630,7 @@ free_be_memory(struct binheap *bh)
 	assert(bh->next == ROOT_IDX(bh));
 	while (bh->malloc_list) {
 		be = bh->malloc_list;
+		assert(be->idx == NOIDX);
 		bh->malloc_list = be->p;
 		free(be);
 	}
