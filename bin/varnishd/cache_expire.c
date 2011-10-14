@@ -146,11 +146,11 @@ EXP_Ttl(const struct sess *sp, const struct object *o)
 }
 
 /*--------------------------------------------------------------------
- * When & why does the timer fire for this object ?
+ * Returns expiration time for the object.
  */
 
-static int
-update_object_when(const struct object *o)
+static double
+get_when(const struct object *o)
 {
 	struct objcore *oc;
 	double when, w2;
@@ -165,25 +165,22 @@ update_object_when(const struct object *o)
 	if (w2 > when)
 		when = w2;
 	assert(!isnan(when));
-	if (when == oc->timer_when)
-		return (0);
-	oc->timer_when = when;
-	return (1);
+	return (when);
 }
 
 /*--------------------------------------------------------------------*/
 
 static void
-exp_insert(struct objcore *oc, struct lru *lru)
+exp_insert(struct objcore *oc, struct lru *lru, double when)
 {
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 	CHECK_OBJ_NOTNULL(lru, LRU_MAGIC);
 
 	Lck_AssertHeld(&lru->mtx);
 	Lck_AssertHeld(&exp_mtx);
-	assert(oc->timer_idx == BINHEAP_NOIDX);
-	binheap_insert(exp_heap, oc);
-	assert(oc->timer_idx != BINHEAP_NOIDX);
+	AZ(oc->exp_entry);
+	oc->exp_entry = binheap_insert(exp_heap, oc, BINHEAP_TIME2KEY(when));
+	AN(oc->exp_entry);
 	VTAILQ_INSERT_TAIL(&lru->lru_head, oc, lru_list);
 }
 
@@ -202,8 +199,7 @@ EXP_Inject(struct objcore *oc, struct lru *lru, double when)
 
 	Lck_Lock(&lru->mtx);
 	Lck_Lock(&exp_mtx);
-	oc->timer_when = when;
-	exp_insert(oc, lru);
+	exp_insert(oc, lru, when);
 	Lck_Unlock(&exp_mtx);
 	Lck_Unlock(&lru->mtx);
 }
@@ -220,6 +216,7 @@ EXP_Insert(struct object *o)
 {
 	struct objcore *oc;
 	struct lru *lru;
+	double when;
 
 	CHECK_OBJ_NOTNULL(o, OBJECT_MAGIC);
 	oc = o->objcore;
@@ -234,8 +231,8 @@ EXP_Insert(struct object *o)
 	CHECK_OBJ_NOTNULL(lru, LRU_MAGIC);
 	Lck_Lock(&lru->mtx);
 	Lck_Lock(&exp_mtx);
-	(void)update_object_when(o);
-	exp_insert(oc, lru);
+	when = get_when(o);
+	exp_insert(oc, lru, when);
 	Lck_Unlock(&exp_mtx);
 	Lck_Unlock(&lru->mtx);
 	oc_updatemeta(oc);
@@ -271,14 +268,14 @@ EXP_Touch(struct objcore *oc)
 
 	/*
 	 * We only need the LRU lock here.  The locking order is LRU->EXP
-	 * so we can trust the content of the oc->timer_idx without the
+	 * so we can trust the content of the oc->exp_entry without the
 	 * EXP lock.   Since each lru list has its own lock, this should
 	 * reduce contention a fair bit
 	 */
 	if (Lck_Trylock(&lru->mtx))
 		return (0);
 
-	if (oc->timer_idx != BINHEAP_NOIDX) {
+	if (oc->exp_entry != NULL) {
 		VTAILQ_REMOVE(&lru->lru_head, oc, lru_list);
 		VTAILQ_INSERT_TAIL(&lru->lru_head, oc, lru_list);
 		VSC_C_main->n_lru_moved++;
@@ -314,11 +311,9 @@ EXP_Rearm(const struct object *o)
 	 * The hang-man might have this object of the binheap while
 	 * tending to a timer.  If so, we do not muck with it here.
 	 */
-	if (oc->timer_idx != BINHEAP_NOIDX && update_object_when(o)) {
-		assert(oc->timer_idx != BINHEAP_NOIDX);
-		binheap_reorder(exp_heap, oc->timer_idx);
-		assert(oc->timer_idx != BINHEAP_NOIDX);
-	}
+	if (oc->exp_entry != NULL)
+		binheap_reorder(exp_heap, oc->exp_entry,
+				BINHEAP_TIME2KEY(get_when(o)));
 	Lck_Unlock(&exp_mtx);
 	Lck_Unlock(&lru->mtx);
 	oc_updatemeta(oc);
@@ -334,8 +329,10 @@ exp_timer(struct sess *sp, void *priv)
 {
 	struct objcore *oc;
 	struct lru *lru;
-	double t;
+	double t, when;
 	struct object *o;
+	struct binheap_entry *be;
+	unsigned key;
 
 	(void)priv;
 	t = VTIM_real();
@@ -349,20 +346,22 @@ exp_timer(struct sess *sp, void *priv)
 		}
 
 		Lck_Lock(&exp_mtx);
-		oc = binheap_root(exp_heap);
-		if (oc == NULL) {
+		be = binheap_root(exp_heap);
+		if (be == NULL) {
 			Lck_Unlock(&exp_mtx);
 			continue;
 		}
+		oc = binheap_entry_unpack(exp_heap, be, &key);
+		when = BINHEAP_KEY2TIME(key);
 		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 
 		/*
 		 * We may have expired so many objects that our timestamp
 		 * got out of date, refresh it and check again.
 		 */
-		if (oc->timer_when > t)
+		if (when > t)
 			t = VTIM_real();
-		if (oc->timer_when > t) {
+		if (when > t) {
 			Lck_Unlock(&exp_mtx);
 			oc = NULL;
 			continue;
@@ -385,9 +384,9 @@ exp_timer(struct sess *sp, void *priv)
 		}
 
 		/* Remove from binheap */
-		assert(oc->timer_idx != BINHEAP_NOIDX);
-		binheap_delete(exp_heap, oc->timer_idx);
-		assert(oc->timer_idx == BINHEAP_NOIDX);
+		AN(oc->exp_entry);
+		binheap_delete(exp_heap, oc->exp_entry);
+		oc->exp_entry = NULL;
 
 		/* And from LRU */
 		lru = oc_getlru(oc);
@@ -424,7 +423,7 @@ EXP_NukeOne(const struct sess *sp, struct lru *lru)
 	Lck_Lock(&exp_mtx);
 	VTAILQ_FOREACH(oc, &lru->lru_head, lru_list) {
 		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-		assert (oc->timer_idx != BINHEAP_NOIDX);
+		AN(oc->exp_entry);
 		/*
 		 * It wont release any space if we cannot release the last
 		 * reference, besides, if somebody else has a reference,
@@ -435,8 +434,9 @@ EXP_NukeOne(const struct sess *sp, struct lru *lru)
 	}
 	if (oc != NULL) {
 		VTAILQ_REMOVE(&lru->lru_head, oc, lru_list);
-		binheap_delete(exp_heap, oc->timer_idx);
-		assert(oc->timer_idx == BINHEAP_NOIDX);
+		AN(oc->exp_entry);
+		binheap_delete(exp_heap, oc->exp_entry);
+		oc->exp_entry = NULL;
 		VSC_C_main->n_lru_nuked++;
 	}
 	Lck_Unlock(&exp_mtx);
@@ -452,31 +452,6 @@ EXP_NukeOne(const struct sess *sp, struct lru *lru)
 	return (1);
 }
 
-/*--------------------------------------------------------------------
- * BinHeap helper functions for objcore.
- */
-
-static int
-object_cmp(void *priv, void *a, void *b)
-{
-	struct objcore *aa, *bb;
-
-	(void)priv;
-	CAST_OBJ_NOTNULL(aa, a, OBJCORE_MAGIC);
-	CAST_OBJ_NOTNULL(bb, b, OBJCORE_MAGIC);
-	return (aa->timer_when < bb->timer_when);
-}
-
-static void
-object_update(void *priv, void *p, unsigned u)
-{
-	struct objcore *oc;
-
-	(void)priv;
-	CAST_OBJ_NOTNULL(oc, p, OBJCORE_MAGIC);
-	oc->timer_idx = u;
-}
-
 /*--------------------------------------------------------------------*/
 
 void
@@ -484,7 +459,7 @@ EXP_Init(void)
 {
 
 	Lck_New(&exp_mtx, lck_exp);
-	exp_heap = binheap_new(NULL, object_cmp, object_update);
-	XXXAN(exp_heap);
+	exp_heap = binheap_new();
+	AN(exp_heap);
 	WRK_BgThread(&exp_thread, "cache-timeout", exp_timer, NULL);
 }
