@@ -30,15 +30,7 @@ The following options are available:
 
 -a          When writing to a file, append to it rather than overwrite it.
 
--b          Include log entries which result from communication with a 
-	    backend server.  If neither -b nor -c is
-	    specified, varnishncsa acts as if they both were.
-
 -C          Ignore case when matching regular expressions.
-
--c          Include log entries which result from communication 
-	    with a client.  If neither -b nor -c is specified, 
-	    varnishncsa acts as if they both were.
 
 -D          Daemonize.
 
