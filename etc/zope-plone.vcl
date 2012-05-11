@@ -25,8 +25,13 @@ acl purge {
 
 sub vcl_recv {
 
-	# Normalize host headers, and do rewriting for the zope sites.  Reject
-	# requests for unknown hosts
+        # Hotfix to fix CVE 2011-3587 for Zope 2.12 + 2.13: Products.Zope_Hotfix_CVE_2011_3587
+        if (req.url ~ "/p_/webdav/?(.*)"){
+               set req.url = "/";
+        }
+
+        # Normalize host headers, and do rewriting for the zope sites.  Reject
+        # requests for unknown hosts
         if (req.http.host ~ "(www.)?example.com") {
                 set req.http.host = "example.com";
                 set req.url = "/VirtualHostBase/http/example.com:80/example.com/VirtualHostRoot" + req.url;
@@ -57,13 +62,18 @@ sub vcl_recv {
                 if (req.url ~ "createObject"){
                         return(pass);
                 }
+
+                if (req.url ~ "^/.*/resolveuid/?"){
+                       remove req.http.cookie;
+                       return(lookup);
+                }
         }
 
         # Don't cache authenticated requests
         if (req.http.Cookie && req.http.Cookie ~ "__ac(|_(name|password|persistent))=") {
 
 		# Force lookup of specific urls unlikely to need protection
-		if (req.url ~ "\.(js|css|kss)") {
+        if (req.url ~ "^/[^-]*\-cachekey\d{4}\.(css|kss|js)$") {
                         remove req.http.cookie;
                         return(lookup);
                 }
