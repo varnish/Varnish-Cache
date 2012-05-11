@@ -23,7 +23,7 @@ varnishd [-a address[:port]] [-b host[:port]] [-d] [-F] [-f config]
 	 [-g group] [-h type[,options]] [-i identity]
 	 [-l shmlogsize] [-n name] [-P file] [-p param=value] 
 	 [-s type[,options]] [-T address[:port]] [-t ttl]
-	 [-u user] [-V] [-w min[,max[,timeout]]]
+	 [-u user] [-V] 
 
 DESCRIPTION
 ===========
@@ -119,20 +119,6 @@ OPTIONS
             specified first.
 
 -V          Display the version number and exit.
-
--w min[,max[,timeout]]
-
-            Start at least min but no more than max worker threads
-            with the specified idle timeout.  This is a shortcut for
-            specifying the thread_pool_min, thread_pool_max and
-            thread_pool_timeout run-time parameters.
-
-            If only one number is specified, thread_pool_min and
-            thread_pool_max are both set to this number, and
-            thread_pool_timeout has no effect.
-
-
-
 
 
 Hash Algorithms
@@ -274,8 +260,10 @@ Here is a list of all parameters, current as of last time we remembered to updat
 produced from the same text you will find in the CLI if you use the param.show command, so should there be a new
 parameter which is not listed here, you can find the description using the CLI commands.
 
-Be aware that on 32 bit systems, certain default values, such as sess_workspace (=16k) and thread_pool_stack
-(=64k) are reduced relative to the values listed here, in order to conserve VM space.
+Be aware that on 32 bit systems, certain default values, such as
+workspace_client (=16k), thread_pool_workspace (=16k), http_resp_size (=8k),
+http_req_size (=12k), gzip_stack_buffer (=4k) and thread_pool_stack (=64k) are
+reduced relative to the values listed here, in order to conserve VM space.
 
 .. include:: params.rst
 

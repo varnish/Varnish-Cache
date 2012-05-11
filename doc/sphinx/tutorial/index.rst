@@ -14,7 +14,7 @@ separate topic. Good luck.
 
 .. toctree:: :maxdepth: 1
 
-        indroduction
+        introduction
 	backend_servers
         starting_varnish
 	logging
@@ -28,7 +28,9 @@ separate topic. Good luck.
 	purging
 	compression
 	esi
-	virtualised
+	virtualized
+	websockets
+	devicedetection
 	advanced_backend_servers
         handling_misbehaving_servers
         advanced_topics

@@ -186,7 +186,10 @@ VCA_Accept(struct listen_sock *ls, struct wrk_accept *wa)
 		(void)usleep(100*1000);
 
 	wa->acceptaddrlen = sizeof wa->acceptaddr;
-	i = accept(ls->sock, (void*)&wa->acceptaddr, &wa->acceptaddrlen);
+	do {
+		i = accept(ls->sock, (void*)&wa->acceptaddr,
+			   &wa->acceptaddrlen);
+	} while (i < 0 && errno == EAGAIN);
 
 	if (i < 0) {
 		switch (errno) {
@@ -225,11 +228,11 @@ VCA_FailSess(struct worker *wrk)
 	struct wrk_accept *wa;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	CAST_OBJ_NOTNULL(wa, (void*)wrk->ws->f, WRK_ACCEPT_MAGIC);
-	AZ(wrk->sp);
+	CAST_OBJ_NOTNULL(wa, (void*)wrk->aws->f, WRK_ACCEPT_MAGIC);
 	AZ(close(wa->acceptsock));
 	wrk->stats.sess_drop++;
 	vca_pace_bad();
+	WS_Release(wrk->aws, 0);
 }
 
 /*--------------------------------------------------------------------
@@ -237,21 +240,19 @@ VCA_FailSess(struct worker *wrk)
  */
 
 void
-VCA_SetupSess(struct worker *wrk)
+VCA_SetupSess(struct worker *wrk, struct sess *sp)
 {
-	struct sess *sp;
 	struct wrk_accept *wa;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	CAST_OBJ_NOTNULL(wa, (void*)wrk->ws->f, WRK_ACCEPT_MAGIC);
-	sp = wrk->sp;
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CAST_OBJ_NOTNULL(wa, (void*)wrk->aws->f, WRK_ACCEPT_MAGIC);
+	sp->vxid = wa->vxid;
+	sp->vseq = 0;
 	sp->fd = wa->acceptsock;
 	sp->vsl_id = wa->acceptsock | VSL_CLIENTMARKER ;
 	wa->acceptsock = -1;
 	sp->t_open = VTIM_real();
-	sp->t_req = sp->t_open;
-	sp->t_idle = sp->t_open;
 	sp->mylsock = wa->acceptlsock;
 	CHECK_OBJ_NOTNULL(sp->mylsock, LISTEN_SOCK_MAGIC);
 	assert(wa->acceptaddrlen <= sp->sockaddrlen);
@@ -259,6 +260,7 @@ VCA_SetupSess(struct worker *wrk)
 	sp->sockaddrlen = wa->acceptaddrlen;
 	vca_pace_good();
 	wrk->stats.sess_conn++;
+	WS_Release(wrk->aws, 0);
 
 	if (need_test)
 		sock_test(sp->fd);
@@ -290,6 +292,7 @@ vca_acct(void *arg)
 #endif
 	struct listen_sock *ls;
 	double t0, now;
+	int i;
 
 	THR_SetName("cache-acceptor");
 	(void)arg;
@@ -300,6 +303,13 @@ vca_acct(void *arg)
 		AZ(listen(ls->sock, cache_param->listen_depth));
 		AZ(setsockopt(ls->sock, SOL_SOCKET, SO_LINGER,
 		    &linger, sizeof linger));
+		if (cache_param->accept_filter) {
+			i = VTCP_filter_http(ls->sock);
+			if (i)
+				VSL(SLT_Error, ls->sock,
+				    "Kernel filtering: sock=%d, ret=%d %s\n",
+				    ls->sock, i, strerror(errno));
+		}
 	}
 
 	hack_ready = 1;

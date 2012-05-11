@@ -144,7 +144,15 @@ AC_SUBST(PCRE_LIBS)
 
 PKG_CHECK_MODULES([LIBEDIT], [libedit], 
 	[AC_DEFINE([HAVE_LIBEDIT], [1], [Define we have libedit])],
-	[AC_MSG_WARN([libedit not found, disabling libedit support])])
+	[AC_CHECK_HEADERS([readline/readline.h])
+	 AC_CHECK_HEADERS([edit/readline/readline.h])
+	 AC_CHECK_LIB(edit, el_init,
+	        [ AC_DEFINE([HAVE_LIBEDIT], [1], [Define we have libedit])
+		  LIBEDIT_CFLAGS=""
+		  LIBEDIT_LIBS="-ledit ${CURSES_LIBS}"
+		],
+               [AC_MSG_WARN([libedit not found, disabling libedit support])],
+               [${CURSES_LIBS}])])
 
 # Checks for header files.
 AC_HEADER_STDC
@@ -197,40 +205,6 @@ AC_CHECK_FUNCS([pthread_set_name_np])
 AC_CHECK_FUNCS([pthread_mutex_isowned_np])
 AC_CHECK_FUNCS([pthread_timedjoin_np])
 LIBS="${save_LIBS}"
-
-# sendfile is tricky: there are multiple versions, and most of them
-# don't work.
-case $target in
-*-*-freebsd*)
-	AC_CACHE_CHECK([whether sendfile works],
-	  [ac_cv_so_sendfile_works],
-	  [AC_RUN_IFELSE(
-	    [AC_LANG_PROGRAM([[
-	#include <sys/types.h>
-	#include <sys/socket.h>
-	#include <sys/uio.h>
-	    ]],[[
-		return (SF_SYNC == 0);
-	    ]])],
-	    [ac_cv_so_sendfile_works=yes],
-	    [ac_cv_so_sendfile_works=no])
-	  ])
-	;;
-#*-*-solaris*)
-#	save_LIBS="${LIBS}"
-#	LIBS="${NET_LIBS}"
-#	AC_CHECK_LIB(sendfile, sendfile)
-#	AC_CHECK_FUNCS([sendfile])
-#	AC_CHECK_FUNCS([sendfilev])
-#	NET_LIBS="${LIBS}"
-#	LIBS="${save_LIBS}"
-*)
-	AC_MSG_WARN([won't look for sendfile() on $target])
-	;;
-esac
-if test "$ac_cv_so_sendfile_works" = yes; then
-	AC_DEFINE([SENDFILE_WORKS], [1], [Define if SENDFILE works])
-fi
 
 # Support for visibility attribute 
 save_CFLAGS="${CFLAGS}" 
@@ -361,6 +335,15 @@ fi
 
 AM_MISSING_HAS_RUN
 AC_CHECK_PROGS(PYTHON, [python3 python3.1 python3.2 python2.7 python2.6 python2.5 python2 python], [AC_MSG_ERROR([Python is needed to build Varnish, please install python.])])
+
+AC_CHECK_DECL([SO_ACCEPTFILTER],
+    AC_DEFINE(HAVE_ACCEPT_FILTERS,1,[Define to 1 if you have accept filters]),
+    ,
+    [
+#include <sys/types.h>
+#include <sys/socket.h>
+    ]
+)
 
 # Older Solaris versions define SO_{RCV,SND}TIMEO, but do not
 # implement them.

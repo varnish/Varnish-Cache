@@ -38,162 +38,149 @@
 
 #include "cache.h"
 
-struct vbo {
-	unsigned		magic;
-#define VBO_MAGIC		0xde3d8223
-	struct lock		mtx;
-	unsigned		refcount;
-	uint16_t		nhttp;
-	struct busyobj		bo;
-};
+#include "hash/hash_slinger.h"
 
-static struct lock vbo_mtx;
-static struct vbo *nvbo;
+static struct mempool		*vbopool;
+
+/*--------------------------------------------------------------------
+ */
 
 void
 VBO_Init(void)
 {
-	Lck_New(&vbo_mtx, lck_busyobj);
-	nvbo = NULL;
+
+	vbopool = MPL_New("busyobj", &cache_param->vbo_pool,
+	    &cache_param->workspace_backend);
+	AN(vbopool);
 }
 
 /*--------------------------------------------------------------------
  * BusyObj handling
  */
 
-static struct vbo *
+static struct busyobj *
 vbo_New(void)
 {
-	struct vbo *vbo;
-	uint16_t nhttp;
-	ssize_t http_space;
+	struct busyobj *bo;
+	unsigned sz;
 
-	assert(cache_param->http_max_hdr < 65536);
-	nhttp = (uint16_t)cache_param->http_max_hdr;
-
-	http_space = HTTP_estimate(nhttp);
-
-	vbo = malloc(sizeof *vbo + 2 * http_space);
-	AN(vbo);
-
-	memset(vbo, 0, sizeof *vbo);
-	vbo->magic = VBO_MAGIC;
-	vbo->nhttp = nhttp;
-	Lck_New(&vbo->mtx, lck_busyobj);
-	return (vbo);
+	bo = MPL_Get(vbopool, &sz);
+	XXXAN(bo);
+	bo->magic = BUSYOBJ_MAGIC;
+	bo->end = (char *)bo + sz;
+	Lck_New(&bo->mtx, lck_busyobj);
+	return (bo);
 }
 
 void
-VBO_Free(struct vbo **vbop)
+VBO_Free(struct busyobj **bop)
 {
-	struct vbo *vbo;
+	struct busyobj *bo;
 
-	AN(vbop);
-	vbo = *vbop;
-	*vbop = NULL;
-	CHECK_OBJ_NOTNULL(vbo, VBO_MAGIC);
-	AZ(vbo->refcount);
-	Lck_Delete(&vbo->mtx);
-	FREE_OBJ(vbo);
+	AN(bop);
+	bo = *bop;
+	*bop = NULL;
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	AZ(bo->refcount);
+	Lck_Delete(&bo->mtx);
+	MPL_Free(vbopool, bo);
 }
 
 struct busyobj *
 VBO_GetBusyObj(struct worker *wrk)
 {
-	struct vbo *vbo = NULL;
+	struct busyobj *bo = NULL;
+	uint16_t nhttp;
+	unsigned sz;
 	char *p;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 
-	if (wrk->nvbo != NULL) {
-		vbo = wrk->nvbo;
-		wrk->nvbo = NULL;
+	if (wrk->nbo != NULL) {
+		bo = wrk->nbo;
+		wrk->nbo = NULL;
 	}
 
-	if (vbo == NULL) {
-		Lck_Lock(&vbo_mtx);
+	if (bo == NULL)
+		bo = vbo_New();
 
-		vbo = nvbo;
-		nvbo = NULL;
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	AZ(bo->refcount);
 
-		if (vbo == NULL)
-			VSC_C_main->busyobj_alloc++;
+	bo->refcount = 1;
 
-		Lck_Unlock(&vbo_mtx);
-	}
+	p = (void*)(bo + 1);
+	p = (void*)PRNDUP(p);
+	assert(p < bo->end);
 
-	if (vbo != NULL && vbo->nhttp != cache_param->http_max_hdr)
-		VBO_Free(&vbo);
+	nhttp = (uint16_t)cache_param->http_max_hdr;
+	sz = HTTP_estimate(nhttp);
 
-	if (vbo == NULL)
-		vbo = vbo_New();
+	bo->bereq = HTTP_create(p, nhttp);
+	p += sz;
+	p = (void*)PRNDUP(p);
+	assert(p < bo->end);
 
-	CHECK_OBJ_NOTNULL(vbo, VBO_MAGIC);
-	AZ(vbo->refcount);
+	bo->beresp = HTTP_create(p, nhttp);
+	p += sz;
+	p = (void*)PRNDUP(p);
+	assert(p < bo->end);
 
-	AZ(vbo->bo.magic);
-	vbo->refcount = 1;
-	vbo->bo.magic = BUSYOBJ_MAGIC;
-	vbo->bo.vbo = vbo;
+	sz = cache_param->vsl_buffer;
+	VSL_Setup(bo->vsl, p, sz);
+	p += sz;
+	p = (void*)PRNDUP(p);
+	assert(p < bo->end);
 
-	p = (void*)(vbo + 1);
-	vbo->bo.bereq = HTTP_create(p, vbo->nhttp);
-	p += HTTP_estimate(vbo->nhttp);
-	vbo->bo.beresp = HTTP_create(p, vbo->nhttp);
+	WS_Init(bo->ws, "bo", p, bo->end - p);
 
-	return (&vbo->bo);
-}
-
-void
-VBO_RefBusyObj(const struct busyobj *busyobj)
-{
-	struct vbo *vbo;
-
-	CHECK_OBJ_NOTNULL(busyobj, BUSYOBJ_MAGIC);
-	vbo = busyobj->vbo;
-	CHECK_OBJ_NOTNULL(vbo, VBO_MAGIC);
-	Lck_Lock(&vbo->mtx);
-	assert(vbo->refcount > 0);
-	vbo->refcount++;
-	Lck_Unlock(&vbo->mtx);
+	return (bo);
 }
 
 void
 VBO_DerefBusyObj(struct worker *wrk, struct busyobj **pbo)
 {
 	struct busyobj *bo;
-	struct vbo *vbo;
+	struct objcore *oc;
 	unsigned r;
 
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_ORNULL(wrk, WORKER_MAGIC);
 	AN(pbo);
 	bo = *pbo;
 	*pbo = NULL;
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
-	vbo = bo->vbo;
-	CHECK_OBJ_NOTNULL(vbo, VBO_MAGIC);
-	Lck_Lock(&vbo->mtx);
-	assert(vbo->refcount > 0);
-	r = --vbo->refcount;
-	Lck_Unlock(&vbo->mtx);
-
-	if (r == 0) {
-		/* XXX: Sanity checks & cleanup */
-		memset(&vbo->bo, 0, sizeof vbo->bo);
-
-		if (cache_param->bo_cache && wrk->nvbo == NULL) {
-			wrk->nvbo = vbo;
-		} else {
-			Lck_Lock(&vbo_mtx);
-			if (nvbo == NULL) {
-				nvbo = vbo;
-				vbo = NULL;
-			} else
-				VSC_C_main->busyobj_free++;
-			Lck_Unlock(&vbo_mtx);
-
-			if (vbo != NULL)
-				VBO_Free(&vbo);
-		}
+	CHECK_OBJ_ORNULL(bo->fetch_obj, OBJECT_MAGIC);
+	if (bo->fetch_obj != NULL && bo->fetch_obj->objcore != NULL) {
+		oc = bo->fetch_obj->objcore;
+		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+		CHECK_OBJ_NOTNULL(oc->objhead, OBJHEAD_MAGIC);
+		Lck_Lock(&oc->objhead->mtx);
+		assert(bo->refcount > 0);
+		r = --bo->refcount;
+		Lck_Unlock(&oc->objhead->mtx);
+	} else {
+		oc = NULL;
+		Lck_Lock(&bo->mtx);
+		assert(bo->refcount > 0);
+		r = --bo->refcount;
+		Lck_Unlock(&bo->mtx);
 	}
+
+	if (r)
+		return;
+
+	VSL_Flush(bo->vsl, 0);
+
+	if (oc != NULL) {
+		AN(wrk);
+		(void)HSH_Deref(&wrk->stats, NULL, &bo->fetch_obj);
+	}
+
+	memset(&bo->refcount, 0,
+	    sizeof *bo - offsetof(struct busyobj, refcount));
+
+	if (cache_param->bo_cache && wrk != NULL && wrk->nbo == NULL)
+		wrk->nbo = bo;
+	else
+		VBO_Free(&bo);
 }

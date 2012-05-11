@@ -117,9 +117,6 @@ sma_alloc(struct stevedore *st, size_t size)
 	sma->s.priv = sma;
 	sma->s.len = 0;
 	sma->s.space = size;
-#ifdef SENDFILE_WORKS
-	sma->s.fd = -1;
-#endif
 	sma->s.stevedore = st;
 	sma->s.magic = STORAGE_MAGIC;
 	return (&sma->s);
@@ -148,7 +145,7 @@ sma_free(struct storage *s)
 }
 
 static void
-sma_trim(struct storage *s, size_t size)
+sma_trim(struct storage *s, size_t size, int move_ok)
 {
 	struct sma_sc *sma_sc;
 	struct sma *sma;
@@ -161,6 +158,10 @@ sma_trim(struct storage *s, size_t size)
 
 	assert(sma->sz == sma->s.space);
 	assert(size < sma->sz);
+
+	if (!move_ok)
+		return;
+
 	delta = sma->sz - size;
 	if (delta < 256)
 		return;

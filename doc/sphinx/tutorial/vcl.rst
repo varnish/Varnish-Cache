@@ -49,6 +49,7 @@ In vcl_fetch you still have the request object, req, available. There
 is also a *backend response*, beresp. beresp will contain the HTTP
 headers from the backend.
 
+.. _tutorial-vcl_fetch_actions:
 
 actions
 ~~~~~~~
@@ -135,8 +136,8 @@ down for, uhm, examples.
 Example 1 - manipulating headers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Lets say we want to remove the cookie for all objects in the /static
-directory of our web server:::
+Lets say we want to remove the cookie for all objects in the /images
+directory of our web server::
 
   sub vcl_recv {
     if (req.url ~ "^/images") {
@@ -154,7 +155,7 @@ Example 2 - manipulating beresp
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Here we override the TTL of a object comming from the backend if it
-matches certain criteria:::
+matches certain criteria::
 
   sub vcl_fetch {
      if (req.url ~ "\.(png|gif|jpg)$") {

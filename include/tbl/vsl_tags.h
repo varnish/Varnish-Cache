@@ -34,70 +34,73 @@
  *
  * XXX: Please add new entries a the end to not break saved log-segments.
  * XXX: we can resort them when we have a major release.
+ *
+ * Arguments:
+ *	Tag-Name
+ *	Short Description (1 line, max ?? chars)
+ *	Long Description (Multi line)
  */
 
-SLTM(Debug)
-SLTM(Error)
-SLTM(CLI)
-SLTM(StatSess)
-SLTM(ReqEnd)
-SLTM(SessionOpen)
-SLTM(SessionClose)
-SLTM(BackendOpen)
-SLTM(BackendXID)
-SLTM(BackendReuse)
-SLTM(BackendClose)
-SLTM(HttpGarbage)
-SLTM(Backend)
-SLTM(Length)
+SLTM(Debug, "", "")
+SLTM(Error, "", "")
+SLTM(CLI, "CLI communication", "CLI communication between master and child process.")
+SLTM(StatSess, "Session statistics", "")
+SLTM(ReqEnd, "Client request end", "")
+SLTM(SessionOpen, "Client connection opened", "")
+SLTM(SessionClose, "Client connection closed", "")
+SLTM(BackendOpen, "Backend connection opened", "")
+SLTM(BackendXID, "The unique ID of the backend transaction", "")
+SLTM(BackendReuse, "Backend connection reused", "")
+SLTM(BackendClose, "Backend connection closed", "")
+SLTM(HttpGarbage, "", "")
+SLTM(Backend, "Backend selected", "")
+SLTM(Length, "Size of object body", "")
 
-SLTM(FetchError)
+SLTM(FetchError, "Error while fetching object", "")
 
-SLTM(RxRequest)
-SLTM(RxResponse)
-SLTM(RxStatus)
-SLTM(RxURL)
-SLTM(RxProtocol)
-SLTM(RxHeader)
+#define SLTH(aa, bb)	SLTM(Req##aa, "", "")
+#include "tbl/vsl_tags_http.h"
+#undef SLTH
 
-SLTM(TxRequest)
-SLTM(TxResponse)
-SLTM(TxStatus)
-SLTM(TxURL)
-SLTM(TxProtocol)
-SLTM(TxHeader)
+#define SLTH(aa, bb)	SLTM(Resp##aa, "", "")
+#include "tbl/vsl_tags_http.h"
+#undef SLTH
 
-SLTM(ObjRequest)
-SLTM(ObjResponse)
-SLTM(ObjStatus)
-SLTM(ObjURL)
-SLTM(ObjProtocol)
-SLTM(ObjHeader)
+#define SLTH(aa, bb)	SLTM(Bereq##aa, "", "")
+#include "tbl/vsl_tags_http.h"
+#undef SLTH
 
-SLTM(LostHeader)
+#define SLTH(aa, bb)	SLTM(Beresp##aa, "", "")
+#include "tbl/vsl_tags_http.h"
+#undef SLTH
 
-SLTM(TTL)
-SLTM(Fetch_Body)
-SLTM(VCL_acl)
-SLTM(VCL_call)
-SLTM(VCL_trace)
-SLTM(VCL_return)
-SLTM(VCL_error)
-SLTM(ReqStart)
-SLTM(Hit)
-SLTM(HitPass)
-SLTM(ExpBan)
-SLTM(ExpKill)
-SLTM(WorkThread)
+#define SLTH(aa, bb)	SLTM(Obj##aa, "", "")
+#include "tbl/vsl_tags_http.h"
+#undef SLTH
 
-SLTM(ESI_xmlerror)
+SLTM(LostHeader, "", "")
 
-SLTM(Hash)
+SLTM(TTL, "TTL set on object", "")
+SLTM(Fetch_Body, "Body fetched from backend", "")
+SLTM(VCL_acl, "", "")
+SLTM(VCL_call, "VCL method called", "")
+SLTM(VCL_trace, "VCL trace data", "")
+SLTM(VCL_return, "VCL method return value", "")
+SLTM(ReqStart, "Client request start", "")
+SLTM(Hit, "Hit object in cache", "")
+SLTM(HitPass, "Hit for pass object in cache", "")
+SLTM(ExpBan, "Object evicted due to ban", "")
+SLTM(ExpKill, "Object expired", "")
+SLTM(WorkThread, "", "")
 
-SLTM(Backend_health)
+SLTM(ESI_xmlerror, "Error while parsing ESI tags", "")
 
-SLTM(VCL_Debug)
-SLTM(VCL_Log)
-SLTM(VCL_Error)
+SLTM(Hash, "Value added to hash", "")
 
-SLTM(Gzip)
+SLTM(Backend_health, "Backend health check", "")
+
+SLTM(VCL_Debug, "Unused", "")
+SLTM(VCL_Log, "Log statement from VCL", "")
+SLTM(VCL_Error, "", "")
+
+SLTM(Gzip, "G(un)zip performed on object", "")

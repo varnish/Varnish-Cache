@@ -45,35 +45,35 @@ static void
 ved_include(struct sess *sp, const char *src, const char *host)
 {
 	struct object *obj;
-	struct worker *w;
+	struct worker *wrk;
 	char *sp_ws_wm;
 	char *wrk_ws_wm;
 	unsigned sxid, res_mode;
 
-	w = sp->wrk;
+	wrk = sp->wrk;
 
 	if (sp->req->esi_level >= cache_param->max_esi_depth)
 		return;
 	sp->req->esi_level++;
 
-	(void)WRW_FlushRelease(w);
+	(void)WRW_FlushRelease(wrk);
 
 	obj = sp->req->obj;
 	sp->req->obj = NULL;
-	res_mode = sp->wrk->res_mode;
+	res_mode = sp->req->res_mode;
 
 	/* Reset request to status before we started messing with it */
 	HTTP_Copy(sp->req->http, sp->req->http0);
 
 	/* Take a workspace snapshot */
 	sp_ws_wm = WS_Snapshot(sp->req->ws);
-	wrk_ws_wm = WS_Snapshot(w->ws);
+	wrk_ws_wm = WS_Snapshot(wrk->aws); /* XXX ? */
 
 	http_SetH(sp->req->http, HTTP_HDR_URL, src);
 	if (host != NULL && *host != '\0')  {
 		http_Unset(sp->req->http, H_Host);
 		http_Unset(sp->req->http, H_If_Modified_Since);
-		http_SetHeader(w, sp->vsl_id, sp->req->http, host);
+		http_SetHeader(sp->req->http, host);
 	}
 	/*
 	 * XXX: We should decide if we should cache the director
@@ -93,12 +93,11 @@ ved_include(struct sess *sp, const char *src, const char *host)
 
 	sxid = sp->req->xid;
 	while (1) {
-		sp->wrk = w;
+		sp->wrk = wrk;
 		CNT_Session(sp);
 		if (sp->step == STP_DONE)
 			break;
 		AZ(sp->wrk);
-		WSL_Flush(w, 0);
 		DSL(0x20, SLT_Debug, sp->vsl_id, "loop waiting for ESI");
 		(void)usleep(10000);
 	}
@@ -107,14 +106,14 @@ ved_include(struct sess *sp, const char *src, const char *host)
 	assert(sp->step == STP_DONE);
 	sp->req->esi_level--;
 	sp->req->obj = obj;
-	sp->wrk->res_mode = res_mode;
+	sp->req->res_mode = res_mode;
 
 	/* Reset the workspace */
 	WS_Reset(sp->req->ws, sp_ws_wm);
-	WS_Reset(w->ws, wrk_ws_wm);
+	WS_Reset(wrk->aws, wrk_ws_wm);	/* XXX ? */
 
-	WRW_Reserve(sp->wrk, &sp->fd);
-	if (sp->wrk->res_mode & RES_CHUNKED)
+	WRW_Reserve(sp->wrk, &sp->fd, sp->req->vsl, sp->req->t_resp);
+	if (sp->req->res_mode & RES_CHUNKED)
 		WRW_Chunked(sp->wrk);
 }
 
@@ -224,8 +223,6 @@ ESI_Deliver(struct sess *sp)
 	uint8_t tailbuf[8 + 5];
 	int isgzip;
 	struct vgz *vgz = NULL;
-	char obuf[cache_param->gzip_stack_buffer];
-	ssize_t obufl = 0;
 	size_t dl;
 	const void *dp;
 	int i;
@@ -233,9 +230,6 @@ ESI_Deliver(struct sess *sp)
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	st = sp->req->obj->esidata;
 	AN(st);
-	assert(sizeof obuf >= 1024);
-
-	obuf[0] = 0;	/* For flexelint */
 
 	p = st->ptr;
 	e = st->ptr + st->len;
@@ -252,7 +246,7 @@ ESI_Deliver(struct sess *sp)
 		 * Only the top level document gets to decide this.
 		 */
 		sp->req->gzip_resp = 0;
-		if (isgzip && !(sp->wrk->res_mode & RES_GUNZIP)) {
+		if (isgzip && !(sp->req->res_mode & RES_GUNZIP)) {
 			assert(sizeof gzip_hdr == 10);
 			/* Send out the gzip header */
 			(void)WRW_Write(sp->wrk, gzip_hdr, 10);
@@ -263,17 +257,15 @@ ESI_Deliver(struct sess *sp)
 	}
 
 	if (isgzip && !sp->req->gzip_resp) {
-		vgz = VGZ_NewUngzip(sp->wrk, "U D E");
+		vgz = VGZ_NewUngzip(sp->req->vsl, "U D E");
+		AZ(VGZ_WrwInit(vgz));
 
 		/* Feed a gzip header to gunzip to make it happy */
 		VGZ_Ibuf(vgz, gzip_hdr, sizeof gzip_hdr);
-		VGZ_Obuf(vgz, obuf, sizeof obuf);
 		i = VGZ_Gunzip(vgz, &dp, &dl);
 		assert(i == VGZ_OK);
 		assert(VGZ_IbufEmpty(vgz));
 		assert(dl == 0);
-
-		obufl = 0;
 	}
 
 	st = VTAILQ_FIRST(&sp->req->obj->store);
@@ -328,8 +320,7 @@ ESI_Deliver(struct sess *sp)
 					 */
 					AN(vgz);
 					i = VGZ_WrwGunzip(sp->wrk, vgz,
-						st->ptr + off, l2,
-						obuf, sizeof obuf, &obufl);
+						st->ptr + off, l2);
 					if (WRW_Error(sp->wrk)) {
 						SES_Close(sp, "remote closed");
 						p = e;
@@ -379,10 +370,8 @@ ESI_Deliver(struct sess *sp)
 			q++;
 			r = (void*)strchr((const char*)q, '\0');
 			AN(r);
-			if (obufl > 0) {
-				(void)WRW_Write(sp->wrk, obuf, obufl);
-				obufl = 0;
-			}
+			if (vgz != NULL)
+				VGZ_WrwFlush(sp->wrk, vgz);
 			if (WRW_Flush(sp->wrk)) {
 				SES_Close(sp, "remote closed");
 				p = e;
@@ -399,9 +388,8 @@ ESI_Deliver(struct sess *sp)
 		}
 	}
 	if (vgz != NULL) {
-		if (obufl > 0)
-			(void)WRW_Write(sp->wrk, obuf, obufl);
-		(void)VGZ_Destroy(&vgz, sp->vsl_id);
+		VGZ_WrwFlush(sp->wrk, vgz);
+		(void)VGZ_Destroy(&vgz);
 	}
 	if (sp->req->gzip_resp && sp->req->esi_level == 0) {
 		/* Emit a gzip literal block with finish bit set */
@@ -433,12 +421,10 @@ ved_deliver_byterange(const struct sess *sp, ssize_t low, ssize_t high)
 	ssize_t l, lx;
 	u_char *p;
 
-//printf("BR %jd %jd\n", low, high);
 	lx = 0;
 	VTAILQ_FOREACH(st, &sp->req->obj->store, list) {
 		p = st->ptr;
 		l = st->len;
-//printf("[0-] %jd %jd\n", lx, lx + l);
 		if (lx + l < low) {
 			lx += l;
 			continue;
@@ -451,16 +437,14 @@ ved_deliver_byterange(const struct sess *sp, ssize_t low, ssize_t high)
 			l -= (low - lx);
 			lx = low;
 		}
-//printf("[1-] %jd %jd\n", lx, lx + l);
 		if (lx + l >= high)
 			l = high - lx;
-//printf("[2-] %jd %jd\n", lx, lx + l);
 		assert(lx >= low && lx + l <= high);
 		if (l != 0)
 			(void)WRW_Write(sp->wrk, p, l);
-		if (lx + st->len > high)
+		if (p + l < st->ptr + st->len)
 			return(p[l]);
-		lx += st->len;
+		lx += l;
 	}
 	INCOMPL();
 }
@@ -471,10 +455,12 @@ ESI_DeliverChild(const struct sess *sp)
 	struct storage *st;
 	struct object *obj;
 	ssize_t start, last, stop, lpad;
-	u_char *p, cc;
+	u_char cc;
 	uint32_t icrc;
 	uint32_t ilen;
 	uint8_t *dbits;
+	int i, j;
+	uint8_t tailbuf[8];
 
 	if (!sp->req->obj->gziped) {
 		VTAILQ_FOREACH(st, &sp->req->obj->store, list)
@@ -487,7 +473,7 @@ ESI_DeliverChild(const struct sess *sp)
 	 * padding it, as necessary, to a byte boundary.
 	 */
 
-	dbits = (void*)WS_Alloc(sp->wrk->ws, 8);
+	dbits = (void*)WS_Alloc(sp->req->ws, 8);
 	AN(dbits);
 	obj = sp->req->obj;
 	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
@@ -554,12 +540,20 @@ ESI_DeliverChild(const struct sess *sp)
 	}
 	if (lpad > 0)
 		(void)WRW_Write(sp->wrk, dbits + 1, lpad);
-	st = VTAILQ_LAST(&sp->req->obj->store, storagehead);
-	assert(st->len > 8);
 
-	p = st->ptr + st->len - 8;
-	icrc = vle32dec(p);
-	ilen = vle32dec(p + 4);
+	/* We need the entire tail, but it may not be in one storage segment */
+	st = VTAILQ_LAST(&sp->req->obj->store, storagehead);
+	for (i = sizeof tailbuf; i > 0; i -= j) {
+		j = st->len;
+		if (j > i)
+			j = i;
+		memcpy(tailbuf + i - j, st->ptr + st->len - j, j);
+		st = VTAILQ_PREV(st, storagehead, list);
+		assert(i == j || st != NULL);
+	}
+
+	icrc = vle32dec(tailbuf);
+	ilen = vle32dec(tailbuf + 4);
 	sp->req->crc = crc32_combine(sp->req->crc, icrc, ilen);
 	sp->req->l_crc += ilen;
 }

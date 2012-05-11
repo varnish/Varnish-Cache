@@ -45,7 +45,6 @@
 
 #include "mgt/mgt.h"
 #include "common/heritage.h"
-#include "common/params.h"
 
 #include "hash/hash_slinger.h"
 #include "vav.h"
@@ -100,20 +99,6 @@ pick(const struct choice *cp, const char *which, const char *kind)
 
 /*--------------------------------------------------------------------*/
 
-static unsigned long
-arg_ul(const char *p)
-{
-	char *q;
-	unsigned long ul;
-
-	ul = strtoul(p, &q, 0);
-	if (*q != '\0')
-		ARGV_ERR("Invalid number: \"%s\"\n", p);
-	return (ul);
-}
-
-/*--------------------------------------------------------------------*/
-
 static void
 usage(void)
 {
@@ -160,50 +145,9 @@ usage(void)
 	fprintf(stderr, FMT, "-T address:port",
 	    "Telnet listen address and port");
 	fprintf(stderr, FMT, "-V", "version");
-	fprintf(stderr, FMT, "-w int[,int[,int]]", "Number of worker threads");
-	fprintf(stderr, FMT, "", "  -w <fixed_count>");
-	fprintf(stderr, FMT, "", "  -w min,max");
-	fprintf(stderr, FMT, "", "  -w min,max,timeout [default: -w2,500,300]");
 	fprintf(stderr, FMT, "-u user", "Priviledge separation user id");
 #undef FMT
 	exit(1);
-}
-
-
-/*--------------------------------------------------------------------*/
-
-static void
-tackle_warg(const char *argv)
-{
-	char **av;
-	unsigned int u;
-
-	av = VAV_Parse(argv, NULL, ARGV_COMMA);
-	AN(av);
-
-	if (av[0] != NULL)
-		ARGV_ERR("%s\n", av[0]);
-
-	if (av[1] == NULL)
-		usage();
-
-	u = arg_ul(av[1]);
-	if (u < 1)
-		usage();
-	mgt_param.wthread_max = mgt_param.wthread_min = u;
-
-	if (av[2] != NULL) {
-		u = arg_ul(av[2]);
-		if (u < mgt_param.wthread_min)
-			usage();
-		mgt_param.wthread_max = u;
-
-		if (av[3] != NULL) {
-			u = arg_ul(av[3]);
-			mgt_param.wthread_timeout = u;
-		}
-	}
-	VAV_Free(av);
 }
 
 /*--------------------------------------------------------------------*/
@@ -406,22 +350,19 @@ main(int argc, char * const *argv)
 		 * Adjust default parameters for 32 bit systems to conserve
 		 * VM space.
 		 */
-		MCF_ParamSet(cli, "sess_workspace", "16384");
+		MCF_ParamSet(cli, "workspace_client", "16k");
 		cli_check(cli);
 
-		MCF_ParamSet(cli, "thread_pool_workspace", "16384");
+		MCF_ParamSet(cli, "workspace_backend", "16k");
 		cli_check(cli);
 
-		MCF_ParamSet(cli, "http_resp_size", "8192");
+		MCF_ParamSet(cli, "http_resp_size", "8k");
 		cli_check(cli);
 
-		MCF_ParamSet(cli, "http_req_size", "12288");
+		MCF_ParamSet(cli, "http_req_size", "12k");
 		cli_check(cli);
 
-		MCF_ParamSet(cli, "thread_pool_stack", "32bit");
-		cli_check(cli);
-
-		MCF_ParamSet(cli, "gzip_stack_buffer", "4096");
+		MCF_ParamSet(cli, "gzip_buffer", "4k");
 		cli_check(cli);
 	}
 
@@ -519,8 +460,7 @@ main(int argc, char * const *argv)
 			usage();
 			break;
 		case 'w':
-			tackle_warg(optarg);
-			break;
+			ARGV_ERR("-w has been removed, use -p instead\n");
 		default:
 			usage();
 		}

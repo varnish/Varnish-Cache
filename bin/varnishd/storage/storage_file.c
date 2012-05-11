@@ -482,17 +482,13 @@ smf_alloc(struct stevedore *st, size_t size)
 	smf->s.ptr = smf->ptr;
 	smf->s.len = 0;
 	smf->s.stevedore = st;
-#ifdef SENDFILE_WORKS
-	smf->s.fd = smf->sc->fd;
-	smf->s.where = smf->offset;
-#endif
 	return (&smf->s);
 }
 
 /*--------------------------------------------------------------------*/
 
 static void
-smf_trim(struct storage *s, size_t size)
+smf_trim(struct storage *s, size_t size, int move_ok)
 {
 	struct smf *smf;
 	struct smf_sc *sc;
@@ -503,6 +499,10 @@ smf_trim(struct storage *s, size_t size)
 	xxxassert(size > 0);	/* XXX: seen */
 	CAST_OBJ_NOTNULL(smf, s->priv, SMF_MAGIC);
 	assert(size <= smf->size);
+
+	if (!move_ok)
+		return;		/* XXX: trim_smf needs fixed */
+
 	sc = smf->sc;
 	size += (sc->pagesize - 1);
 	size &= ~(sc->pagesize - 1);
