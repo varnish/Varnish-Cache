@@ -88,6 +88,14 @@ static struct vlu	*vlu;
 
 static struct vsb *child_panic = NULL;
 
+static inline int
+MGT_FEATURE(enum feature_bits x)
+{
+	return (mgt_param.feature_bits[(unsigned)x>>3] &
+	    (0x80U >> ((unsigned)x & 7)));
+}
+
+
 /*--------------------------------------------------------------------
  * Track the highest file descriptor the parent knows is being used.
  *
@@ -213,7 +221,7 @@ MGT_Child_Cli_Fail(void)
 		return;
 	REPORT(LOG_ERR, "Child (%jd) not responding to CLI, killing it.",
 	    (intmax_t)child_pid);
-	if (mgt_param.diag_bitmap & 0x1000)
+	if (MGT_FEATURE(FEATURE_NO_COREDUMP))
 		(void)kill(child_pid, SIGKILL);
 	else
 		(void)kill(child_pid, SIGQUIT);
@@ -338,7 +346,7 @@ start_child(struct cli *cli)
 		(void)signal(SIGINT, SIG_DFL);
 		(void)signal(SIGTERM, SIG_DFL);
 
-		mgt_sandbox();
+		mgt_sandbox(SANDBOX_WORKER);
 
 		child_main();
 

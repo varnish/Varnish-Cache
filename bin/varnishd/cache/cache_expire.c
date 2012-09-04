@@ -369,6 +369,13 @@ exp_timer(struct worker *wrk, void *priv)
 			continue;
 		}
 
+		/* If the object is busy, we have to wait for it */
+		if (oc->flags & OC_F_BUSY) {
+			Lck_Unlock(&exp_mtx);
+			oc = NULL;
+			continue;
+		}
+
 		/*
 		 * It's time...
 		 * Technically we should drop the exp_mtx, get the lru->mtx
@@ -424,13 +431,14 @@ EXP_NukeOne(struct busyobj *bo, struct lru *lru)
 	Lck_Lock(&exp_mtx);
 	VTAILQ_FOREACH(oc, &lru->lru_head, lru_list) {
 		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-		assert (oc->timer_idx != BINHEAP_NOIDX);
+		assert(oc->timer_idx != BINHEAP_NOIDX);
 		/*
 		 * It wont release any space if we cannot release the last
 		 * reference, besides, if somebody else has a reference,
-		 * it's a bad idea to nuke this object anyway.
+		 * it's a bad idea to nuke this object anyway. Also do not
+		 * touch busy objects.
 		 */
-		if (oc->refcnt == 1)
+		if (oc->refcnt == 1 && !(oc->flags & OC_F_BUSY))
 			break;
 	}
 	if (oc != NULL) {

@@ -447,6 +447,7 @@ BAN_NewObjCore(struct objcore *oc)
 
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 	AZ(oc->ban);
+	AN(oc->objhead);
 	Lck_Lock(&ban_mtx);
 	oc->ban = ban_start;
 	ban_start->refcount++;
@@ -525,7 +526,7 @@ BAN_Reload(const uint8_t *ban, unsigned len)
 
 	VTAILQ_FOREACH(b, &ban_head, list) {
 		t1 = ban_time(b->spec);
-		assert (t1 < t2);
+		assert(t1 < t2);
 		t2 = t1;
 		if (t1 == t0) {
 			Lck_Unlock(&ban_mtx);
@@ -757,17 +758,17 @@ ban_check_object(struct object *o, struct vsl_log *vsl,
 		oc_updatemeta(oc);
 		/* BAN also changed, but that is not important any more */
 		/* XXX: no req in lurker */
-		VSLb(vsl, SLT_ExpBan, "%u was banned", o->xid);
+		VSLb(vsl, SLT_ExpBan, "%u was banned", o->vxid);
 		EXP_Rearm(o);
 		return (1);
 	}
 }
 
 int
-BAN_CheckObject(struct object *o, const struct sess *sp)
+BAN_CheckObject(struct object *o, struct req *req)
 {
 
-	return (ban_check_object(o, sp->req->vsl, sp->req->http) > 0);
+	return (ban_check_object(o, req->vsl, req->http) > 0);
 }
 
 static struct ban *
@@ -835,13 +836,13 @@ ban_lurker_work(struct worker *wrk, struct vsl_log *vsl, unsigned pass)
 		b->flags &= ~BAN_F_LURK;
 		b->flags |= pass;
 	}
-	if (cache_param->diag_bitmap & 0x80000)
+	if (DO_DEBUG(DBG_LURKER))
 		VSLb(vsl, SLT_Debug, "lurker: %d actionable bans", i);
 	if (i == 0)
 		return (0);
 
 	VTAILQ_FOREACH_REVERSE(b, &ban_head, banhead_s, list) {
-		if (cache_param->diag_bitmap & 0x80000)
+		if (DO_DEBUG(DBG_LURKER))
 			VSLb(vsl, SLT_Debug, "lurker doing %f %d",
 			    ban_time(b->spec), b->refcount);
 		while (1) {
@@ -850,7 +851,7 @@ ban_lurker_work(struct worker *wrk, struct vsl_log *vsl, unsigned pass)
 			if (oc == NULL)
 				break;
 			CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-			if (cache_param->diag_bitmap & 0x80000)
+			if (DO_DEBUG(DBG_LURKER))
 				VSLb(vsl, SLT_Debug, "test: %p %u %u",
 				    oc, oc->flags & OC_F_LURK, pass);
 			if ((oc->flags & OC_F_LURK) == pass)
@@ -878,6 +879,18 @@ ban_lurker_work(struct worker *wrk, struct vsl_log *vsl, unsigned pass)
 				continue;
 			}
 			/*
+			 * If the object is busy, we can't touch
+			 * it. Defer it to a later run.
+			 */
+			if (oc->flags & OC_F_BUSY) {
+				oc->flags |= pass;
+				VTAILQ_REMOVE(&b->objcore, oc, ban_list);
+				VTAILQ_INSERT_TAIL(&b->objcore, oc, ban_list);
+				Lck_Unlock(&oh->mtx);
+				Lck_Unlock(&ban_mtx);
+				continue;
+			}
+			/*
 			 * Grab a reference to the OC and we can let go of
 			 * the BAN mutex
 			 */
@@ -890,7 +903,7 @@ ban_lurker_work(struct worker *wrk, struct vsl_log *vsl, unsigned pass)
 			 */
 			o = oc_getobj(&wrk->stats, oc);
 			i = ban_check_object(o, vsl, NULL);
-			if (cache_param->diag_bitmap & 0x80000)
+			if (DO_DEBUG(DBG_LURKER))
 				VSLb(vsl, SLT_Debug, "lurker got: %p %d",
 				    oc, i);
 			if (i == -1) {
@@ -902,7 +915,7 @@ ban_lurker_work(struct worker *wrk, struct vsl_log *vsl, unsigned pass)
 				Lck_Unlock(&ban_mtx);
 			}
 			Lck_Unlock(&oh->mtx);
-			if (cache_param->diag_bitmap & 0x80000)
+			if (DO_DEBUG(DBG_LURKER))
 				VSLb(vsl, SLT_Debug, "lurker done: %p %u %u",
 				    oc, oc->flags & OC_F_LURK, pass);
 			(void)HSH_Deref(&wrk->stats, NULL, &o);
@@ -914,7 +927,7 @@ ban_lurker_work(struct worker *wrk, struct vsl_log *vsl, unsigned pass)
 				b->flags |= BAN_F_GONE;
 				VSC_C_main->bans_gone++;
 			}
-			if (cache_param->diag_bitmap & 0x80000)
+			if (DO_DEBUG(DBG_LURKER))
 				VSLb(vsl, SLT_Debug, "lurker BAN %f now gone",
 				    ban_time(b->spec));
 		}
@@ -1078,7 +1091,7 @@ ccf_ban_list(struct cli *cli, const char * const *av, void *priv)
 
 	VCLI_Out(cli, "Present bans:\n");
 	VTAILQ_FOREACH(b, &ban_head, list) {
-		if (b == bl && !(cache_param->diag_bitmap & 0x80000))
+		if (b == bl && !DO_DEBUG(DBG_LURKER))
 			break;
 		VCLI_Out(cli, "%10.6f %5u%s\t", ban_time(b->spec),
 		    bl == b ? b->refcount - 1 : b->refcount,
@@ -1087,7 +1100,7 @@ ccf_ban_list(struct cli *cli, const char * const *av, void *priv)
 		VCLI_Out(cli, "\n");
 		if (VCLI_Overflow(cli))
 			break;
-		if (cache_param->diag_bitmap & 0x80000) {
+		if (DO_DEBUG(DBG_LURKER)) {
 			Lck_Lock(&ban_mtx);
 			struct objcore *oc;
 			VTAILQ_FOREACH(oc, &b->objcore, ban_list)

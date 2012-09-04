@@ -33,6 +33,20 @@
 
 #define VSM_CLASS_PARAM		"Params"
 
+enum debug_bits {
+#define DEBUG_BIT(U, l, p, d) DBG_##U,
+#include "tbl/debug_bits.h"
+#undef DEBUG_BIT
+       DBG_Reserved
+};
+
+enum feature_bits {
+#define FEATURE_BIT(U, l, p, d, ld) FEATURE_##U,
+#include "tbl/feature_bits.h"
+#undef FEATURE_BIT
+       FEATURE_Reserved
+};
+
 struct poolparam {
 	unsigned		min_pool;
 	unsigned		max_pool;
@@ -62,16 +76,15 @@ struct params {
 	/* Worker threads and pool */
 	unsigned		wthread_min;
 	unsigned		wthread_max;
-	unsigned		wthread_timeout;
+	double			wthread_timeout;
 	unsigned		wthread_pools;
 	unsigned		wthread_add_threshold;
-	unsigned		wthread_add_delay;
-	unsigned		wthread_fail_delay;
-	unsigned		wthread_purge_delay;
-	unsigned		wthread_stats_rate;
+	double			wthread_add_delay;
+	double			wthread_fail_delay;
+	double			wthread_destroy_delay;
+	double			wthread_stats_rate;
 	ssize_t			wthread_stacksize;
-
-	unsigned		queue_max;
+	unsigned		wthread_queue_limit;
 
 	/* Memory allocation hints */
 	unsigned		workspace_client;
@@ -103,10 +116,6 @@ struct params {
 	ssize_t			fetch_chunksize;
 	ssize_t			fetch_maxchunksize;
 	unsigned		nuke_limit;
-
-
-	/* VCL traces */
-	unsigned		vcl_trace;
 
 	unsigned		accept_filter;
 
@@ -146,12 +155,6 @@ struct params {
 	/* CLI buffer size */
 	unsigned		cli_buffer;
 
-	/* Control diagnostic code */
-	unsigned		diag_bitmap;
-
-	/* Log hash string to shm */
-	unsigned		log_hash;
-
 	/* Log local socket address to shm */
 	unsigned		log_local_addr;
 
@@ -185,8 +188,9 @@ struct params {
 	unsigned		http_gzip_support;
 	unsigned		gzip_buffer;
 	unsigned		gzip_level;
-	unsigned		gzip_window;
 	unsigned		gzip_memlevel;
+
+	unsigned		obj_readonly;
 
 	double			critbit_cooloff;
 
@@ -204,4 +208,8 @@ struct params {
 	struct poolparam	req_pool;
 	struct poolparam	sess_pool;
 	struct poolparam	vbo_pool;
+
+	uint8_t			vsl_mask[256>>3];
+	uint8_t			debug_bits[(DBG_Reserved+7)>>3];
+	uint8_t			feature_bits[(FEATURE_Reserved+7)>>3];
 };

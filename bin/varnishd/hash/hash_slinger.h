@@ -29,6 +29,7 @@
  */
 
 struct sess;
+struct req;
 struct worker;
 struct object;
 
@@ -52,21 +53,22 @@ struct hash_slinger {
 
 /* cache_hash.c */
 void HSH_Cleanup(struct worker *w);
-struct objcore *HSH_Lookup(struct sess *sp);
+struct objcore *HSH_Lookup(struct req *);
 void HSH_Ref(struct objcore *o);
 void HSH_Drop(struct worker *, struct object **);
 void HSH_Init(const struct hash_slinger *slinger);
-void HSH_AddString(const struct sess *sp, const char *str);
+void HSH_AddString(struct req *, const char *str);
 void HSH_Insert(struct worker *, const void *hash, struct objcore *);
-void HSH_Purge(const struct sess *, struct objhead *, double ttl, double grace);
+void HSH_Purge(struct req *, struct objhead *, double ttl, double grace);
 void HSH_config(const char *h_arg);
+struct objcore *HSH_NewObjCore(struct worker *wrk);
 
 #ifdef VARNISH_CACHE_CHILD
 
 struct waitinglist {
 	unsigned		magic;
 #define WAITINGLIST_MAGIC	0x063a477a
-	VTAILQ_HEAD(, sess)	list;
+	VTAILQ_HEAD(, req)	list;
 };
 
 struct objhead {

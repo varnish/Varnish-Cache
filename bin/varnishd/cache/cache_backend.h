@@ -75,9 +75,9 @@ struct vrt_backend_probe;
  * backends to use.
  */
 
-typedef struct vbc *vdi_getfd_f(const struct director *, struct sess *sp);
+typedef struct vbc *vdi_getfd_f(const struct director *, struct req *);
 typedef void vdi_fini_f(const struct director *);
-typedef unsigned vdi_healthy(const struct director *, const struct sess *sp);
+typedef unsigned vdi_healthy(const struct director *, const struct req *);
 
 struct director {
 	unsigned		magic;
@@ -153,8 +153,6 @@ struct vbc {
 	struct backend		*backend;
 	struct vdi_simple	*vdis;
 	struct vsl_log		*vsl;
-	unsigned		orig_vsl_id;
-	unsigned		vsl_id;
 	int			fd;
 
 	struct sockaddr_storage	*addr;

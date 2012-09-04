@@ -75,6 +75,30 @@ body_status(enum body_status e)
 	}
 }
 
+/*--------------------------------------------------------------------*/
+
+enum sess_close {
+	SC_NULL = 0,
+#define SESS_CLOSE(nm, desc)	SC_##nm,
+#include "tbl/sess_close.h"
+#undef SESS_CLOSE
+};
+
+static inline const char *
+sess_close_str(enum sess_close sc, int want_desc)
+{
+	switch (sc) {
+	case SC_NULL:		return(want_desc ? "(null)": "NULL");
+#define SESS_CLOSE(nm, desc)	case SC_##nm: return(want_desc ? desc : #nm);
+#include "tbl/sess_close.h"
+#undef SESS_CLOSE
+
+	default:		return(want_desc ? "(invalid)" : "INVALID");
+	}
+}
+
+/*--------------------------------------------------------------------*/
+
 /*
  * NB: HDR_STATUS is only used in cache_http.c, everybody else uses the
  * http->status integer field.
@@ -122,10 +146,16 @@ typedef struct {
 
 /*--------------------------------------------------------------------*/
 
-enum step {
-#define STEP(l, u, arg)	STP_##u,
+enum sess_step {
+#define SESS_STEP(l, u)		S_STP_##u,
 #include "tbl/steps.h"
-#undef STEP
+#undef SESS_STEP
+};
+
+enum req_step {
+#define REQ_STEP(l, u, arg)	R_STP_##u,
+#include "tbl/steps.h"
+#undef REQ_STEP
 };
 
 /*--------------------------------------------------------------------*/
@@ -141,7 +171,7 @@ struct ws {
 	unsigned		overflow;	/* workspace overflowed */
 	const char		*id;		/* identity */
 	char			*s;		/* (S)tart of buffer */
-	char			*f;		/* (F)ree pointer */
+	char			*f;		/* (F)ree/front pointer */
 	char			*r;		/* (R)eserved length */
 	char			*e;		/* (E)nd of buffer */
 };
@@ -253,7 +283,7 @@ struct vsl_log {
 
 /*--------------------------------------------------------------------*/
 
-struct vxid {
+struct vxid_pool {
 	uint32_t		next;
 	uint32_t		count;
 };
@@ -269,7 +299,6 @@ struct wrk_accept {
 	socklen_t		acceptaddrlen;
 	int			acceptsock;
 	struct listen_sock	*acceptlsock;
-	uint32_t		vxid;
 };
 
 /* Worker pool stuff -------------------------------------------------*/
@@ -313,9 +342,8 @@ struct worker {
 
 	struct ws		aws[1];
 
+	struct vxid_pool	vxid_pool;
 
-	/* Temporary accounting */
-	struct acct		acct_tmp;
 };
 
 /* LRU ---------------------------------------------------------------*/
@@ -514,7 +542,7 @@ VTAILQ_HEAD(storagehead, storage);
 struct object {
 	unsigned		magic;
 #define OBJECT_MAGIC		0x32851d42
-	unsigned		xid;
+	uint32_t		vxid;
 	struct storage		*objstore;
 	struct objcore		*objcore;
 
@@ -554,12 +582,16 @@ struct req {
 	unsigned		magic;
 #define REQ_MAGIC		0x2751aaa1
 
-	unsigned		xid;
 	int			restarts;
 	int			esi_level;
 	int			disable_esi;
 	uint8_t			hash_ignore_busy;
 	uint8_t			hash_always_miss;
+
+	struct sess		*sp;
+	struct worker		*wrk;
+	enum req_step		req_step;
+	VTAILQ_ENTRY(req)	w_list;
 
 	/* The busy objhead we sleep on */
 	struct objhead		*hash_objhead;
@@ -572,7 +604,7 @@ struct req {
 
 	unsigned char		digest[DIGEST_LEN];
 
-	const char		*doclose;
+	enum sess_close		doclose;
 	struct exp		exp;
 	unsigned		cur_method;
 	unsigned		handling;
@@ -588,6 +620,7 @@ struct req {
 	uint64_t		req_bodybytes;
 	char			*ws_req;	/* WS above request data */
 
+	double			t_req;
 	double			t_resp;
 
 	struct http_conn	htc[1];
@@ -623,6 +656,8 @@ struct req {
 	/* Transaction VSL buffer */
 	struct vsl_log		vsl[1];
 
+	/* Temporary accounting */
+	struct acct		acct_req;
 };
 
 /*--------------------------------------------------------------------
@@ -639,17 +674,14 @@ struct sess {
 	unsigned		magic;
 #define SESS_MAGIC		0x2c2f9c5a
 
-	enum step		step;
+	enum sess_step		sess_step;
 	int			fd;
-	unsigned		vsl_id;
+	enum sess_close		reason;
 	uint32_t		vxid;
-	uint32_t		vseq;
 
 	/* Cross references ------------------------------------------*/
 
 	struct sesspool		*sesspool;
-	struct worker		*wrk;
-	struct req		*req;
 
 	struct pool_task	task;
 	VTAILQ_ENTRY(sess)	list;
@@ -660,7 +692,6 @@ struct sess {
 	socklen_t		mysockaddrlen;
 	struct sockaddr_storage	sockaddr;
 	struct sockaddr_storage	mysockaddr;
-	struct listen_sock	*mylsock;
 
 	/* formatted ascii client address */
 	char			addr[ADDR_BUFSIZE];
@@ -671,7 +702,6 @@ struct sess {
 	/* Timestamps, all on TIM_real() timescale */
 	double			t_open;		/* fd accepted */
 	double			t_idle;		/* fd accepted or resp sent */
-	double			t_req;
 
 #if defined(HAVE_EPOLL_CTL)
 	struct epoll_event ev;
@@ -684,14 +714,16 @@ struct sess {
 void VCA_Init(void);
 void VCA_Shutdown(void);
 int VCA_Accept(struct listen_sock *ls, struct wrk_accept *wa);
-void VCA_SetupSess(struct worker *w, struct sess *sp);
+const char *VCA_SetupSess(struct worker *w, struct sess *sp);
 void VCA_FailSess(struct worker *w);
 
 /* cache_backend.c */
 void VBE_UseHealth(const struct director *vdi);
+void VBE_DiscardHealth(const struct director *vdi);
 
-struct vbc *VDI_GetFd(const struct director *, struct sess *sp);
-int VDI_Healthy(const struct director *, const struct sess *sp);
+
+struct vbc *VDI_GetFd(const struct director *, struct req *);
+int VDI_Healthy(const struct director *, const struct req *);
 void VDI_CloseFd(struct vbc **vbp);
 void VDI_RecycleFd(struct vbc **vbp);
 void VDI_AddHostHeader(struct http *to, const struct vbc *vbc);
@@ -714,7 +746,7 @@ void BAN_Insert(struct ban *b);
 void BAN_Init(void);
 void BAN_NewObjCore(struct objcore *oc);
 void BAN_DestroyObj(struct objcore *oc);
-int BAN_CheckObject(struct object *o, const struct sess *sp);
+int BAN_CheckObject(struct object *o, struct req *sp);
 void BAN_Reload(const uint8_t *ban, unsigned len);
 struct ban *BAN_TailRef(void);
 void BAN_Compile(void);
@@ -728,9 +760,11 @@ struct busyobj *VBO_GetBusyObj(struct worker *wrk);
 void VBO_DerefBusyObj(struct worker *wrk, struct busyobj **busyobj);
 void VBO_Free(struct busyobj **vbo);
 
-/* cache_center.c [CNT] */
-void CNT_Session(struct sess *sp);
-void CNT_Init(void);
+/* cache_http1_fsm.c [HTTP1] */
+void HTTP1_Session(struct worker *, struct req *);
+
+/* cache_req_fsm.c [CNT] */
+int CNT_Request(struct worker *, struct req *);
 
 /* cache_cli.c [CLI] */
 void CLI_Init(void);
@@ -761,13 +795,20 @@ int EXP_NukeOne(struct busyobj *, struct lru *lru);
 struct storage *FetchStorage(struct busyobj *, ssize_t sz);
 int FetchError(struct busyobj *, const char *error);
 int FetchError2(struct busyobj *, const char *error, const char *more);
-int FetchHdr(struct sess *sp, int need_host_hdr, int sendbody);
+int FetchHdr(struct req *req, int need_host_hdr, int sendbody);
 void FetchBody(struct worker *w, void *bo);
-int FetchReqBody(const struct sess *sp, int sendbody);
+int FetchReqBody(struct req *, int sendbody);
 void Fetch_Init(void);
 
 /* cache_gzip.c */
 struct vgz;
+
+enum vgzret_e {
+	VGZ_ERROR = -1,
+	VGZ_OK = 0,
+	VGZ_END = 1,
+	VGZ_STUCK = 2,
+};
 
 enum vgz_flag { VGZ_NORMAL, VGZ_ALIGN, VGZ_RESET, VGZ_FINISH };
 struct vgz *VGZ_NewUngzip(struct vsl_log *vsl, const char *id);
@@ -777,21 +818,15 @@ int VGZ_IbufEmpty(const struct vgz *vg);
 void VGZ_Obuf(struct vgz *, void *, ssize_t len);
 int VGZ_ObufFull(const struct vgz *vg);
 int VGZ_ObufStorage(struct busyobj *, struct vgz *vg);
-int VGZ_Gzip(struct vgz *, const void **, size_t *len, enum vgz_flag);
-int VGZ_Gunzip(struct vgz *, const void **, size_t *len);
-int VGZ_Destroy(struct vgz **);
+enum vgzret_e VGZ_Gzip(struct vgz *, const void **, size_t *len, enum vgz_flag);
+enum vgzret_e VGZ_Gunzip(struct vgz *, const void **, size_t *len);
+enum vgzret_e VGZ_Destroy(struct vgz **);
 void VGZ_UpdateObj(const struct vgz*, struct object *);
 
 int VGZ_WrwInit(struct vgz *vg);
-int VGZ_WrwGunzip(struct worker *w, struct vgz *, const void *ibuf,
+enum vgzret_e VGZ_WrwGunzip(struct req *, struct vgz *, const void *ibuf,
     ssize_t ibufl);
-void VGZ_WrwFlush(const struct worker *wrk, struct vgz *vg);
-
-/* Return values */
-#define VGZ_ERROR	-1
-#define VGZ_OK		0
-#define VGZ_END		1
-#define VGZ_STUCK	2
+void VGZ_WrwFlush(struct req *, struct vgz *vg);
 
 /* cache_http.c */
 unsigned HTTP_estimate(unsigned nhttp);
@@ -804,7 +839,7 @@ void http_ClrHeader(struct http *to);
 unsigned http_Write(const struct worker *w, const struct http *hp, int resp);
 void http_SetResp(struct http *to, const char *proto, uint16_t status,
     const char *response);
-void http_FilterReq(const struct sess *sp, unsigned how);
+void http_FilterReq(const struct req *, unsigned how);
 void http_FilterResp(const struct http *fm, struct http *to, unsigned how);
 void http_PutProtocol(const struct http *to, const char *protocol);
 void http_PutStatus(struct http *to, uint16_t status);
@@ -825,32 +860,40 @@ double http_GetHdrQ(const struct http *hp, const char *hdr, const char *field);
 uint16_t http_GetStatus(const struct http *hp);
 const char *http_GetReq(const struct http *hp);
 int http_HdrIs(const struct http *hp, const char *hdr, const char *val);
-uint16_t http_DissectRequest(const struct sess *sp);
+uint16_t http_DissectRequest(struct req *);
 uint16_t http_DissectResponse(struct http *sp, const struct http_conn *htc);
-const char *http_DoConnection(const struct http *hp);
+enum sess_close http_DoConnection(const struct http *);
 void http_CopyHome(const struct http *hp);
 void http_Unset(struct http *hp, const char *hdr);
 void http_CollectHdr(struct http *hp, const char *hdr);
 
 /* cache_httpconn.c */
+enum htc_status_e {
+	HTC_ALL_WHITESPACE =	-3,
+	HTC_OVERFLOW =		-2,
+	HTC_ERROR_EOF =		-1,
+	HTC_NEED_MORE =		 0,
+	HTC_COMPLETE =		 1
+};
+
 void HTC_Init(struct http_conn *htc, struct ws *ws, int fd, struct vsl_log *,
     unsigned maxbytes, unsigned maxhdr);
-int HTC_Reinit(struct http_conn *htc);
-int HTC_Rx(struct http_conn *htc);
+enum htc_status_e HTC_Reinit(struct http_conn *htc);
+enum htc_status_e HTC_Rx(struct http_conn *htc);
 ssize_t HTC_Read(struct http_conn *htc, void *d, size_t len);
-int HTC_Complete(struct http_conn *htc);
+enum htc_status_e HTC_Complete(struct http_conn *htc);
 
 #define HTTPH(a, b, c) extern char b[];
 #include "tbl/http_headers.h"
 #undef HTTPH
 
 /* cache_main.c */
-uint32_t VXID_Get(struct vxid *v);
+uint32_t VXID_Get(struct vxid_pool *v);
 extern volatile struct params * cache_param;
 void THR_SetName(const char *name);
 const char* THR_GetName(void);
-void THR_SetSession(const struct sess *sp);
-const struct sess * THR_GetSession(void);
+void THR_SetRequest(const struct req *);
+const struct req * THR_GetRequest(void);
 
 /* cache_lck.c */
 
@@ -888,7 +931,7 @@ void MPL_Free(struct mempool *mpl, void *item);
 void PAN_Init(void);
 
 /* cache_pipe.c */
-void PipeSession(struct sess *sp);
+void PipeRequest(struct req *req);
 
 /* cache_pool.c */
 void Pool_Init(void);
@@ -906,15 +949,15 @@ unsigned WRW_Write(const struct worker *w, const void *ptr, int len);
 unsigned WRW_WriteH(const struct worker *w, const txt *hh, const char *suf);
 
 /* cache_session.c [SES] */
-void SES_Close(struct sess *sp, const char *reason);
-void SES_Delete(struct sess *sp, const char *reason, double now);
-void SES_Charge(struct sess *sp);
+void SES_Close(struct sess *sp, enum sess_close reason);
+void SES_Delete(struct sess *sp, enum sess_close reason, double now);
+void SES_Charge(struct worker *, struct req *);
 struct sesspool *SES_NewPool(struct pool *pp, unsigned pool_no);
 void SES_DeletePool(struct sesspool *sp);
-int SES_Schedule(struct sess *sp);
+int SES_ScheduleReq(struct req *);
+struct req *SES_GetReq(struct worker *, struct sess *);
 void SES_Handle(struct sess *sp, double now);
-void SES_GetReq(struct sess *sp);
-void SES_ReleaseReq(struct sess *sp);
+void SES_ReleaseReq(struct req *);
 pool_func_t SES_pool_accept_task;
 
 /* cache_shmlog.c */
@@ -925,7 +968,7 @@ void *VSM_Alloc(unsigned size, const char *class, const char *type,
 void VSL_Setup(struct vsl_log *vsl, void *ptr, size_t len);
 void VSM_Free(void *ptr);
 #ifdef VSL_ENDMARKER
-void VSL(enum VSL_tag_e tag, int id, const char *fmt, ...)
+void VSL(enum VSL_tag_e tag, uint32_t vxid, const char *fmt, ...)
     __printflike(3, 4);
 void VSLb(struct vsl_log *, enum VSL_tag_e tag, const char *fmt, ...)
     __printflike(3, 4);
@@ -933,30 +976,18 @@ void VSLbt(struct vsl_log *, enum VSL_tag_e tag, txt t);
 
 void VSL_Flush(struct vsl_log *, int overflow);
 
-#define DSL(flag, tag, id, ...)					\
-	do {							\
-		if (cache_param->diag_bitmap & (flag))		\
-			VSL((tag), (id), __VA_ARGS__);		\
-	} while (0)
-
-#define INCOMPL() do {							\
-	VSL(SLT_Debug, 0, "INCOMPLETE AT: %s(%d)", __func__, __LINE__); \
-	fprintf(stderr,							\
-	    "INCOMPLETE AT: %s(%d)\n",					\
-	    (const char *)__func__, __LINE__);				\
-	abort();							\
-	} while (0)
 #endif
 
 /* cache_response.c */
-void RES_BuildHttp(const struct sess *sp);
-void RES_WriteObj(struct sess *sp);
+void RES_BuildHttp(struct req *);
+void RES_WriteObj(struct req *);
 
 /* cache_vary.c */
 struct vsb *VRY_Create(struct req *sp, const struct http *hp);
 int VRY_Match(struct req *, const uint8_t *vary);
 void VRY_Validate(const uint8_t *vary);
 void VRY_Prep(struct req *);
+void VRY_Finish(struct req *req, struct busyobj *bo);
 
 /* cache_vcl.c */
 void VCL_Init(void);
@@ -965,7 +996,7 @@ void VCL_Rel(struct VCL_conf **vcc);
 void VCL_Poll(void);
 const char *VCL_Return_Name(unsigned method);
 
-#define VCL_MET_MAC(l,u,b) void VCL_##l##_method(struct sess *);
+#define VCL_MET_MAC(l,u,b) void VCL_##l##_method(struct req *);
 #include "tbl/vcl_returns.h"
 #undef VCL_MET_MAC
 
@@ -974,8 +1005,8 @@ const char *VCL_Return_Name(unsigned method);
 char *VRT_String(struct ws *ws, const char *h, const char *p, va_list ap);
 char *VRT_StringList(char *d, unsigned dl, const char *p, va_list ap);
 
-void ESI_Deliver(struct sess *);
-void ESI_DeliverChild(const struct sess *);
+void ESI_Deliver(struct req *);
+void ESI_DeliverChild(struct req *);
 
 /* cache_vrt_vmod.c */
 void VMOD_Init(void);
@@ -1004,13 +1035,14 @@ void WS_ReleaseP(struct ws *ws, char *ptr);
 void WS_Assert(const struct ws *ws);
 void WS_Reset(struct ws *ws, char *p);
 char *WS_Alloc(struct ws *ws, unsigned bytes);
+void *WS_Copy(struct ws *ws, const void *str, int len);
 char *WS_Snapshot(struct ws *ws);
 
 /* rfc2616.c */
-void RFC2616_Ttl(struct busyobj *, unsigned xid);
+void RFC2616_Ttl(struct busyobj *);
 enum body_status RFC2616_Body(struct busyobj *, struct dstat *);
 unsigned RFC2616_Req_Gzip(const struct http *);
-int RFC2616_Do_Cond(const struct sess *sp);
+int RFC2616_Do_Cond(const struct req *sp);
 
 /* stevedore.c */
 struct object *STV_NewObject(struct busyobj *, struct objcore **,
@@ -1086,3 +1118,23 @@ Tadd(txt *t, const char *p, int l)
  * extra timestamps in cache_pool.c.  Hide this detail with a macro
  */
 #define W_TIM_real(w) ((w)->lastused = VTIM_real())
+
+static inline int
+FEATURE(enum feature_bits x)
+{
+	return (cache_param->feature_bits[(unsigned)x>>3] &
+	    (0x80U >> ((unsigned)x & 7)));
+}
+
+static inline int
+DO_DEBUG(enum debug_bits x)
+{
+	return (cache_param->debug_bits[(unsigned)x>>3] &
+	    (0x80U >> ((unsigned)x & 7)));
+}
+
+#define DSL(debug_bit, id, ...)					\
+	do {							\
+		if (DO_DEBUG(debug_bit))			\
+			VSL(SLT_Debug, (id), __VA_ARGS__);	\
+	} while (0)

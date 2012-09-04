@@ -48,7 +48,7 @@ static unsigned fetchfrag;
  * We want to issue the first error we encounter on fetching and
  * supress the rest.  This function does that.
  *
- * Other code is allowed to look at sp->req->busyobj->fetch_failed to bail out
+ * Other code is allowed to look at busyobj->fetch_failed to bail out
  *
  * For convenience, always return -1
  */
@@ -378,20 +378,20 @@ fetch_eof(struct busyobj *bo, struct http_conn *htc)
  */
 
 int
-FetchReqBody(const struct sess *sp, int sendbody)
+FetchReqBody(struct req *req, int sendbody)
 {
 	unsigned long content_length;
 	char buf[8192];
 	char *ptr, *endp;
 	int rdcnt;
 
-	if (sp->req->reqbodydone) {
+	if (req->reqbodydone) {
 		AZ(sendbody);
 		return (0);
 	}
 
-	if (http_GetHdr(sp->req->http, H_Content_Length, &ptr)) {
-		sp->req->reqbodydone = 1;
+	if (http_GetHdr(req->http, H_Content_Length, &ptr)) {
+		req->reqbodydone = 1;
 
 		content_length = strtoul(ptr, &endp, 10);
 		/* XXX should check result of conversion */
@@ -400,21 +400,21 @@ FetchReqBody(const struct sess *sp, int sendbody)
 				rdcnt = sizeof buf;
 			else
 				rdcnt = content_length;
-			rdcnt = HTC_Read(sp->req->htc, buf, rdcnt);
+			rdcnt = HTC_Read(req->htc, buf, rdcnt);
 			if (rdcnt <= 0)
 				return (1);
 			content_length -= rdcnt;
 			if (sendbody) {
 				/* XXX: stats ? */
-				(void)WRW_Write(sp->wrk, buf, rdcnt);
-				if (WRW_Flush(sp->wrk))
+				(void)WRW_Write(req->wrk, buf, rdcnt);
+				if (WRW_Flush(req->wrk))
 					return (2);
 			}
 		}
 	}
-	if (http_GetHdr(sp->req->http, H_Transfer_Encoding, NULL)) {
+	if (http_GetHdr(req->http, H_Transfer_Encoding, NULL)) {
 		/* XXX: Handle chunked encoding. */
-		VSLb(sp->req->vsl, SLT_Debug, "Transfer-Encoding in request");
+		VSLb(req->vsl, SLT_Debug, "Transfer-Encoding in request");
 		return (1);
 	}
 	return (0);
@@ -431,20 +431,19 @@ FetchReqBody(const struct sess *sp, int sendbody)
  */
 
 int
-FetchHdr(struct sess *sp, int need_host_hdr, int sendbody)
+FetchHdr(struct req *req, int need_host_hdr, int sendbody)
 {
 	struct vbc *vc;
 	struct worker *wrk;
-	struct req *req;
 	struct busyobj *bo;
 	struct http *hp;
+	enum htc_status_e hs;
 	int retry = -1;
-	int i;
+	int i, first;
 	struct http_conn *htc;
 
-	wrk = sp->wrk;
+	wrk = req->wrk;
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	req = sp->req;
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	bo = req->busyobj;
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
@@ -453,14 +452,12 @@ FetchHdr(struct sess *sp, int need_host_hdr, int sendbody)
 	AN(req->director);
 	AZ(req->obj);
 
-	if (req->objcore != NULL) {		/* pass has no objcore */
-		CHECK_OBJ_NOTNULL(req->objcore, OBJCORE_MAGIC);
-		AN(req->objcore->flags & OC_F_BUSY);
-	}
+	CHECK_OBJ_NOTNULL(req->objcore, OBJCORE_MAGIC);
+	AN(req->objcore->flags & OC_F_BUSY);
 
 	hp = bo->bereq;
 
-	bo->vbc = VDI_GetFd(NULL, sp);
+	bo->vbc = VDI_GetFd(NULL, req);
 	if (bo->vbc == NULL) {
 		VSLb(req->vsl, SLT_FetchError, "no backend connection");
 		return (-1);
@@ -478,11 +475,13 @@ FetchHdr(struct sess *sp, int need_host_hdr, int sendbody)
 		VDI_AddHostHeader(bo->bereq, vc);
 
 	(void)VTCP_blocking(vc->fd);	/* XXX: we should timeout instead */
-	WRW_Reserve(wrk, &vc->fd, bo->vsl, sp->t_req);	/* XXX t_resp ? */
+	WRW_Reserve(wrk, &vc->fd, bo->vsl, req->t_req);	/* XXX t_resp ? */
 	(void)http_Write(wrk, hp, 0);	/* XXX: stats ? */
 
 	/* Deal with any message-body the request might have */
-	i = FetchReqBody(sp, sendbody);
+	i = FetchReqBody(req, sendbody);
+	if (sendbody && req->reqbodydone)
+		retry = -1;
 	if (WRW_FlushRelease(wrk) || i > 0) {
 		VSLb(req->vsl, SLT_FetchError,
 		    "backend write error: %d (%s)",
@@ -503,31 +502,32 @@ FetchHdr(struct sess *sp, int need_host_hdr, int sendbody)
 
 	VTCP_set_read_timeout(vc->fd, vc->first_byte_timeout);
 
-	i = HTC_Rx(htc);
-
-	if (i < 0) {
-		VSLb(req->vsl, SLT_FetchError,
-		    "http first read error: %d %d (%s)",
-		    i, errno, strerror(errno));
-		VDI_CloseFd(&bo->vbc);
-		/* XXX: other cleanup ? */
-		/* Retryable if we never received anything */
-		return (i == -1 ? retry : -1);
-	}
-
-	VTCP_set_read_timeout(vc->fd, vc->between_bytes_timeout);
-
-	while (i == 0) {
-		i = HTC_Rx(htc);
-		if (i < 0) {
+	first = 1;
+	do {
+		hs = HTC_Rx(htc);
+		if (hs == HTC_OVERFLOW) {
 			VSLb(req->vsl, SLT_FetchError,
-			    "http first read error: %d %d (%s)",
-			    i, errno, strerror(errno));
+			    "http %sread error: overflow",
+			    first ? "first " : "");
 			VDI_CloseFd(&bo->vbc);
 			/* XXX: other cleanup ? */
 			return (-1);
 		}
-	}
+		if (hs == HTC_ERROR_EOF) {
+			VSLb(req->vsl, SLT_FetchError,
+			    "http %sread error: EOF",
+			    first ? "first " : "");
+			VDI_CloseFd(&bo->vbc);
+			/* XXX: other cleanup ? */
+			return (retry);
+		}
+		if (first) {
+			retry = -1;
+			first = 0;
+			VTCP_set_read_timeout(vc->fd,
+			    vc->between_bytes_timeout);
+		}
+	} while (hs != HTC_COMPLETE);
 
 	hp = bo->beresp;
 
@@ -647,8 +647,9 @@ FetchBody(struct worker *wrk, void *priv)
 	if (bo->state == BOS_FAILED) {
 		wrk->stats.fetch_failed++;
 		VDI_CloseFd(&bo->vbc);
-		obj->exp.ttl = -1.;
 		obj->len = 0;
+		EXP_Clr(&obj->exp);
+		EXP_Rearm(obj);
 	} else {
 		assert(bo->state == BOS_FETCHING);
 
@@ -666,7 +667,7 @@ FetchBody(struct worker *wrk, void *priv)
 				uu += st->len;
 			if (bo->do_stream)
 				/* Streaming might have started freeing stuff */
-				assert (uu <= obj->len);
+				assert(uu <= obj->len);
 
 			else
 				assert(uu == obj->len);
@@ -687,7 +688,7 @@ FetchBody(struct worker *wrk, void *priv)
 		/* XXX: Atomic assignment, needs volatile/membar ? */
 		bo->state = BOS_FINISHED;
 	}
-	if (obj->objcore != NULL)
+	if (obj->objcore->objhead != NULL)
 		HSH_Complete(obj->objcore);
 	bo->stats = NULL;
 	VBO_DerefBusyObj(wrk, &bo);

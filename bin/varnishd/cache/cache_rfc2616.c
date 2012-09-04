@@ -63,7 +63,7 @@
  */
 
 void
-RFC2616_Ttl(struct busyobj *bo, unsigned xid)
+RFC2616_Ttl(struct busyobj *bo)
 {
 	unsigned max_age, age;
 	double h_date, h_expires;
@@ -169,8 +169,8 @@ RFC2616_Ttl(struct busyobj *bo, unsigned xid)
 
 	/* calculated TTL, Our time, Date, Expires, max-age, age */
 	VSLb(bo->vsl, SLT_TTL,
-	    "%u RFC %.0f %.0f %.0f %.0f %.0f %.0f %.0f %u",
-	    xid, expp->ttl, -1., -1., expp->entered,
+	    "RFC %.0f %.0f %.0f %.0f %.0f %.0f %.0f %u",
+	    expp->ttl, -1., -1., expp->entered,
 	    expp->age, h_date, h_expires, max_age);
 }
 
@@ -310,7 +310,7 @@ RFC2616_Req_Gzip(const struct http *hp)
 /*--------------------------------------------------------------------*/
 
 int
-RFC2616_Do_Cond(const struct sess *sp)
+RFC2616_Do_Cond(const struct req *req)
 {
 	char *p, *e;
 	double ims;
@@ -319,19 +319,19 @@ RFC2616_Do_Cond(const struct sess *sp)
 	/* RFC 2616 13.3.4 states we need to match both ETag
 	   and If-Modified-Since if present*/
 
-	if (http_GetHdr(sp->req->http, H_If_Modified_Since, &p) ) {
-		if (!sp->req->obj->last_modified)
+	if (http_GetHdr(req->http, H_If_Modified_Since, &p) ) {
+		if (!req->obj->last_modified)
 			return (0);
 		ims = VTIM_parse(p);
-		if (ims > sp->t_req)	/* [RFC2616 14.25] */
+		if (ims > req->t_req)	/* [RFC2616 14.25] */
 			return (0);
-		if (sp->req->obj->last_modified > ims)
+		if (req->obj->last_modified > ims)
 			return (0);
 		do_cond = 1;
 	}
 
-	if (http_GetHdr(sp->req->http, H_If_None_Match, &p) &&
-	    http_GetHdr(sp->req->obj->http, H_ETag, &e)) {
+	if (http_GetHdr(req->http, H_If_None_Match, &p) &&
+	    http_GetHdr(req->obj->http, H_ETag, &e)) {
 		if (strcmp(p,e) != 0)
 			return (0);
 		do_cond = 1;

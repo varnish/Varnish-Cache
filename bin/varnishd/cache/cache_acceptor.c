@@ -172,6 +172,8 @@ vca_pace_good(void)
 
 /*--------------------------------------------------------------------
  * Accept on a listen socket, and handle error returns.
+ *
+ * Called from a worker thread from a pool
  */
 
 int
@@ -239,22 +241,18 @@ VCA_FailSess(struct worker *wrk)
  * We have allocated a session, move our info into it.
  */
 
-void
+const char *
 VCA_SetupSess(struct worker *wrk, struct sess *sp)
 {
 	struct wrk_accept *wa;
+	const char *retval;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	CAST_OBJ_NOTNULL(wa, (void*)wrk->aws->f, WRK_ACCEPT_MAGIC);
-	sp->vxid = wa->vxid;
-	sp->vseq = 0;
 	sp->fd = wa->acceptsock;
-	sp->vsl_id = wa->acceptsock | VSL_CLIENTMARKER ;
 	wa->acceptsock = -1;
-	sp->t_open = VTIM_real();
-	sp->mylsock = wa->acceptlsock;
-	CHECK_OBJ_NOTNULL(sp->mylsock, LISTEN_SOCK_MAGIC);
+	retval = wa->acceptlsock->name;
 	assert(wa->acceptaddrlen <= sp->sockaddrlen);
 	memcpy(&sp->sockaddr, &wa->acceptaddr, wa->acceptaddrlen);
 	sp->sockaddrlen = wa->acceptaddrlen;
@@ -277,6 +275,7 @@ VCA_SetupSess(struct worker *wrk, struct sess *sp)
 		VTCP_Assert(setsockopt(sp->fd, SOL_SOCKET, SO_RCVTIMEO,
 		    &tv_rcvtimeo, sizeof tv_rcvtimeo));
 #endif
+	return (retval);
 }
 
 /*--------------------------------------------------------------------*/

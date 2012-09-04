@@ -12,7 +12,10 @@ OCFLAGS="$CFLAGS"
 AC_CANONICAL_SYSTEM
 AC_LANG(C)
 
-AM_INIT_AUTOMAKE([foreign])
+AM_INIT_AUTOMAKE([1.11 foreign color-tests parallel-tests])
+AM_SILENT_RULES([yes])
+AC_DISABLE_STATIC
+AC_PROG_LIBTOOL
 
 # Checks for programs.
 AC_GNU_SOURCE
@@ -43,7 +46,6 @@ CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
 CC="$PTHREAD_CC"
 
 AC_PROG_INSTALL
-AC_PROG_LIBTOOL
 AC_PROG_MAKE_SET
 AC_ARG_WITH([rst2man],
                AS_HELP_STRING([--with-rst2man=PATH],
@@ -478,12 +480,16 @@ AC_ARG_ENABLE(stack-protector,
 if test "x$enable_stack_protector" != "xno"; then
 	save_CFLAGS="$CFLAGS"
 	CFLAGS="${CFLAGS} -fstack-protector-all"
+	save_AM_LT_LDFLAGS="$AM_LT_LDFLAGS"
+	AM_LT_LDFLAGS="${AM_LT_LDFLAGS} -Wc,-fstack-protector"
 	AC_COMPILE_IFELSE(
 		[AC_LANG_PROGRAM([],[],[])],
 		[],
 		[AC_MSG_WARN([-fstack-protector not supported, disabling])
-		    CFLAGS="$save_CFLAGS"])
+		    CFLAGS="$save_CFLAGS"]
+		    AM_LT_LDFLAGS="$save_AM_LT_LDFLAGS")
 fi
+AC_SUBST(AM_LT_LDFLAGS)
 
 # --enable-tests
 AC_ARG_ENABLE(tests,
@@ -525,6 +531,21 @@ fi
 
 AC_DEFINE_UNQUOTED([VCC_CC],"$VCC_CC",[C compiler command line for VCL code])
 
+# --enable-pcre-jit
+AC_ARG_ENABLE(pcre-jit,
+    AS_HELP_STRING([--enable-pcre-jit],
+	[use the PCRE JIT compiler (default is NO)]),
+    ,
+    [enable_pcre_jit=no])
+
+if test "$enable_pcre_jit" = yes; then
+   AC_DEFINE([USE_PCRE_JIT],[1],[use the PCRE JIT compiler])
+fi
+
+# Stupid automake needs this
+VTC_TESTS="$(cd $srcdir/bin/varnishtest && echo tests/*.vtc)"
+AC_SUBST(VTC_TESTS)
+
 # Generate output
 AC_CONFIG_FILES([
     Makefile
@@ -549,10 +570,12 @@ AC_CONFIG_FILES([
     lib/libvarnishcompat/Makefile
     lib/libvcl/Makefile
     lib/libvgz/Makefile
+    lib/libvmod_debug/Makefile
     lib/libvmod_std/Makefile
     lib/libjemalloc/Makefile
     man/Makefile
     redhat/Makefile
     varnishapi.pc
+    varnishapi-uninstalled.pc
 ])
 AC_OUTPUT

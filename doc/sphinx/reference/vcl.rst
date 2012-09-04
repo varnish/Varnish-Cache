@@ -404,7 +404,8 @@ insensitivity* add the flag within parens following a question mark,
 like this:
 ::
 
-  if (req.http.host ~ "(?i)example.com$") {
+  # If host is NOT example dot com..
+  if (req.http.host !~ "(?i)example.com$") {
           ...
   }
 
@@ -426,7 +427,7 @@ regsub(str, regex, sub)
   matched string.
 
 regsuball(str, regex, sub)
-  As regsuball() but this replaces all occurrences.
+  As regsub() but this replaces all occurrences.
 
 ban(ban expression)
 

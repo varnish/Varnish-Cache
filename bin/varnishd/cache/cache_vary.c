@@ -199,6 +199,31 @@ VRY_Prep(struct req *req)
 }
 
 /**********************************************************************
+ * Finish predictive vary procssing
+ */
+
+void
+VRY_Finish(struct req *req, struct busyobj *bo)
+{
+
+	if (bo != NULL) {
+		CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+		VRY_Validate(req->vary_b);
+		if (req->vary_l != NULL) {
+			bo->vary = WS_Copy(bo->ws,
+			    req->vary_b, req->vary_l - req->vary_b);
+			AN(bo->vary);
+			VRY_Validate(bo->vary);
+		} else
+			bo->vary = NULL;
+	}
+	WS_Release(req->ws, 0);
+	req->vary_b = NULL;
+	req->vary_l = NULL;
+	req->vary_e = NULL;
+}
+
+/**********************************************************************
  * Match vary strings, and build a new cached string if possible.
  *
  * Return zero if there is certainly no match.
@@ -261,7 +286,7 @@ VRY_Match(struct req *req, const uint8_t *vary)
 			vsp[ln + 1] = 0xff;
 			vsp[ln + 2] = 0;
 			VRY_Validate(vsp);
-			req->vary_l = vsp + 3;
+			req->vary_l = vsp + ln + 3;
 
 			i = vry_cmp(vary, vsp);
 			assert(i == 0 || i == 2);

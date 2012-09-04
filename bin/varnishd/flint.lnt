@@ -109,6 +109,10 @@
 -esym(458, name_key)
 
 //////////////
+// 436 = Apparent preprocessor directive in invocation of macro '___'
+-emacro(436, SLTM)
+
+//////////////
 
 +libh mgt_event.h
 
@@ -154,6 +158,16 @@
 -e641	// Converting enum 'cli_status_e' to int
 
 -e441	//  for clause irregularity: loop variable '___' not found in 2nd for expression
+
+// Vmod instantiation symbols are defined in all vmods
+
+-esym(14, Vmod_Name)
+-esym(14, Vmod_Func)
+-esym(14, Vmod_Len)
+-esym(14, Vmod_Proto)
+-esym(14, Vmod_Spec)
+-esym(14, Vmod_Varnish_ABI)
+-esym(14, Vmod_Id)
 
 // Review all below this line ///////////////////////////////////////////////
 

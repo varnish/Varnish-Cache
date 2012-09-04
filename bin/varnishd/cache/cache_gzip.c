@@ -128,7 +128,7 @@ VGZ_NewGzip(struct vsl_log *vsl, const char *id)
 	i = deflateInit2(&vg->vz,
 	    cache_param->gzip_level,		/* Level */
 	    Z_DEFLATED,				/* Method */
-	    16 + cache_param->gzip_window,	/* Window bits (16=gzip + 15) */
+	    16 + 15,				/* Window bits (16=gzip) */
 	    cache_param->gzip_memlevel,		/* memLevel */
 	    Z_DEFAULT_STRATEGY);
 	assert(Z_OK == i);
@@ -198,8 +198,7 @@ VGZ_ObufFull(const struct vgz *vg)
 }
 
 /*--------------------------------------------------------------------
- * Keep the outbuffer supplied with storage and file it under the
- * sp->req->obj as it fills.
+ * Keep the outbuffer supplied with storage
  */
 
 int
@@ -219,7 +218,7 @@ VGZ_ObufStorage(struct busyobj *bo, struct vgz *vg)
 
 /*--------------------------------------------------------------------*/
 
-int
+enum vgzret_e
 VGZ_Gunzip(struct vgz *vg, const void **pptr, size_t *plen)
 {
 	int i;
@@ -248,13 +247,13 @@ VGZ_Gunzip(struct vgz *vg, const void **pptr, size_t *plen)
 		return (VGZ_END);
 	if (i == Z_BUF_ERROR)
 		return (VGZ_STUCK);
-	VSL(SLT_Debug, 0, "Unknown INFLATE=%d (%s)\n", i, vg->vz.msg);
+	VSLb(vg->vsl, SLT_Gzip, "Gunzip error: %d (%s)", i, vg->vz.msg);
 	return (VGZ_ERROR);
 }
 
 /*--------------------------------------------------------------------*/
 
-int
+enum vgzret_e
 VGZ_Gzip(struct vgz *vg, const void **pptr, size_t *plen, enum vgz_flag flags)
 {
 	int i;
@@ -286,12 +285,13 @@ VGZ_Gzip(struct vgz *vg, const void **pptr, size_t *plen, enum vgz_flag flags)
 	}
 	vg->last_i = i;
 	if (i == Z_OK)
-		return (0);
+		return (VGZ_OK);
 	if (i == Z_STREAM_END)
-		return (1);
+		return (VGZ_END);
 	if (i == Z_BUF_ERROR)
-		return (2);
-	return (-1);
+		return (VGZ_STUCK);
+	VSLb(vg->vsl, SLT_Gzip, "Gzip error: %d (%s)", i, vg->vz.msg);
+	return (VGZ_ERROR);
 }
 
 /*--------------------------------------------------------------------
@@ -315,14 +315,17 @@ VGZ_WrwInit(struct vgz *vg)
  * Leave flushing to caller, more data may be coming.
  */
 
-int
-VGZ_WrwGunzip(struct worker *wrk, struct vgz *vg, const void *ibuf,
+enum vgzret_e
+VGZ_WrwGunzip(struct req *req, struct vgz *vg, const void *ibuf,
     ssize_t ibufl)
 {
-	int i;
+	enum vgzret_e vr;
 	size_t dl;
 	const void *dp;
+	struct worker *wrk;
 
+	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
+	wrk = req->wrk;
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
 	AN(vg->m_buf);
@@ -331,38 +334,42 @@ VGZ_WrwGunzip(struct worker *wrk, struct vgz *vg, const void *ibuf,
 		return (VGZ_OK);
 	do {
 		if (vg->m_len == vg->m_sz)
-			i = VGZ_STUCK;
+			vr = VGZ_STUCK;
 		else {
-			i = VGZ_Gunzip(vg, &dp, &dl);
+			vr = VGZ_Gunzip(vg, &dp, &dl);
 			vg->m_len += dl;
 		}
-		if (i < VGZ_OK) {
-			/* XXX: VSL ? */
-			return (-1);
-		}
-		if (vg->m_len == vg->m_sz || i == VGZ_STUCK) {
-			wrk->acct_tmp.bodybytes += vg->m_len;
+		if (vr < VGZ_OK)
+			return (vr);
+		if (vg->m_len == vg->m_sz || vr == VGZ_STUCK) {
+			req->acct_req.bodybytes += vg->m_len;
 			(void)WRW_Write(wrk, vg->m_buf, vg->m_len);
 			(void)WRW_Flush(wrk);
 			vg->m_len = 0;
 			VGZ_Obuf(vg, vg->m_buf, vg->m_sz);
 		}
 	} while (!VGZ_IbufEmpty(vg));
-	if (i == VGZ_STUCK)
-		i = VGZ_OK;
-	return (i);
+	if (vr == VGZ_STUCK)
+		vr = VGZ_OK;
+	return (vr);
 }
 
 /*--------------------------------------------------------------------*/
 
 void
-VGZ_WrwFlush(const struct worker *wrk, struct vgz *vg)
+VGZ_WrwFlush(struct req *req, struct vgz *vg)
 {
+	struct worker *wrk;
+
+	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
+	wrk = req->wrk;
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
 
 	if (vg->m_len ==  0)
 		return;
+
+	req->acct_req.bodybytes += vg->m_len;
 	(void)WRW_Write(wrk, vg->m_buf, vg->m_len);
 	(void)WRW_Flush(wrk);
 	vg->m_len = 0;
@@ -383,13 +390,13 @@ VGZ_UpdateObj(const struct vgz *vg, struct object *obj)
 }
 
 /*--------------------------------------------------------------------
- * Passing a vsl_id of -1 means "use wrk->vbc->vsl_id"
  */
 
-int
+enum vgzret_e
 VGZ_Destroy(struct vgz **vgp)
 {
 	struct vgz *vg;
+	enum vgzret_e vr;
 	int i;
 
 	vg = *vgp;
@@ -413,14 +420,18 @@ VGZ_Destroy(struct vgz **vgp)
 		i = Z_STREAM_END;
 	if (vg->m_buf)
 		free(vg->m_buf);
-	FREE_OBJ(vg);
 	if (i == Z_OK)
-		return (VGZ_OK);
-	if (i == Z_STREAM_END)
-		return (VGZ_END);
-	if (i == Z_BUF_ERROR)
-		return (VGZ_STUCK);
-	return (VGZ_ERROR);
+		vr = VGZ_OK;
+	else if (i == Z_STREAM_END)
+		vr = VGZ_END;
+	else if (i == Z_BUF_ERROR)
+		vr = VGZ_STUCK;
+	else {
+		VSLb(vg->vsl, SLT_Gzip, "G(un)zip error: %d (%s)", i, vg->vz.msg);
+		vr = VGZ_ERROR;
+	}
+	FREE_OBJ(vg);
+	return (vr);
 }
 
 /*--------------------------------------------------------------------
