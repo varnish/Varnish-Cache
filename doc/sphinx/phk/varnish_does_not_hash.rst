@@ -35,10 +35,10 @@ storing the objects in an array indexed by that key.
 
 Typically, but not always, the key is a string and the index is a
 (smallish) integer, and the job of the hash-function is to squeeze
-the key into the integer, without loosing any of the entropy.
+the key into the integer, without losing any of the entropy.
 
 Needless to say, the more entropy you have to begin with, the more
-of it you can afford to loose, and loose some you almost invariably
+of it you can afford to lose, and lose some you almost invariably
 will.
 
 There are two families of hash-functions, the fast ones, and the good
