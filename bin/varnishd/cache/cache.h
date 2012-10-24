@@ -188,6 +188,10 @@ enum httpwhence {
 	HTTP_Obj
 };
 
+/*--------------------------------------------------------------------
+ * Ban info event types
+ */
+
 /* NB: remember to update http_Copy() if you add fields */
 struct http {
 	unsigned		magic;
@@ -790,6 +794,7 @@ void EXP_Init(void);
 void EXP_Rearm(const struct object *o);
 int EXP_Touch(struct objcore *oc);
 int EXP_NukeOne(struct busyobj *, struct lru *lru);
+void EXP_NukeLRU(struct worker *wrk, struct vsl_log *vsl, struct lru *lru);
 
 /* cache_fetch.c */
 struct storage *FetchStorage(struct busyobj *, ssize_t sz);
@@ -1053,6 +1058,7 @@ void STV_free(struct storage *st);
 void STV_open(void);
 void STV_close(void);
 void STV_Freestore(struct object *o);
+void STV_BanInfo(enum baninfo event, const uint8_t *ban, unsigned len);
 
 /* storage_synth.c */
 struct vsb *SMS_Makesynth(struct object *obj);
@@ -1062,7 +1068,6 @@ void SMS_Init(void);
 /* storage_persistent.c */
 void SMP_Init(void);
 void SMP_Ready(void);
-void SMP_NewBan(const uint8_t *ban, unsigned len);
 
 /*
  * A normal pointer difference is signed, but we never want a negative value

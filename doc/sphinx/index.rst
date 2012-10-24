@@ -16,10 +16,11 @@ our tutorial - :ref:`tutorial-index`.
 Contents:
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
    installation/index.rst
    tutorial/index.rst
+   users-guide/index.rst
    reference/index.rst
    phk/index.rst
    glossary/index.rst

@@ -38,8 +38,8 @@
 #include "vrt.h"
 #include "vcc_if.h"
 
-double __match_proto__()
-vmod_duration(struct req *req, const char *p, double d)
+VCL_DURATION __match_proto__()
+vmod_duration(struct req *req, const char *p, VCL_DURATION d)
 {
 	char *e;
 	double r;
@@ -88,11 +88,11 @@ vmod_duration(struct req *req, const char *p, double d)
 	return (r);
 }
 
-int __match_proto__()
-vmod_integer(struct req *req, const char *p, int i)
+VCL_INT __match_proto__()
+vmod_integer(struct req *req, const char *p, VCL_INT i)
 {
 	char *e;
-	int r;
+	long r;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 

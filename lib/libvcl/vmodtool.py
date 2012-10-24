@@ -46,20 +46,20 @@ else:
 	specfile = "vmod.vcc"
 
 ctypes = {
-	'IP':		"struct sockaddr_storage *",
-	'STRING':	"const char *",
-	'STRING_LIST':	"const char *, ...",
-	'BOOL':		"unsigned",
-	'BACKEND':	"struct director *",
-	'ENUM':		"const char *",
-	'TIME':		"double",
-	'REAL':		"double",
-	'DURATION':	"double",
-	'INT':		"int",
-	'HEADER':	"enum gethdr_e, const char *",
-	'PRIV_VCL':	"struct vmod_priv *",
+	'BACKEND':	"VCL_BACKEND",
+	'BOOL':		"VCL_BOOL",
+	'DURATION':	"VCL_DURATION",
+	'ENUM':		"VCL_ENUM",
+	'HEADER':	"const struct gethdr_s *",
+	'INT':		"VCL_INT",
+	'IP':		"VCL_IP",
 	'PRIV_CALL':	"struct vmod_priv *",
-	'VOID':		"void",
+	'PRIV_VCL':	"struct vmod_priv *",
+	'REAL':		"VCL_REAL",
+	'STRING':	"VCL_STRING",
+	'STRING_LIST':	"const char *, ...",
+	'TIME':		"VCL_TIME",
+	'VOID':		"VCL_VOID",
 }
 
 #######################################################################

@@ -45,13 +45,14 @@
 
 #include "vcc_if.h"
 
-void __match_proto__(td_std_set_ip_tos)
-vmod_set_ip_tos(struct req *req, int tos)
+VCL_VOID __match_proto__(td_std_set_ip_tos)
+vmod_set_ip_tos(struct req *req, VCL_INT tos)
 {
+	int itos = tos;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	VTCP_Assert(setsockopt(req->sp->fd,
-	    IPPROTO_IP, IP_TOS, &tos, sizeof(tos)));
+	    IPPROTO_IP, IP_TOS, &itos, sizeof(itos)));
 }
 
 static const char *
@@ -90,7 +91,7 @@ vmod_updown(struct req *req, int up, const char *s, va_list ap)
 	}
 }
 
-const char * __match_proto__(td_std_toupper)
+VCL_STRING __match_proto__(td_std_toupper)
 vmod_toupper(struct req *req, const char *s, ...)
 {
 	const char *p;
@@ -103,7 +104,7 @@ vmod_toupper(struct req *req, const char *s, ...)
 	return (p);
 }
 
-const char * __match_proto__(td_std_tolower)
+VCL_STRING __match_proto__(td_std_tolower)
 vmod_tolower(struct req *req, const char *s, ...)
 {
 	const char *p;
@@ -116,8 +117,8 @@ vmod_tolower(struct req *req, const char *s, ...)
 	return (p);
 }
 
-double __match_proto__(td_std_random)
-vmod_random(struct req *req, double lo, double hi)
+VCL_REAL __match_proto__(td_std_random)
+vmod_random(struct req *req, VCL_REAL lo, VCL_REAL hi)
 {
 	double a;
 
@@ -128,7 +129,7 @@ vmod_random(struct req *req, double lo, double hi)
 	return (a);
 }
 
-void __match_proto__(td_std_log)
+VCL_VOID __match_proto__(td_std_log)
 vmod_log(struct req *req, const char *fmt, ...)
 {
 	unsigned u;
@@ -149,8 +150,8 @@ vmod_log(struct req *req, const char *fmt, ...)
 	WS_Release(req->ws, 0);
 }
 
-void __match_proto__(td_std_syslog)
-vmod_syslog(struct req *req, int fac, const char *fmt, ...)
+VCL_VOID __match_proto__(td_std_syslog)
+vmod_syslog(struct req *req, VCL_INT fac, const char *fmt, ...)
 {
 	char *p;
 	unsigned u;
@@ -163,17 +164,17 @@ vmod_syslog(struct req *req, int fac, const char *fmt, ...)
 	p = VRT_StringList(p, u, fmt, ap);
 	va_end(ap);
 	if (p != NULL)
-		syslog(fac, "%s", p);
+		syslog((int)fac, "%s", p);
 	WS_Release(req->ws, 0);
 }
 
-void __match_proto__(td_std_collect)
-vmod_collect(struct req *req, enum gethdr_e e, const char *h)
+VCL_VOID __match_proto__(td_std_collect)
+vmod_collect(struct req *req, const struct gethdr_s *hdr)
 {
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	if (e == HDR_REQ)
-		http_CollectHdr(req->http, h);
-	else if (e == HDR_BERESP && req->busyobj != NULL)
-		http_CollectHdr(req->busyobj->beresp, h);
+	if (hdr->where == HDR_REQ)
+		http_CollectHdr(req->http, hdr->what);
+	else if (hdr->where == HDR_BERESP && req->busyobj != NULL)
+		http_CollectHdr(req->busyobj->beresp, hdr->what);
 }

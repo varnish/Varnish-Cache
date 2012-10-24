@@ -120,7 +120,8 @@ parse_set(struct vcc *tl)
 	vp = vcc_FindVar(tl, tl->t, 1, "cannot be set");
 	ERRCHK(tl);
 	assert(vp != NULL);
-	Fb(tl, 1, "%s", vp->lname);
+	Fb(tl, 1, "%s\n", vp->lname);
+	tl->indent += INDENT;
 	vcc_NextToken(tl);
 	fmt = vp->fmt;
 	for (ap = arith; ap->type != VOID; ap++) {
@@ -129,18 +130,21 @@ parse_set(struct vcc *tl)
 		if (ap->oper != tl->t->tok)
 			continue;
 		if (ap->oper != '=')
-			Fb(tl, 0, "%s %c ", vp->rname, *tl->t->b);
+			Fb(tl, 1, "%s %c ", vp->rname, *tl->t->b);
 		vcc_NextToken(tl);
 		fmt = ap->want;
 		break;
 	}
 	if (ap->type == VOID)
 		SkipToken(tl, ap->oper);
-	if (fmt == STRING) {
+	if (fmt == HEADER) {
+		vcc_Expr(tl, STRING_LIST);
+	} else if (fmt == STRING) {
 		vcc_Expr(tl, STRING_LIST);
 	} else {
 		vcc_Expr(tl, fmt);
 	}
+	tl->indent -= INDENT;
 	Fb(tl, 1, ");\n");
 }
 
@@ -151,19 +155,20 @@ parse_unset(struct vcc *tl)
 {
 	const struct var *vp;
 
+	/* XXX: Wrong, should use VCC_Expr(HEADER) */
 	vcc_NextToken(tl);
 	ExpectErr(tl, ID);
 	vp = vcc_FindVar(tl, tl->t, 1, "cannot be unset");
 	ERRCHK(tl);
 	assert(vp != NULL);
-	if (vp->fmt != STRING || vp->http == NULL) {
+	if (vp->fmt != HEADER) {
 		VSB_printf(tl->sb,
 		    "Only http header variables can be unset.\n");
 		vcc_ErrWhere(tl, tl->t);
 		return;
 	}
 	ERRCHK(tl);
-	Fb(tl, 1, "%s0);\n", vp->lname);
+	Fb(tl, 1, "%svrt_magic_string_unset);\n", vp->lname);
 	vcc_NextToken(tl);
 }
 

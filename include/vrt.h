@@ -38,11 +38,39 @@ struct director;
 struct VCL_conf;
 struct sockaddr_storage;
 
+/***********************************************************************
+ * This is the central definition of the mapping from VCL types to
+ * C-types.  The python scripts read these from here.
+ */
+
+typedef struct director *		VCL_BACKEND;
+typedef unsigned			VCL_BOOL;
+typedef double				VCL_BYTES;
+typedef double				VCL_DURATION;
+typedef const char *			VCL_ENUM;
+typedef const char *			VCL_HEADER;
+typedef long				VCL_INT;
+typedef struct sockaddr_storage *	VCL_IP;
+typedef double				VCL_REAL;
+typedef const char *			VCL_STRING;
+typedef double				VCL_TIME;
+typedef void				VCL_VOID;
+
+/***********************************************************************/
+
+enum gethdr_e { HDR_REQ, HDR_RESP, HDR_OBJ, HDR_BEREQ, HDR_BERESP };
+
+struct gethdr_s {
+	enum gethdr_e	where;
+	const char	*what;
+};
+
 /*
  * A backend probe specification
  */
 
 extern const void * const vrt_magic_string_end;
+extern const void * const vrt_magic_string_unset;
 
 struct vrt_backend_probe {
 	const char	*url;
@@ -158,10 +186,9 @@ int VRT_rewrite(const char *, const char *);
 void VRT_error(struct req *, unsigned, const char *);
 int VRT_switch_config(const char *);
 
-enum gethdr_e { HDR_REQ, HDR_RESP, HDR_OBJ, HDR_BEREQ, HDR_BERESP };
-char *VRT_GetHdr(const struct req *, enum gethdr_e where, const char *);
-void VRT_SetHdr(struct req *, enum gethdr_e where, const char *,
-    const char *, ...);
+const struct gethdr_s *VRT_MkGethdr(struct req *,enum gethdr_e, const char *);
+char *VRT_GetHdr(const struct req *, const struct gethdr_s *);
+void VRT_SetHdr(struct req *, const struct gethdr_s *, const char *, ...);
 void VRT_handling(struct req *, unsigned hand);
 
 void VRT_hashdata(struct req *, const char *str, ...);
@@ -208,11 +235,11 @@ int VRT_Stv(const char *nm);
 /* Convert things to string */
 
 char *VRT_IP_string(const struct req *, const struct sockaddr_storage *sa);
-char *VRT_int_string(const struct req *, int);
-char *VRT_double_string(const struct req *, double);
-char *VRT_time_string(const struct req *, double);
-const char *VRT_bool_string(const struct req *, unsigned);
-const char *VRT_backend_string(const struct req *, const struct director *d);
+char *VRT_INT_string(const struct req *, long);
+char *VRT_REAL_string(const struct req *, double);
+char *VRT_TIME_string(const struct req *, double);
+const char *VRT_BOOL_string(const struct req *, unsigned);
+const char *VRT_BACKEND_string(const struct req *, const struct director *d);
 
 #define VRT_done(req, hand)			\
 	do {					\

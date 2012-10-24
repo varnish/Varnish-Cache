@@ -347,7 +347,7 @@ varnish_launch(struct varnish *v)
 	AN(vsb);
 	VSB_printf(vsb, "cd ${pwd} &&");
 	VSB_printf(vsb, " ${varnishd} -d -d -n %s", v->workdir);
-	VSB_printf(vsb, " -l 10m,1m,-");
+	VSB_printf(vsb, " -l 2m,1m,-");
 	VSB_printf(vsb, " -p auto_restart=off");
 	VSB_printf(vsb, " -p syslog_cli_traffic=off");
 	VSB_printf(vsb, " -a '%s'", "127.0.0.1:0");
@@ -377,10 +377,10 @@ varnish_launch(struct varnish *v)
 		AZ(close(v->fds[3]));
 		for (i = 3; i <getdtablesize(); i++)
 			(void)close(i);
-		AZ(execl("/bin/sh", "/bin/sh", "-c", VSB_data(vsb), NULL));
+		AZ(execl("/bin/sh", "/bin/sh", "-c", VSB_data(vsb), (char*)0));
 		exit(1);
 	} else {
-		vtc_log(v->vl, 3, "PID: %d", v->pid);
+		vtc_log(v->vl, 3, "PID: %ld", (long)v->pid);
 	}
 	AZ(close(v->fds[0]));
 	AZ(close(v->fds[3]));
@@ -395,16 +395,8 @@ varnish_launch(struct varnish *v)
 	fd[0].fd = v->cli_fd;
 	fd[0].events = POLLIN;
 	fd[1].fd = v->fds[0];
-	fd[1].events = POLLHUP;
-#ifdef __APPLE__
-	/*
-	 * OSX cannot poll a pipe for POLLHUP only, poll just returns
-	 * zero with no revents.
-	 */
-	i = poll(fd, 1, 10000);
-#else
+	fd[1].events = 0; /* Only care about POLLHUP, which is output-only */
 	i = poll(fd, 2, 10000);
-#endif
 	vtc_log(v->vl, 4, "CLIPOLL %d 0x%x 0x%x",
 	    i, fd[0].revents, fd[1].revents);
 	if (i == 0) {
@@ -602,7 +594,7 @@ varnish_cli(struct varnish *v, const char *cli, unsigned exp)
  */
 
 static void
-varnish_vcl(struct varnish *v, const char *vcl, enum VCLI_status_e expect)
+varnish_vcl(struct varnish *v, const char *vcl, enum VCLI_status_e expect, char **resp)
 {
 	struct vsb *vsb;
 	enum VCLI_status_e u;
@@ -618,7 +610,7 @@ varnish_vcl(struct varnish *v, const char *vcl, enum VCLI_status_e expect)
 	    ++v->vcl_nbr, NONSENSE, vcl, NONSENSE);
 	AZ(VSB_finish(vsb));
 
-	u = varnish_ask_cli(v, VSB_data(vsb), NULL);
+	u = varnish_ask_cli(v, VSB_data(vsb), resp);
 	if (u != expect) {
 		VSB_delete(vsb);
 		vtc_log(v->vl, 0,
@@ -865,13 +857,30 @@ cmd_varnish(CMD_ARGS)
 		}
 		if (!strcmp(*av, "-badvcl")) {
 			AN(av[1]);
-			varnish_vcl(v, av[1], CLIS_PARAM);
+			varnish_vcl(v, av[1], CLIS_PARAM, NULL);
 			av++;
+			continue;
+		}
+		if (!strcmp(*av, "-errvcl")) {
+			char *r = NULL;
+			AN(av[1]);
+			AN(av[2]);
+			varnish_vcl(v, av[2], CLIS_PARAM, &r);
+			if (strstr(r, av[1]) == NULL)
+				vtc_log(v->vl, 0,
+				    "Did not find expected string: (\"%s\")",
+				    av[1]);
+			else
+				vtc_log(v->vl, 3,
+				    "Found expected string: (\"%s\")",
+				    av[1]);
+			free(r);
+			av += 2;
 			continue;
 		}
 		if (!strcmp(*av, "-vcl")) {
 			AN(av[1]);
-			varnish_vcl(v, av[1], CLIS_OK);
+			varnish_vcl(v, av[1], CLIS_OK, NULL);
 			av++;
 			continue;
 		}

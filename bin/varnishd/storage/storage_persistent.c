@@ -51,6 +51,7 @@
 #include "vcli_priv.h"
 #include "vend.h"
 #include "vsha256.h"
+#include "vtim.h"
 
 #include "persistent.h"
 #include "storage/storage_persistent.h"
@@ -68,13 +69,14 @@ static VTAILQ_HEAD(,smp_sc)	silos = VTAILQ_HEAD_INITIALIZER(silos);
  */
 
 static void
-smp_appendban(struct smp_sc *sc, struct smp_signctx *ctx,
+smp_appendban(struct smp_sc *sc, struct smp_signspace *spc,
     uint32_t len, const uint8_t *ban)
 {
 	uint8_t *ptr, *ptr2;
 
 	(void)sc;
-	ptr = ptr2 = SIGN_END(ctx);
+	ptr = ptr2 = SIGNSPACE_FRONT(spc);
+	assert(SIGNSPACE_FREE(spc) >= 4L + 4 + len);
 
 	memcpy(ptr, "BAN", 4);
 	ptr += 4;
@@ -85,19 +87,28 @@ smp_appendban(struct smp_sc *sc, struct smp_signctx *ctx,
 	memcpy(ptr, ban, len);
 	ptr += len;
 
-	smp_append_sign(ctx, ptr2, ptr - ptr2);
+	smp_append_signspace(spc, ptr - ptr2);
 }
 
 /* Trust that cache_ban.c takes care of locking */
 
-void
-SMP_NewBan(const uint8_t *ban, unsigned ln)
+static void
+smp_baninfo(struct stevedore *stv, enum baninfo event,
+	    const uint8_t *ban, unsigned len)
 {
 	struct smp_sc *sc;
 
-	VTAILQ_FOREACH(sc, &silos, list) {
-		smp_appendban(sc, &sc->ban1, ln, ban);
-		smp_appendban(sc, &sc->ban2, ln, ban);
+	(void)stv;
+	switch (event) {
+	case BI_NEW:
+		VTAILQ_FOREACH(sc, &silos, list) {
+			smp_appendban(sc, &sc->ban1, len, ban);
+			smp_appendban(sc, &sc->ban2, len, ban);
+		}
+		break;
+	default:
+		/* Ignored */
+		break;
 	}
 }
 
@@ -106,7 +117,7 @@ SMP_NewBan(const uint8_t *ban, unsigned ln)
  */
 
 static int
-smp_open_bans(struct smp_sc *sc, struct smp_signctx *ctx)
+smp_open_bans(struct smp_sc *sc, struct smp_signspace *spc)
 {
 	uint8_t *ptr, *pe;
 	uint32_t length;
@@ -114,11 +125,11 @@ smp_open_bans(struct smp_sc *sc, struct smp_signctx *ctx)
 
 	ASSERT_CLI();
 	(void)sc;
-	i = smp_chk_sign(ctx);
+	i = smp_chk_signspace(spc);
 	if (i)
 		return (i);
-	ptr = SIGN_DATA(ctx);
-	pe = ptr + ctx->ss->length;
+	ptr = SIGNSPACE_DATA(spc);
+	pe = SIGNSPACE_FRONT(spc);
 
 	while (ptr < pe) {
 		if (memcmp(ptr, "BAN", 4)) {
@@ -148,7 +159,7 @@ smp_open_bans(struct smp_sc *sc, struct smp_signctx *ctx)
  */
 
 static int
-smp_open_segs(struct smp_sc *sc, struct smp_signctx *ctx)
+smp_open_segs(struct smp_sc *sc, struct smp_signspace *spc)
 {
 	uint64_t length, l;
 	struct smp_segptr *ss, *se;
@@ -156,12 +167,12 @@ smp_open_segs(struct smp_sc *sc, struct smp_signctx *ctx)
 	int i, n = 0;
 
 	ASSERT_CLI();
-	i = smp_chk_sign(ctx);
+	i = smp_chk_signspace(spc);
 	if (i)
 		return (i);
 
-	ss = SIGN_DATA(ctx);
-	length = ctx->ss->length;
+	ss = SIGNSPACE_DATA(spc);
+	length = SIGNSPACE_LEN(spc);
 
 	if (length == 0) {
 		/* No segments */
@@ -286,15 +297,24 @@ smp_thread(struct worker *wrk, void *priv)
 	BAN_TailDeref(&sc->tailban);
 	AZ(sc->tailban);
 	printf("Silo completely loaded\n");
-	while (1) {
-		(void)sleep (1);
+
+	/* Housekeeping loop */
+	Lck_Lock(&sc->mtx);
+	while (!(sc->flags & SMP_SC_STOP)) {
 		sg = VTAILQ_FIRST(&sc->segments);
-		if (sg != NULL && sg -> sc->cur_seg && sg->nobj == 0) {
-			Lck_Lock(&sc->mtx);
+		if (sg != NULL && sg != sc->cur_seg && sg->nobj == 0)
 			smp_save_segs(sc);
-			Lck_Unlock(&sc->mtx);
-		}
+
+		Lck_Unlock(&sc->mtx);
+		VTIM_sleep(3.14159265359 - 2);
+		Lck_Lock(&sc->mtx);
 	}
+
+	smp_save_segs(sc);
+
+	Lck_Unlock(&sc->mtx);
+	pthread_exit(0);
+
 	NEEDLESS_RETURN(NULL);
 }
 
@@ -306,7 +326,6 @@ static void
 smp_open(const struct stevedore *st)
 {
 	struct smp_sc	*sc;
-	pthread_t pt;
 
 	ASSERT_CLI();
 
@@ -320,13 +339,22 @@ smp_open(const struct stevedore *st)
 	/* We trust the parent to give us a valid silo, for good measure: */
 	AZ(smp_valid_silo(sc));
 
-	AZ(mprotect(sc->base, 4096, PROT_READ));
+	AZ(mprotect((void*)sc->base, 4096, PROT_READ));
 
 	sc->ident = SIGN_DATA(&sc->idn);
 
-	/* We attempt ban1 first, and if that fails, try ban2 */
-	if (smp_open_bans(sc, &sc->ban1))
-		AZ(smp_open_bans(sc, &sc->ban2));
+	/* Check ban lists */
+	if (smp_chk_signspace(&sc->ban1)) {
+		/* Ban list 1 is broken, use ban2 */
+		AZ(smp_chk_signspace(&sc->ban2));
+		smp_copy_signspace(&sc->ban1, &sc->ban2);
+		smp_sync_sign(&sc->ban1.ctx);
+	} else {
+		/* Ban1 is OK, copy to ban2 for consistency */
+		smp_copy_signspace(&sc->ban2, &sc->ban1);
+		smp_sync_sign(&sc->ban2.ctx);
+	}
+	AZ(smp_open_bans(sc, &sc->ban1));
 
 	/* We attempt seg1 first, and if that fails, try seg2 */
 	if (smp_open_segs(sc, &sc->seg1))
@@ -348,7 +376,7 @@ smp_open(const struct stevedore *st)
 	smp_new_seg(sc);
 
 	/* Start the worker silo worker thread, it will load the objects */
-	WRK_BgThread(&pt, "persistence", smp_thread, sc);
+	WRK_BgThread(&sc->bgthread, "persistence", smp_thread, sc);
 
 	VTAILQ_INSERT_TAIL(&silos, sc, list);
 	Lck_Unlock(&sc->mtx);
@@ -359,7 +387,7 @@ smp_open(const struct stevedore *st)
  */
 
 static void
-smp_close(const struct stevedore *st)
+smp_signal_close(const struct stevedore *st)
 {
 	struct smp_sc	*sc;
 
@@ -367,10 +395,25 @@ smp_close(const struct stevedore *st)
 
 	CAST_OBJ_NOTNULL(sc, st->priv, SMP_SC_MAGIC);
 	Lck_Lock(&sc->mtx);
-	smp_close_seg(sc, sc->cur_seg);
+	if (sc->cur_seg != NULL)
+		smp_close_seg(sc, sc->cur_seg);
+	AZ(sc->cur_seg);
+	sc->flags |= SMP_SC_STOP;
 	Lck_Unlock(&sc->mtx);
+}
 
-	/* XXX: reap thread */
+static void
+smp_close(const struct stevedore *st)
+{
+	struct smp_sc	*sc;
+	void *status;
+
+	ASSERT_CLI();
+
+	CAST_OBJ_NOTNULL(sc, st->priv, SMP_SC_MAGIC);
+
+	AZ(pthread_join(sc->bgthread, &status));
+	AZ(status);
 }
 
 /*--------------------------------------------------------------------
@@ -392,7 +435,6 @@ smp_allocx(struct stevedore *st, size_t min_size, size_t max_size,
 	struct smp_sc *sc;
 	struct storage *ss;
 	struct smp_seg *sg;
-	unsigned tries;
 	uint64_t left, extra;
 
 	CAST_OBJ_NOTNULL(sc, st->priv, SMP_SC_MAGIC);
@@ -410,14 +452,22 @@ smp_allocx(struct stevedore *st, size_t min_size, size_t max_size,
 	Lck_Lock(&sc->mtx);
 	sg = NULL;
 	ss = NULL;
-	for (tries = 0; tries < 3; tries++) {
+
+	left = 0;
+	if (sc->cur_seg != NULL)
 		left = smp_spaceleft(sc, sc->cur_seg);
-		if (left >= extra + min_size)
-			break;
-		smp_close_seg(sc, sc->cur_seg);
+	if (left < extra + min_size) {
+		if (sc->cur_seg != NULL)
+			smp_close_seg(sc, sc->cur_seg);
 		smp_new_seg(sc);
+		if (sc->cur_seg != NULL)
+			left = smp_spaceleft(sc, sc->cur_seg);
+		else
+			left = 0;
 	}
+
 	if (left >= extra + min_size)  {
+		AN(sc->cur_seg);
 		if (left < extra + max_size)
 			max_size = IRNDN(sc, left - extra);
 
@@ -551,6 +601,8 @@ const struct stevedore smp_stevedore = {
 	.alloc	=	smp_alloc,
 	.allocobj =	smp_allocobj,
 	.free	=	smp_free,
+	.signal_close = smp_signal_close,
+	.baninfo =	smp_baninfo,
 };
 
 /*--------------------------------------------------------------------
@@ -610,7 +662,8 @@ debug_persistent(struct cli *cli, const char * const * av, void *priv)
 	}
 	Lck_Lock(&sc->mtx);
 	if (!strcmp(av[3], "sync")) {
-		smp_close_seg(sc, sc->cur_seg);
+		if (sc->cur_seg != NULL)
+			smp_close_seg(sc, sc->cur_seg);
 		smp_new_seg(sc);
 	} else if (!strcmp(av[3], "dump")) {
 		debug_report_silo(cli, sc, 1);

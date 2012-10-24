@@ -205,8 +205,6 @@ struct var {
 	unsigned		r_methods;
 	const char		*lname;
 	unsigned		w_methods;
-	const char		*http;
-	const char		*hdr;
 };
 
 struct method {
@@ -274,8 +272,7 @@ parsedirector_f vcc_ParseRandomDirector;
 parsedirector_f vcc_ParseRoundRobinDirector;
 
 /* vcc_expr.c */
-void vcc_RTimeVal(struct vcc *tl, double *);
-void vcc_TimeVal(struct vcc *tl, double *);
+void vcc_Duration(struct vcc *tl, double *);
 unsigned vcc_UintVal(struct vcc *tl);
 void vcc_Expr(struct vcc *tl, enum var_type typ);
 void vcc_Expr_Call(struct vcc *tl, const struct symbol *sym);

@@ -50,6 +50,23 @@
 #include "vtim.h"
 
 const void * const vrt_magic_string_end = &vrt_magic_string_end;
+const void * const vrt_magic_string_unset = &vrt_magic_string_unset;
+
+/*--------------------------------------------------------------------*/
+
+const struct gethdr_s *
+VRT_MkGethdr(struct req *req, enum gethdr_e where, const char *what)
+{
+	struct gethdr_s *retval;
+
+	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
+	retval = (void*)WS_Alloc(req->wrk->aws, sizeof *retval);
+	AN(retval);
+	retval->where = where;
+	retval->what = what;
+	return (retval);
+}
+
 
 /*--------------------------------------------------------------------*/
 
@@ -121,14 +138,14 @@ vrt_selecthttp(const struct req *req, enum gethdr_e where)
 }
 
 char *
-VRT_GetHdr(const struct req *req, enum gethdr_e where, const char *n)
+VRT_GetHdr(const struct req *req, const struct gethdr_s *hs)
 {
 	char *p;
 	struct http *hp;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	hp = vrt_selecthttp(req, where);
-	if (!http_GetHdr(hp, n, &p))
+	hp = vrt_selecthttp(req, hs->where);
+	if (!http_GetHdr(hp, hs->what, &p))
 		return (NULL);
 	return (p);
 }
@@ -213,24 +230,25 @@ VRT_ReqString(struct req *req, const char *p, ...)
 /*--------------------------------------------------------------------*/
 
 void
-VRT_SetHdr(struct req *req , enum gethdr_e where, const char *hdr,
-    const char *p, ...)
+VRT_SetHdr(struct req *req , const struct gethdr_s *hs, const char *p, ...)
 {
 	struct http *hp;
 	va_list ap;
 	char *b;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	hp = vrt_selecthttp(req, where);
+	AN(hs);
+	AN(hs->what);
+	hp = vrt_selecthttp(req, hs->where);
 	va_start(ap, p);
-	if (p == NULL) {
-		http_Unset(hp, hdr);
+	if (p == vrt_magic_string_unset) {
+		http_Unset(hp, hs->what);
 	} else {
-		b = VRT_String(hp->ws, hdr + 1, p, ap);
+		b = VRT_String(hp->ws, hs->what + 1, p, ap);
 		if (b == NULL) {
-			VSLb(req->vsl, SLT_LostHeader, "%s", hdr + 1);
+			VSLb(req->vsl, SLT_LostHeader, "%s", hs->what + 1);
 		} else {
-			http_Unset(hp, hdr);
+			http_Unset(hp, hs->what);
 			http_SetHeader(hp, b);
 		}
 	}
@@ -315,20 +333,20 @@ VRT_IP_string(const struct req *req, const struct sockaddr_storage *sa)
 }
 
 char *
-VRT_int_string(const struct req *req, int num)
+VRT_INT_string(const struct req *req, long num)
 {
 	char *p;
 	int size;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	size = snprintf(NULL, 0, "%d", num) + 1;
+	size = snprintf(NULL, 0, "%ld", num) + 1;
 	AN(p = WS_Alloc(req->http->ws, size));
-	assert(snprintf(p, size, "%d", num) < size);
+	assert(snprintf(p, size, "%ld", num) < size);
 	return (p);
 }
 
 char *
-VRT_double_string(const struct req *req, double num)
+VRT_REAL_string(const struct req *req, double num)
 {
 	char *p;
 	int size;
@@ -341,7 +359,7 @@ VRT_double_string(const struct req *req, double num)
 }
 
 char *
-VRT_time_string(const struct req *req, double t)
+VRT_TIME_string(const struct req *req, double t)
 {
 	char *p;
 
@@ -353,7 +371,7 @@ VRT_time_string(const struct req *req, double t)
 }
 
 const char *
-VRT_backend_string(const struct req *req, const struct director *d)
+VRT_BACKEND_string(const struct req *req, const struct director *d)
 {
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	if (d == NULL)
@@ -364,7 +382,7 @@ VRT_backend_string(const struct req *req, const struct director *d)
 }
 
 const char *
-VRT_bool_string(const struct req *req, unsigned val)
+VRT_BOOL_string(const struct req *req, unsigned val)
 {
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);

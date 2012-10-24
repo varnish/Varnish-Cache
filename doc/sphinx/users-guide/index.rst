@@ -1,38 +1,44 @@
 .. _users-guide-index:
 
-%%%%%%%%%%%%%
-Using Varnish
-%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Using Varnish - A Users Guide
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 This guide is intended for system administrators managing Varnish
-Cache. The reader should know how to configure her web- or application
-server and have basic knowledge of the HTTP protocol. The reader
-should have Varnish Cache up and running with the default
-configuration.
+Cache. 
 
-The tutorial is split into short chapters, each chapter taking on a
-separate topic. Good luck.
+The guide is split into short chapters, each chapter explaining a
+separate topic.
 
-.. toctree:: :maxdepth: 1
+.. toctree::
+   :maxdepth: 3
 
-        introduction
+   configuration
+   vcl
+   operation
+   troubleshooting
+
+.. customizing (which is a non ideal title)
+
+.. No longer used:
+
+        configuration
+        command_line
+        VCL
 	backend_servers
-        starting_varnish
 	logging
         sizing_your_cache
-        putting_varnish_on_port_80
-	vcl
         statistics
         increasing_your_hitrate
 	cookies
 	vary
+        hashing
 	purging
 	compression
 	esi
 	virtualized
 	websockets
 	devicedetection
-	advanced_backend_servers
         handling_misbehaving_servers
         advanced_topics
 	troubleshooting
