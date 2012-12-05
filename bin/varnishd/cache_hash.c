@@ -573,6 +573,7 @@ HSH_Purge(const struct sess *sp, struct objhead *oh, double ttl, double grace)
 		o->exp.ttl = ttl;
 		o->exp.grace = grace;
 		EXP_Rearm(o);
+		VSC_C_main->c_purge++;
 		(void)HSH_Deref(sp->wrk, NULL, &o);
 	}
 	WS_Release(sp->wrk->ws, 0);

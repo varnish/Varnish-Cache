@@ -99,6 +99,7 @@ VSC_F(n_backend,		uint64_t, 0, 'i', "N backends", "")
 VSC_F(n_expired,		uint64_t, 0, 'i', "N expired objects", "")
 VSC_F(n_lru_nuked,		uint64_t, 0, 'i', "N LRU nuked objects", "")
 VSC_F(n_lru_moved,		uint64_t, 0, 'i', "N LRU moved objects", "")
+VSC_F(c_purge,		    uint64_t, 0, 'a', "N purged objects", "")
 
 VSC_F(losthdr,		uint64_t, 0, 'a', "HTTP header overflows", "")
 
@@ -217,4 +218,3 @@ VSC_F(vcls,			uint64_t, 0, 'i', "VCL references", "")
 VSC_F(happy,		uint64_t, 0, 'b', "Happy health probes", "")
 
 #endif
-
