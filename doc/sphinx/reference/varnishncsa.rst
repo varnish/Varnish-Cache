@@ -134,7 +134,8 @@ The following options are available:
 
 -w file     Write log entries to file instead of displaying them.  
    	    The file will be overwritten unless the -a
-	    option was specified.
+	    option was specified. UDP IPV4 socket in the format of
+	    "udp://aaa.bbb.ccc.ddd:port" is allowed.
 	    
 	    If varnishncsa receives a SIGHUP while writing to a file, 
 	    it will reopen the file, allowing the old one to be 

@@ -69,6 +69,10 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "base64.h"
 #include "vapi/vsl.h"
@@ -83,6 +87,14 @@
 #include "compat/daemon.h"
 
 static volatile sig_atomic_t reopen;
+
+struct h_ncsa_priv {
+	struct sockaddr_in my_addr;
+	struct sockaddr_in srv_addr;
+	FILE *fo;
+	int type;	// 0 == file, 1 == socket
+	int sockd;
+};
 
 struct hdr {
 	char *key;
@@ -585,7 +597,8 @@ h_ncsa(void *priv, enum VSL_tag_e tag, unsigned fd,
     unsigned len, unsigned spec, const char *ptr, uint64_t bitmap)
 {
 	struct logline *lp;
-	FILE *fo = priv;
+	//FILE *fo = priv;
+	struct h_ncsa_priv *mpriv = priv;
 	char *q, tbuf[64];
 	const char *p;
 	struct vsb *os;
@@ -636,7 +649,7 @@ h_ncsa(void *priv, enum VSL_tag_e tag, unsigned fd,
 
 	/* We have a complete data set - log a line */
 
-	fo = priv;
+	//fo = priv;
 	os = VSB_new_auto();
 
 	for (p = format; *p != '\0'; p++) {
@@ -815,8 +828,17 @@ h_ncsa(void *priv, enum VSL_tag_e tag, unsigned fd,
 
 	/* flush the stream */
 	VSB_finish(os);
-	fprintf(fo, "%s", VSB_data(os));
-	fflush(fo);
+
+	if (mpriv->type == 0)	// file
+	{
+		fprintf(mpriv->fo, "%s", VSB_data(os));
+		fflush(mpriv->fo);
+	}
+	else if (mpriv->type == 1)	// socket
+	{
+		char *vsbData = VSB_data(os);
+		sendto(mpriv->sockd, vsbData, strlen(vsbData)+1, 0, (struct sockaddr*)&mpriv->srv_addr, sizeof(mpriv->srv_addr));
+	}
 
 	/* clean up */
 	clean_logline(lp);
@@ -866,7 +888,15 @@ main(int argc, char *argv[])
 	const char *P_arg = NULL;
 	const char *w_arg = NULL;
 	struct vpf_fh *pfh = NULL;
+	struct h_ncsa_priv mpriv;
 	FILE *of;
+	int sockd = -1;
+	char inputIP[255];
+	int inputPort = 0;
+	char *argIP = NULL;
+	char *argColon = NULL;
+	char *argPort = NULL;
+
 	format = "%h %l %u %t \"%r\" %s %b \"%{Referer}i\" \"%{User-agent}i\"";
 
 	vd = VSM_New();
@@ -953,23 +983,96 @@ main(int argc, char *argv[])
 	if (pfh != NULL)
 		VPF_Write(pfh);
 
-	if (w_arg) {
-		of = open_log(w_arg, a_flag);
-		signal(SIGHUP, sighup);
+	if (w_arg)
+	{
+		if (strstr(w_arg, "udp://") != NULL)
+		{
+			// Parse args
+			inputIP[0] = 0;
+			inputPort = 0;
+			
+			argIP = &w_arg[6];
+			argColon = strstr(argIP + 1, ":");
+			argPort = (argColon + 1);
+			
+			if ((argIP == NULL) || (argColon == NULL) || (argPort == NULL))
+			{
+				perror("Cannot understand format of '-w', use 'udp://x.x.x.x:xxxxx'.");
+				exit(1);
+			}
+			
+			strncat(inputIP, argIP, (argColon - argIP));
+			inputPort = atoi(argPort);			
+			
+			// Setup socket
+		
+			// (Create)
+			sockd = socket(AF_INET, SOCK_DGRAM, 0);
+			if (sockd == -1)
+			{
+				perror("Socket creation error");
+				exit(1);
+			}
+			
+			// (Client address)
+			mpriv.my_addr.sin_family = AF_INET;
+			mpriv.my_addr.sin_addr.s_addr = INADDR_ANY;
+			mpriv.my_addr.sin_port = 0;
+
+			bind(sockd, (struct sockaddr*)&mpriv.my_addr, sizeof(mpriv.my_addr));
+			
+			// (Server address)
+			mpriv.srv_addr.sin_family = AF_INET;
+			inet_aton(inputIP, &mpriv.srv_addr.sin_addr);
+			mpriv.srv_addr.sin_port = htons(inputPort);
+
+			// Setup state
+			of = NULL;
+			//sockd = sockd;
+			
+			mpriv.type = 1;
+			mpriv.fo = NULL;
+			mpriv.sockd = sockd;			
+		}
+		else
+		{
+			of = open_log(w_arg, a_flag);
+			sockd = -1;
+			
+			signal(SIGHUP, sighup);
+			
+			mpriv.type = 0;
+			mpriv.fo = of;
+			mpriv.sockd = -1;			
+		}
 	} else {
 		w_arg = "stdout";
+		
 		of = stdout;
+		sockd = -1;
+		
+		mpriv.type = 0;
+		mpriv.fo = of;
+		mpriv.sockd = -1;		
 	}
 
-	while (VSL_Dispatch(vd, h_ncsa, of) >= 0) {
-		if (fflush(of) != 0) {
-			perror(w_arg);
-			exit(1);
+	while (VSL_Dispatch(vd, h_ncsa, &mpriv) >= 0) {
+		if (mpriv.type == 0)
+		{
+			if (fflush(of) != 0) {
+				perror(w_arg);
+				exit(1);
+			}
+			if (reopen && of != stdout) {
+				fclose(of);
+				of = open_log(w_arg, a_flag);
+				mpriv.fo = of;
+				reopen = 0;
+			}
 		}
-		if (reopen && of != stdout) {
-			fclose(of);
-			of = open_log(w_arg, a_flag);
-			reopen = 0;
+		else if (mpriv.type == 1)
+		{
+			// ...
 		}
 	}
 
