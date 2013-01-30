@@ -144,7 +144,7 @@ fi
 AC_SUBST(PCRE_CFLAGS)
 AC_SUBST(PCRE_LIBS)
 
-PKG_CHECK_MODULES([LIBEDIT], [libedit], 
+PKG_CHECK_MODULES([LIBEDIT], [libedit],
 	[AC_DEFINE([HAVE_LIBEDIT], [1], [Define we have libedit])],
 	[AC_CHECK_HEADERS([readline/readline.h])
 	 AC_CHECK_HEADERS([edit/readline/readline.h])
@@ -209,29 +209,29 @@ AC_CHECK_FUNCS([pthread_mutex_isowned_np])
 AC_CHECK_FUNCS([pthread_timedjoin_np])
 LIBS="${save_LIBS}"
 
-# Support for visibility attribute 
-save_CFLAGS="${CFLAGS}" 
-CFLAGS="${CFLAGS} -Werror" 
+# Support for visibility attribute
+save_CFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} -Werror"
 
-AC_CACHE_CHECK([whether we have support for visibility attributes], 
-	[ac_cv_have_viz], 
-	[AC_RUN_IFELSE( 
-		[AC_LANG_PROGRAM([[ 
-			#if ((__GNUC__-0) * 10 + __GNUC_MINOR__-0 >= 33) 
-			#  define ZLIB_INTERNAL __attribute__((visibility ("hidden"))) 
-			#else 
-			#  define ZLIB_INTERNAL 
-			#endif 
-			int ZLIB_INTERNAL foo; 
-		]],[])], 
-	[ac_cv_have_viz=yes], 
-	[ac_cv_have_viz=no]) 
+AC_CACHE_CHECK([whether we have support for visibility attributes],
+	[ac_cv_have_viz],
+	[AC_RUN_IFELSE(
+		[AC_LANG_PROGRAM([[
+			#if ((__GNUC__-0) * 10 + __GNUC_MINOR__-0 >= 33)
+			#  define ZLIB_INTERNAL __attribute__((visibility ("hidden")))
+			#else
+			#  define ZLIB_INTERNAL
+			#endif
+			int ZLIB_INTERNAL foo;
+		]],[])],
+	[ac_cv_have_viz=yes],
+	[ac_cv_have_viz=no])
 ])
-if test "$ac_cv_have_viz" = no; then 
-	libvgz_extra_cflags="-DNO_VIZ" 
-	AC_SUBST(libvgz_extra_cflags) 
-fi 
-CFLAGS="${save_CFLAGS}" 
+if test "$ac_cv_have_viz" = no; then
+	libvgz_extra_cflags="-DNO_VIZ"
+	AC_SUBST(libvgz_extra_cflags)
+fi
+CFLAGS="${save_CFLAGS}"
 
 # Use jemalloc on Linux
 JEMALLOC_SUBDIR=
@@ -294,7 +294,7 @@ AC_SYS_LARGEFILE
 save_LIBS="${LIBS}"
 LIBS="${LIBS} ${RT_LIBS}"
 AC_CHECK_FUNCS([clock_gettime])
-AC_CHECK_FUNCS([gethrtime]) 
+AC_CHECK_FUNCS([gethrtime])
 LIBS="${save_LIBS}"
 
 # --enable-kqueue
