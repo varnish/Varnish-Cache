@@ -232,50 +232,53 @@ pass(int sock)
 	struct pollfd fds[2];
 	char buf[1024];
 	int i;
+	int n;
 	char *answer = NULL;
 	unsigned u, status;
 	_line_sock = sock;
 	rl_already_prompted = 1;
-	if (isatty(0)) {
-		rl_callback_handler_install("varnish> ", send_line);
-	} else {
-		rl_callback_handler_install("", send_line);
-	}
-	rl_attempted_completion_function = varnishadm_completion;
 
 	fds[0].fd = sock;
 	fds[0].events = POLLIN;
 	fds[1].fd = 0;
 	fds[1].events = POLLIN;
+	if (isatty(0)) {
+		rl_callback_handler_install("varnish> ", send_line);
 
-	/* Grab the commands, for completion */
-	cli_write(sock, "help\n");
-	u = VCLI_ReadResult(fds[0].fd, &status, &answer, timeout);
-	if (!u) {
-		char *t, c[128];
-		if (status == CLIS_COMMS) {
-			RL_EXIT(0);
-		}
-		t = answer;
+		/* Grab the commands, for completion */
+		cli_write(sock, "help\n");
+		u = VCLI_ReadResult(fds[0].fd, &status, &answer, timeout);
+		if (!u) {
+			char *t, c[128];
+			if (status == CLIS_COMMS) {
+				RL_EXIT(0);
+			}
+			t = answer;
 
-		i = 0;
-		while (*t) {
-			if (sscanf(t, "%127s", c) == 1) {
-				commands[i++] = strdup(c);
-				while (*t != '\n' && *t != '\0')
-					t++;
-				if (*t == '\n')
-					t++;
-			} else {
-				/* what? */
-				fprintf(stderr, "Unknown command '%s' parsing "
-					"help output. Tab completion may be "
-					"broken\n", t);
-				break;
+			i = 0;
+			while (*t) {
+				if (sscanf(t, "%127s", c) == 1) {
+					commands[i++] = strdup(c);
+					while (*t != '\n' && *t != '\0')
+						t++;
+					if (*t == '\n')
+						t++;
+				} else {
+					/* what? */
+					fprintf(stderr, "Unknown command '%s' parsing "
+							"help output. Tab completion may be "
+							"broken\n", t);
+					break;
+				}
 			}
 		}
+		cli_write(sock, "banner\n");
+	}  else {
+		/* do we need this? */
+		rl_callback_handler_install("", send_line);
 	}
-	cli_write(sock, "banner\n");
+	rl_attempted_completion_function = varnishadm_completion;
+
 	while (1) {
 		i = poll(fds, 2, -1);
 		if (i == -1 && errno == EINTR) {
@@ -284,7 +287,9 @@ pass(int sock)
 		assert(i > 0);
 		if (fds[0].revents & POLLIN) {
 			/* Get rid of the prompt, kinda hackish */
-			u = write(1, "\r           \r", 13);
+			if (isatty(0)) {
+				u = write(1, "\r           \r", 13);
+			}
 			u = VCLI_ReadResult(fds[0].fd, &status, &answer,
 			    timeout);
 			if (u) {
@@ -303,10 +308,27 @@ pass(int sock)
 				free(answer);
 				answer = NULL;
 			}
-			rl_forced_update_display();
-		}
-		if (fds[1].revents & POLLIN) {
-			rl_callback_read_char();
+			if (isatty(0)) {
+				rl_forced_update_display();
+			}
+		}  else if (fds[1].revents & POLLIN) {
+			if (isatty(0)) {
+				rl_callback_read_char();
+			} else {
+				n = read(fds[1].fd, buf, sizeof buf);
+				if (n == 0) {
+					AZ(shutdown(sock, SHUT_WR));
+					fds[1].fd = -1;
+				} else if (n < 0) {
+					RL_EXIT(0);
+				} else {
+					buf[n] = '\0';
+					cli_write(sock, buf);
+				}
+			}
+		}  else {
+			// I am not a tty and there is no input and no output
+			cli_write(sock, "quit\n");
 		}
 	}
 }
