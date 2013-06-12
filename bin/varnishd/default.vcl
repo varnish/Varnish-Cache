@@ -148,6 +148,11 @@ sub vcl_deliver {
  * We can come here "invisibly" with the following errors:  413, 417 & 503
  */
 sub vcl_error {
+    if((obj.status >= 100 && obj.status < 200) ||
+        obj.status == 204 ||
+        obj.status == 304) {
+            return (deliver);
+    }
     set obj.http.Content-Type = "text/html; charset=utf-8";
     set obj.http.Retry-After = "5";
     synthetic {"
