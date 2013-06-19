@@ -95,6 +95,7 @@ installed. On a Debian or Ubuntu system these are:
 * groff-base
 * libpcre3-dev
 * pkg-config
+* python-docutils
 
 Build dependencies on Red Hat / CentOS
 --------------------------------------
