@@ -97,7 +97,7 @@ Return value
 Description
 	Logs *string* to syslog marked with *priority*.
 Example
-	std.syslog( LOG_USER|LOG_ALERT, "There is serious troble");
+	std.syslog( LOG_USER|LOG_ALERT, "There is serious trouble");
 
 fileread
 --------
