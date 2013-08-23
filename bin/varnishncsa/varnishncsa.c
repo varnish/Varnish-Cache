@@ -720,7 +720,7 @@ h_ncsa(void *priv, enum VSL_tag_e tag, unsigned fd,
 
 		case 's':
 			/* %s */
-			VSB_cat(os, lp->df_s ? lp->df_s : "");
+			VSB_cat(os, lp->df_s ? lp->df_s : "-");
 			break;
 
 		case 't':
