@@ -41,12 +41,12 @@
 
 sub vcl_recv {
     if (req.restarts == 0) {
-	if (req.http.x-forwarded-for) {
-	    set req.http.X-Forwarded-For =
-		req.http.X-Forwarded-For + ", " + client.ip;
-	} else {
-	    set req.http.X-Forwarded-For = client.ip;
-	}
+    if (req.http.x-forwarded-for) {
+        set req.http.X-Forwarded-For =
+        req.http.X-Forwarded-For + ", " + client.ip;
+    } else {
+        set req.http.X-Forwarded-For = client.ip;
+    }
     }
     if (req.method != "GET" &&
       req.method != "HEAD" &&
@@ -99,13 +99,13 @@ sub vcl_purge {
 
 sub vcl_lookup {
     if (obj.ttl >= 0s) {
-	// A pure unadultered hit, deliver it
-	return (deliver);
+    // A pure unadultered hit, deliver it
+    return (deliver);
     }
     if (obj.ttl + obj.grace > 0s) {
-	// Object is in grace, delive it
-	// Automatically triggers a background fetch
-	return (deliver);
+    // Object is in grace, delive it
+    // Automatically triggers a background fetch
+    return (deliver);
     }
     // fetch & deliver once we get the result
     return (fetch);
@@ -127,11 +127,11 @@ sub vcl_backend_response {
         (!beresp.http.Surrogate-Control &&
           beresp.http.Cache-Control ~ "no-cache|no-store|private") ||
         beresp.http.Vary == "*") {
-		/*
-		 * Mark as "Hit-For-Pass" for the next 2 minutes
-		 */
-		set beresp.ttl = 120 s;
-		set beresp.uncacheable = true;
+        /*
+         * Mark as "Hit-For-Pass" for the next 2 minutes
+         */
+        set beresp.ttl = 120 s;
+        set beresp.uncacheable = true;
     }
     return (deliver);
 }
@@ -168,9 +168,9 @@ sub vcl_error {
 }
 
 sub vcl_init {
-	return (ok);
+    return (ok);
 }
 
 sub vcl_fini {
-	return (ok);
+    return (ok);
 }
