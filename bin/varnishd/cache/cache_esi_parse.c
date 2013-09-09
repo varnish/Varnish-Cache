@@ -487,8 +487,8 @@ vep_do_include(struct vep_state *vep, enum dowhat what)
 	h = 0;
 
 	VSB_printf(vep->vsb, "%c", VEC_INCL);
-	if (l > 7 && !memcmp(p, "http://", 7)) {
-		h = p + 7;
+	if ( (l > 7 && !memcmp(p, "http://", 7)) || (l > 8 && !memcmp(p, "https://", 8))) {
+		h = !memcmp(p, "http://", 7) ? (p + 7) : (p + 8);
 		p = strchr(h, '/');
 		AN(p);
 		Debug("HOST <%.*s> PATH <%s>\n", (int)(p-h),h, p);
