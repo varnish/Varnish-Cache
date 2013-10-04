@@ -101,7 +101,7 @@ static struct logline {
 	char *df_u;			/* %u, Remote user */
 	char *df_ttfb;			/* Time to first byte */
 	double df_D;			/* %D, time taken to serve the request,
-					   in microseconds, also used for %T */
+					   in seconds, also used for %T */
 	const char *df_hitmiss;		/* Whether this is a hit or miss */
 	const char *df_handling;	/* How the request was handled
 					   (hit/miss/pass/pipe) */

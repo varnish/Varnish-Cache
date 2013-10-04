@@ -56,7 +56,8 @@ The following options are available:
    	         bytes are sent.
 
 	      %D
-	         Time taken to serve the request, in microseconds.
+	         Time taken to serve the request, in seconds with
+             microsecond fractional part.
 
 	      %H 
 	         The request protocol. Defaults to HTTP/1.0 if not
