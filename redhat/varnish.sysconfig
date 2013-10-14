@@ -15,7 +15,11 @@ MEMLOCK=82000
 NPROCS="unlimited"
 
 # Maximum size of corefile (for ulimit -c). Default in Fedora is 0
-# DAEMON_COREFILE_LIMIT="unlimited"
+#DAEMON_COREFILE_LIMIT="unlimited"
+
+# Maximum stack size per worker thread
+# System default 10240 is too big, set to 1024 by default
+#WORKER_STACK_SIZE=1024
 
 # Set this to 1 to make init script reload try to switch vcl without restart.
 # To make this work, you need to set the following variables

@@ -60,8 +60,15 @@ start() {
 	# is often too small for varnish)
 	ulimit -u ${NPROCS:-unlimited}
 
-        # $DAEMON_OPTS is set in /etc/sysconfig/varnish. At least, one
-        # has to set up a backend, or /tmp will be used, which is a bad idea.
+    # Maximum size of corefile.
+    ulimit -c ${DAEMON_COREFILE_LIMIT:-ulimited}
+
+    # Maximum stack size per worker thread.
+    # As system default 10240 is too big, set to 1024 by default.
+    ulimit -s ${WORKER_STACK_SIZE:-1024}
+
+    # $DAEMON_OPTS is set in /etc/sysconfig/varnish. At least, one
+    # has to set up a backend, or /tmp will be used, which is a bad idea.
 	if [ "$DAEMON_OPTS" = "" ]; then
 		echo "\$DAEMON_OPTS empty."
 		echo -n "Please put configuration options in $config"
