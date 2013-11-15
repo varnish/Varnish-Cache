@@ -528,9 +528,8 @@ collect_client(struct logline *lp, enum VSL_tag_e tag, unsigned spec,
 			lp->df_hitmiss = "miss";
 			lp->df_handling = "error";
 		} else if (strncmp(ptr, "pipe", len) == 0) {
-			/* Just skip piped requests, since we can't
-			 * print their status code */
-			clean_logline(lp);
+			lp->df_hitmiss = "miss";
+			lp->df_handling = "pipe";
 			break;
 		}
 		break;
@@ -548,8 +547,7 @@ collect_client(struct logline *lp, enum VSL_tag_e tag, unsigned spec,
 	case SLT_SessClose:
 		if (!lp->active)
 			break;
-		if (strncmp(ptr, "TX_PIPE", len) == 0 ||
-		    strncmp(ptr, "TX_ERROR", len) == 0) {
+		if (strncmp(ptr, "TX_ERROR", len) == 0) {
 			clean_logline(lp);
 			break;
 		}
@@ -722,7 +720,7 @@ h_ncsa(void *priv, enum VSL_tag_e tag, unsigned fd,
 
 		case 's':
 			/* %s */
-			VSB_cat(os, lp->df_s ? lp->df_s : "");
+			VSB_cat(os, lp->df_s ? lp->df_s : "-");
 			break;
 
 		case 't':
