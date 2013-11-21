@@ -24,7 +24,7 @@ in front of a web server and cache content. It makes your web site
 go faster.
 
 We suggest you start by reading the installation guide
-:ref:`install-index`. Once you have Varnish up and running go through
+:ref:`install-index`. Once you have Varnish up and running, go through
 our tutorial - :ref:`tutorial-index`.
 
 

@@ -4,10 +4,10 @@ Device detection
 ~~~~~~~~~~~~~~~~
 
 Device detection is figuring out what kind of content to serve to a
-client based on the User-Agent string supplied in a request.
+client based on the ``User-Agent`` string supplied in a request.
 
-Use cases for this are for example to send size reduced files to mobile
-clients with small screens and on high latency networks, or to 
+Use cases for this are for example to send size-reduced files to mobile
+clients with small screens and on high-latency networks, or to 
 provide a streaming video codec that the client understands.
 
 There are a couple of strategies on what to do with such clients:
@@ -16,8 +16,8 @@ There are a couple of strategies on what to do with such clients:
 3) Change the backend requests so the usual backend sends tailored content.
 
 To make the examples easier to understand, it is assumed in this text 
-that all the req.http.X-UA-Device header is present and unique per client class
-that content is to be served to. 
+that the ``req.http.X-UA-Device`` header is present and unique per client
+class that content is to be served to. 
 
 Setting this header can be as simple as::
 
@@ -28,24 +28,28 @@ Setting this header can be as simple as::
    }
 
 There are different commercial and free offerings in doing grouping and
-identifiying clients in further detail than this. For a basic and community
-based regular expression set, see
+identifying clients in further detail than this. For a basic and 
+community-based regular expression set, see
 https://github.com/varnish/varnish-devicedetect/ .
 
 
-Serve the different content on the same URL
+Serve different content on the same URL
 -------------------------------------------
 
 The tricks involved are: 
-1. Detect the client (pretty simple, just include devicedetect.vcl and call
-it)
-2. Figure out how to signal the backend what client class this is. This
-includes for example setting a header, changing a header or even changing the
-backend request URL.
-3. Modify any response from the backend to add missing Vary headers, so
-Varnish' internal handling of this kicks in.
+
+1. Detect the client (pretty simple, just include ``devicedetect.vcl`` 
+   and call it)
+
+2. Figure out how to signal the backend what client class this is. 
+   This includes for example setting a header, changing a header or even
+   changing the backend request URL.
+
+3. Modify any response from the backend to add missing ``Vary`` headers, so
+   Varnish' internal handling of this kicks in.
+
 4. Modify output sent to the client so any caches outside our control don't
-serve the wrong content.
+   serve the wrong content.
 
 All this while still making sure that we only get 1 cached object per URL per
 device class.
@@ -54,9 +58,11 @@ device class.
 Example 1: Send HTTP header to backend
 ''''''''''''''''''''''''''''''''''''''
 
-The basic case is that Varnish adds the X-UA-Device HTTP header on the backend
-requests, and the backend mentions in the response Vary header that the content
-is dependant on this header. 
+The basic case is that Varnish adds the ``X-UA-Device`` HTTP header on the
+backend
+requests, and the backend mentions in the response ``Vary`` header that the
+content
+is dependent on this header. 
 
 Everything works out of the box from Varnish' perspective.
 
@@ -69,7 +75,7 @@ VCL::
     }
     # req.http.X-UA-Device is copied by Varnish into bereq.http.X-UA-Device
 
-    # so, this is a bit conterintuitive. The backend creates content based on
+    # so, this is a bit counterintuitive. The backend creates content based on
     # the normalized User-Agent, but we use Vary on X-UA-Device so Varnish will
     # use the same cached object for all U-As that map to the same X-UA-Device.
     #
@@ -105,11 +111,11 @@ Example 2: Normalize the User-Agent string
 Another way of signaling the device type is to override or normalize the
 User-Agent header sent to the backend.
 
-For example
+For example::
 
     User-Agent: Mozilla/5.0 (Linux; U; Android 2.2; nb-no; HTC Desire Build/FRF91) AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1
 
-becomes:
+becomes::
 
     User-Agent: mobile-android
 
@@ -153,7 +159,7 @@ VCL::
 Example 3: Add the device class as a GET query parameter
 ''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-If everything else fails, you can add the device type as a GET argument.
+If everything else fails, you can add the device type as a ``GET`` argument.
 
     http://example.com/article/1234.html --> http://example.com/article/1234.html?devicetype=mobile-iphone
 
@@ -218,7 +224,7 @@ Different backend for mobile clients
 ------------------------------------
 
 If you have a different backend that serves pages for mobile clients, or any
-special needs in VCL, you can use the X-UA-Device header like this::
+special needs in VCL, you can use the ``X-UA-Device`` header like this::
 
     backend mobile {
         .host = "10.0.0.1";

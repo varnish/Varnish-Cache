@@ -15,15 +15,15 @@ Strings
 
 Basic strings are enclosed in " ... ", and may not contain newlines.
 
-Backslash is not special, so for instance in regsub() you do not need
+Backslash is not special, so for instance in ``regsub()`` you do not need
 to do the "count-the-backslashes" polka:::
 
   regsub("barf", "(b)(a)(r)(f)", "\4\3\2p") -> "frap"
 
 Long strings are enclosed in {" ... "}. They may contain any character
-including ", newline and other control characters except for the NUL
-(0x00) character. If you really want NUL characters in a string there
-is a VMOD that makes it possible to create such strings.
+including ", newline and other control characters except for the ``NUL``
+(``0x00``) character. If you really want ``NUL`` characters in a string,
+there is a VMOD that makes it possible to create such strings.
 
 Access control lists (ACLs)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -55,31 +55,30 @@ Operators
 The following operators are available in VCL. See the examples further
 down for, uhm, examples.
 
-= 
+``= ``
  Assignment operator.
 
-== 
+``== ``
  Comparison.
 
-~
+``~``
  Match. Can either be used with regular expressions or ACLs.
 
-!
+``!``
  Negation.
 
-&&
+``&&``
  Logical *and*
 
-||
+``||``
  Logical *or*
 
 
 Subroutines
 ~~~~~~~~~~~
 
-A subroutine is used to group code for legibility or reusability:
-::
-  
+A subroutine is used to group code for legibility or reusability::
+
   sub pipe_if_local {
     if (client.ip ~ local) {
       return (pipe);
@@ -88,9 +87,10 @@ A subroutine is used to group code for legibility or reusability:
 
 Subroutines in VCL do not take arguments, nor do they return values.
 
-To call a subroutine, use the call keyword followed by the subroutine's name:
+To call a subroutine, use the ``call`` keyword followed by the subroutine's
+name::
 
-call pipe_if_local;
+    call pipe_if_local;
 
-Varnish has quite a few built in subroutines that are called for each
+Varnish has quite a few built-in subroutines that are called for each
 transaction as it flows through Varnish. See :ref:`vcl-built-in-subs`.

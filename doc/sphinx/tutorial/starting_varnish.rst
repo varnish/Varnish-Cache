@@ -24,7 +24,7 @@ The default configuration will try to forward requests to a web
 service running on the same computer as Varnish was installed at,
 port 8080.
 
-If there is no web application being served up there Varnish will
+If there is no web application being served up there, Varnish will
 issue an error. Varnish Cache is very conservative about telling the
 world what is wrong so whenever something is amiss it will issue the
 same generic "Error 503 Service Unavilable".
@@ -33,7 +33,7 @@ You might have a web application running on some other port or some
 other computer. Let's edit the configuration and make it point to
 something that actually works.
 
-Fire up your favorite editor and edit /etc/varnish/default.vcl. Most
+Fire up your favorite editor and edit ``/etc/varnish/default.vcl``. Most
 of it is commented out but there is some text that is not. It will
 probably look like this::
 
@@ -51,10 +51,10 @@ www.varnish-cache.org is up. Let's use that. Replace the text with::
   }
 
 
-Now issue ``service varnish reload`` to make Varnish reload it's
-configuration. If that succeeded visit http://127.0.0.1:6081/ in your
+Now issue ``service varnish reload`` to make Varnish reload its
+configuration. If that succeeds, visit http://127.0.0.1:6081/ in your
 browser and you should see some directory listing. It works! The
 reason you're not seeing the Varnish official website is because your
-client isn't sending the appropriate Host: header in the request and
+client isn't sending the appropriate ``Host:`` header in the request, and
 it ends up showing a listing of the default webfolder on the machine
-usually serving up varnish-cache.org.
+usually serving up `varnish-cache.org`_.
