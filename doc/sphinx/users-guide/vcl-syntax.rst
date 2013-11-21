@@ -55,22 +55,22 @@ Operators
 The following operators are available in VCL. See the examples further
 down for, uhm, examples.
 
-= 
+``= ``
  Assignment operator.
 
-== 
+``== ``
  Comparison.
 
-~
+``~``
  Match. Can either be used with regular expressions or ACLs.
 
-!
+``!``
  Negation.
 
-&&
+``&&``
  Logical *and*
 
-||
+``||``
  Logical *or*
 
 
@@ -92,5 +92,5 @@ name::
 
     call pipe_if_local;
 
-Varnish has quite a few built in subroutines that are called for each
+Varnish has quite a few built-in subroutines that are called for each
 transaction as it flows through Varnish. See :ref:`vcl-built-in-subs`.
