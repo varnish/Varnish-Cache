@@ -6,14 +6,14 @@ Security first
 If you are the only person involved in running Varnish, or if all
 the people involved are trusted to the same degree, you can skip
 this chapter:  We have protected Varnish as well as we can from
-anything which can come in through HTTP socket.
+anything which can come in through an HTTP socket.
 
 If parts of your web infrastructure are outsourced or otherwise
-partitioned along adminitrative lines, you need to think about
+partitioned along administrative lines, you need to think about
 security.
 
 Varnish provides four levels of authority, roughly related to
-how and where the command comes into Varnish:
+how and where commands come into Varnish:
 
   * The command line arguments
 
@@ -26,7 +26,7 @@ how and where the command comes into Varnish:
 Command line arguments
 ----------------------
 
-The top level security decisions is taken on and from the command
+The top-level security decisions are taken on and from the command
 line, in order to make them invulnerable to subsequent manipulation.
 
 The important decisions to make are:
@@ -42,9 +42,9 @@ The important decisions to make are:
 CLI interface access
 ^^^^^^^^^^^^^^^^^^^^
 
-The command line interface can be accessed three ways.
+The command line interface can be accessed in three ways.
 
-Varnishd can be told til listen and offer CLI connections
+``varnishd`` can be told to listen and offer CLI connections
 on a TCP socket.  You can bind the socket to pretty
 much anything the kernel will accept::
 
@@ -53,61 +53,61 @@ much anything the kernel will accept::
 	-T 192.168.1.1:34
 	-T '[fe80::1]:8082'
 
-The default is '-T localhost:0' which will pick a random
-port number, which varnishadm(8) can learn in the shared
+The default is ``-T localhost:0``, which will pick a random
+port number, which ``varnishadm(8)`` can find in the shared
 memory.
 
-By using a "localhost" address, you restrict CLI access
+By using a ``localhost`` address, you restrict CLI access
 to the local machine.
 
 You can also bind the CLI port to an IP number reachable across
 the net, and let other computers connect directly.
 
-This gives you no secrecy, ie, the CLI commands will
+This gives you no secrecy, i.e., the CLI commands will
 go across the network as ASCII text with no encryption, but
-the -S/PSK authentication requires the remote end to know
+the ``-S/PSK`` authentication requires the remote end to know
 the shared secret.
 
-Alternatively you can bind the CLI port to a 'localhost' address,
+Alternatively, you can bind the CLI port to a ``localhost`` address,
 and give remote users access via a secure connection to the local
 machine, using ssh/VPN or similar.
 
-If you use ssh you can restrict which commands each user can execute to
-just varnishadm, or even to wrapper scripts around varnishadm, which
-only allow specific CLI commands.
+If you use ``ssh``, you can restrict which commands each user can execute to
+just ``varnishadm``, or even to wrapper scripts around ``varnishadm``,
+which only allow specific CLI commands.
 
 It is also possible to configure varnishd for "reverse mode", using
-the '-M' argument.  In that case varnishd will attempt to open a
+the ``-M`` argument.  In that case varnishd will attempt to open a
 TCP connection to the specified address, and initiate a CLI connection
 to your central varnish management facility.
 
 The connection is also in this case without secrecy, but 
-the remote end must still satisfy -S/PSK authentication.
+the remote end must still satisfy ``-S/PSK`` authentication.
 
-Finally, if you run varnishd with the '-d' option, you get a CLI
-command on stdin/stdout, but since you started the process, it
+Finally, if you run varnishd with the ``-d`` option, you get a CLI
+command on ``stdin``/``stdout``, but since you started the process, it
 would be hard to prevent you getting CLI access, wouldn't it ?
 
 CLI interface authentication
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 By default the CLI interface is protected with a simple,  yet
-strong "Pre Shared Key" authentication method, which do not provide
-secrecy (ie: The CLI commands and responses are not encrypted).
+strong "Pre Shared Key" authentication method, which does not provide
+secrecy (i.e. the CLI commands and responses are not encrypted).
 
-The way -S/PSK works is really simple:  During startup a file is
-created with a random content and the file is only accessible to
-the user who started varnishd (or the superuser).
+The way ``-S/PSK`` works is really simple:  During startup a file is
+created with random content and the file is only accessible to
+the user who started ``varnishd`` (or the superuser).
 
 To authenticate and use a CLI connection, you need to know the
 contents of that file, in order to answer the cryptographic
 challenge varnishd issues. (XXX: xref to algo in refman)
 
-The varnishadm program knows all about this, it will just work,
+The ``varnishadm`` program knows all about this, it will just work,
 provided it can read the secret file.
 
 If you want to allow other users on the local system or remote
-users, to be able to access CLI connections, you must create your
+users to make CLI connections, you must create your
 own secret file and make it possible for (only!) these users to
 read it.
 
@@ -115,19 +115,19 @@ A good way to create the secret file is::
 
 	dd if=/dev/random of=/etc/varnish_secret count=1
 
-When you start varnishd, you specify the filename with -S, and
-it goes without saying that the varnishd master process needs
+When you start ``varnishd``, you specify the filename with ``-S``,
+and it goes without saying that the ``varnishd`` master process needs
 to be able to read the file too.
 
-You can change the contents of the secret file while varnishd
-runs, it is read every time a CLI connection is authenticated.
+You can change the contents of the secret file while ``varnishd``
+runs; it is read every time a CLI connection is authenticated.
 
-On the local system, varnishadm can find the filename from
+On the local system, ``varnishadm`` can find the filename from
 shared memory, but on remote systems, you need to give it
-a copy of the secret file, with the -S argument.
+a copy of the secret file, with the ``-S`` argument.
 
-If you want to disable -S/PSK authentication, specify -S with
-an empty argument to varnishd::
+If you want to disable ``-S/PSK`` authentication, specify ``-S`` with
+an empty argument to ``varnishd``::
 
 	varnishd [...] -S "" [...]
 
@@ -135,7 +135,7 @@ Parameters
 ^^^^^^^^^^
 
 Parameters can be set from the command line, and made "read-only"
-(using -r) so they cannot subsequently be modified from the CLI
+(using ``-r``) so they cannot subsequently be modified from the CLI
 interface.
 
 Pretty much any parameter can be used to totally mess up your
@@ -153,7 +153,7 @@ HTTP service, but a few can do more damage than that:
 Furthermore you may want to look at and lock down:
 
 :ref:`ref_param_syslog_cli_traffic`
-	Log all CLI commands to syslog(8), so you know what goes on.
+	Log all CLI commands to ``syslog(8)``, so you know what goes on.
 
 :ref:`ref_param_vcc_unsafe_path`
 	Retrict VCL/VMODS to :ref:`ref_param_vcl_dir` and :ref:`ref_param_vmod_dir`
@@ -161,19 +161,19 @@ Furthermore you may want to look at and lock down:
 The CLI interface
 -----------------
 
-The CLI interface in Varnish is very powerful, if you have
+The CLI interface in Varnish is very powerful. If you have
 access to the CLI interface, you can do almost anything to
 the Varnish process.
 
 As described above, some of the damage can be limited by restricting
-certain parameters, but that will only protect the local filesystem,
-and operating system, it will not protect your HTTP service.
+certain parameters, but that will only protect the local filesystem
+and operating system -- it will not protect your HTTP service.
 
 We do not currently have a way to restrict specific CLI commands
 to specific CLI connections.   One way to get such an effect is to
-"wrap" all CLI access in pre-approved scripts which use varnishadm(1)
+"wrap" all CLI access in pre-approved scripts which use ``varnishadm(1)``
 to submit the sanitized CLI commands, and restrict a remote user
-to only those scripts, for instance using sshd(8)'s configuration.
+to only those scripts, for instance using ``sshd(8)``'s configuration.
 
 VCL programs
 ------------
@@ -185,9 +185,9 @@ Both of these mechanisms allow execution of arbitrary code and will
 therefore allow a person to get access on the computer, with the
 privileges of the child process.
 
-If varnishd is started as root/superuser, we sandbox the child
+If ``varnishd`` is started as root/superuser, we sandbox the child
 process, using whatever facilities are available on the operating
-system, but if varnishd is not started as root/superuser, this is
+system, but if ``varnishd`` is not started as root/superuser, this is
 not possible.  No, don't ask me why you have to be superuser to
 lower the privilege of a child process...
 
@@ -205,15 +205,15 @@ HTTP requests
 -------------
 
 We have gone to great lengths to make Varnish resistant to anything
-coming in throught he socket where HTTP requests are received, and
+coming in through the socket where HTTP requests are received, and
 you should, generally speaking, not need to protect it any further.
 
 The caveat is that since VCL is a programming language which lets you
 decide exactly what to do about HTTP requests, you can also decide
-to do exactly stupid things to them, including opening youself up
+to do exactly stupid things to them, including opening yourself up
 to various kinds of attacks and subversive activities.
 
-If you have "administrative" HTTP requests, for instance PURGE
+If you have "administrative" HTTP requests, for instance ``PURGE``
 requests, we strongly recommend that you restrict them to trusted
 IP numbers/nets using VCL's Access Control Lists.
 

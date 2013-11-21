@@ -2,17 +2,17 @@
 Getting hold of us
 %%%%%%%%%%%%%%%%%%
 
-Getting hold of the gang behind Varnish is pretty straight forward,
-we try to help as much as time permits and have tried to streamline
+Getting hold of the gang behind Varnish is pretty straight forward.
+We try to help as much as time permits and have tried to streamline
 this process as much as possible.
 
 But before you grab hold of us, spend a moment composing your thoughts and
-formulate your question, there is nothing as pointless as simply telling
+formulate your question. There is nothing as pointless as simply telling
 us "Varnish does not work for me" with no further information to give
 any clue to why.
 
 And before you even do that, do a couple of searches to see if your
-question is already answered, if it has been, you will get your answer
+question is already answered. If it has been, you will get your answer
 much faster that way.
 
 IRC Channel
@@ -32,8 +32,8 @@ If the channel is all quiet, try again some time later, we do have lives,
 families and jobs to deal with also.
 
 You are more than welcome to just hang out, and while we don't mind
-the occational intrusion of the real world into the flow, keep
-it mostly on topic, and dont paste random links unless they are
+the occasional intrusion of the real world into the flow, keep
+it mostly on topic, and don't paste random links unless they are
 *really* spectacular and intelligent.
 
 Mailing Lists
@@ -49,40 +49,40 @@ reminded about new releases, bad bugs or security holes.
 
 The ``varnish-misc`` mailing list is for general banter, questions,
 suggestions, ideas and so on.  If you are new to Varnish it may pay
-off to subscribe to -misc, simply to have an ear to the telegraph-pole
+off to subscribe to ``-misc``, simply to have an ear to the telegraph-pole
 and learn some smart tricks.  This is a good place to ask for help
 with more complex issues, that require quoting of files and long
 explanations.
 
 Make sure to pick a good subject line, and if the subject of the
-thread changes, please change the subject to match, some of us deal
+thread changes, please change the subject to match. Some of us deal
 with hundreds of emails per day, after spam-filters, and we need all
 the help we can get to pick the interesting ones.
 
 The ``varnish-dev`` mailing list is used by the developers and is
 usually quite focused on source-code and such.  Everybody on
-the -dev list is also on -misc, so cross-posting only serves to annoy
-those people.
+the ``-dev`` list is also on ``-misc``, so cross-posting only serves 
+to annoy those people.
 
 Trouble Tickets
 ===============
 
-Please do not open a trouble ticket, unless you have spotted an actual
+Please do not open a trouble ticket unless you have spotted an actual
 bug in Varnish.  Ask on IRC first if you are in doubt.
 
-The reason for this policy, is to avoid the bugs being drowned in a
-pile of sensible suggestions for future enhancements and call for help
-from people who forget to check back if they get it and so on.
+The reason for this policy is to avoid the bugs being drowned in a
+pile of sensible suggestions for future enhancements and calls for help
+from people who forget to check back for answers and so on.
 
-We track suggestions and ideas in our `"Shopping-List" wiki page`_, and user
-support via email and IRC.
+We track suggestions and ideas in our `"Shopping-List" wiki page`_, and 
+user support is handled via email and IRC.
 
 Commercial Support
 ==================
 
 The following companies offer commercial Varnish support, and are listed
 here for your convenience.  If you want your company listed here, drop
-an email to phk@FreeBSD.org.
+an email to ``phk@FreeBSD.org``:
 
 	Varnish Software
 	sales@varnish-software.com

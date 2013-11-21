@@ -5,7 +5,7 @@ Starting and running Varnish
 
 This section is about starting, running, and stopping Varnish, about
 command line flags and options, communicating with the running
-Varnish processes, configuring storage and sockets and, and about
+Varnish processes, configuring storage and sockets, and about
 securing and protecting Varnish against attacks.
 
 .. toctree::

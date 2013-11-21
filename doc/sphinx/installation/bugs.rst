@@ -28,7 +28,7 @@ Varnish crashes
 Plain and simple: **boom**
 
 Varnish is split over two processes, the manager and the child.  The child
-does all the work, and the manager hangs around to resurect it, if it
+does all the work, and the manager hangs around to resurrect it, if it
 crashes.
 
 Therefore, the first thing to do if you see a varnish crash, is to examine
@@ -65,7 +65,7 @@ a lot.
 There will be a lot more information than this, and before sending
 it all to us, you should obscure any sensitive/secret
 data/cookies/passwords/ip# etc.  Please make sure to keep context
-when you do so, ie: do not change all the IP# to "X.X.X.X", but
+when you do so, i.e.: do not change all the IP# to ``X.X.X.X``, but
 change each IP# to something unique, otherwise we are likely to be
 more confused than informed.
 
@@ -107,8 +107,8 @@ information to work with.
 What we need here is all the information can you squeeze out of
 your operating system **before** you kill the Varnish process.
 
-One of the most valuable bits of information, is if all Varnish'
-threads are waiting for something or if one of them is spinning
+One of the most valuable bits of information is whether all the Varnish
+threads are waiting for something, or if one of them is spinning
 furiously on some futile condition.
 
 Commands like ``top -H`` or ``ps -Haxlw`` or ``ps -efH`` should be
@@ -136,12 +136,12 @@ These are the easy bugs: usually all we need from you is the relevant
 transactions recorded with ``varnishlog`` and your explanation of
 what is wrong about what Varnish does.
 
-Be aware, that often Varnish does exactly what you asked it to, rather
+Be aware that often Varnish does exactly what you asked it to, rather
 than what you intended it to do, so it sounds like a bug that would
 have tripped up everybody else, take a moment to read though your
 VCL and see if it really does what you think.
 
-You can also try setting the ``vcl_trace`` parameter, that will
-generate log records with like and char number for each statement
+You can also try setting the ``vcl_trace`` parameter. That will
+generate log records with line and character numbers for each statement
 executed in your VCL program.
 

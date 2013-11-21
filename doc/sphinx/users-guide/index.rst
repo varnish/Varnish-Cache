@@ -18,20 +18,20 @@ The Varnish documentation consists of three main documents:
 After :ref:`users_intro`, this Users Guide is organized in sections
 along the major interfaces to Varnish as a service:
 
-:ref:`users_running` is about getting Varnish configured, with
-respect to storage, sockets, security and how you can control and
-communicate with Varnish once it is running.
+* :ref:`users_running` is about getting Varnish configured, with
+  respect to storage, sockets, security and how you can control and
+  communicate with Varnish once it is running.
 
-:ref:`users_vcl` is about getting Varnish to handle the
-HTTP requests the way you want, what to cache, how to cache it,
-modifying HTTP headers etc. etc.
+* :ref:`users_vcl` is about getting Varnish to handle the
+  HTTP requests the way you want, what to cache, how to cache it,
+  modifying HTTP headers etc. etc.
 
-:ref:`users_report` explains how you can see and monitor what Varnish does,
-from transaction level to aggregate statistics.
+* :ref:`users_report` explains how you can see and monitor what Varnish does,
+  from transaction level to aggregate statistics.
 
-:ref:`users_performance` is about tuning your website with Varnish.
+* :ref:`users_performance` is about tuning your website with Varnish.
 
-:ref:`users_trouble` is for locating and fixing trouble with Varnish.
+* :ref:`users_trouble` is for locating and fixing trouble with Varnish.
 
 
 Detailed Table of Contents:
@@ -55,20 +55,20 @@ Detailed Table of Contents:
         configuration
         command_line
         VCL
-	backend_servers
-	logging
+        backend_servers
+        logging
         sizing_your_cache
         statistics
         increasing_your_hitrate
-	cookies
-	vary
+        cookies
+        vary
         hashing
-	purging
-	compression
-	esi
-	websockets
-	devicedetection
+        purging
+        compression
+        esi
+        websockets
+        devicedetection
         handling_misbehaving_servers
         advanced_topics
-	troubleshooting
+        troubleshooting
 

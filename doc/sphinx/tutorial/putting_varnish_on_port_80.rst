@@ -16,7 +16,8 @@ Now we need to edit the configuration file that starts Varnish.
 Debian/Ubuntu
 ~~~~~~~~~~~~~
 
-On Debian/Ubuntu this is /etc/default/varnish. In the file you'll find some text that looks like this::
+On Debian/Ubuntu this is ``/etc/default/varnish``.
+In the file you'll find some text that looks like this::
 
   DAEMON_OPTS="-a :6081 \
                -T localhost:6082 \
@@ -36,13 +37,15 @@ Red Hat EL / Centos
 ~~~~~~~~~~~~~~~~~~~
 
 On Red Hat EL / Centos
-On Red Hat/Centos it is /etc/sysconfig/varnish
+On Red Hat/Centos it is ``/etc/sysconfig/varnish``.
 
 
 Restarting Varnish
 ------------------
 
-Once the change is done. Restart varnish: ``service varnish
-restart``. Now everyone accessing your site will be accessing through
-Varnish.
+Once the change is done, restart varnish::
+
+    service varnish restart
+    
+Now everyone accessing your site will be accessing through Varnish.
 
