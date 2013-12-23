@@ -118,7 +118,7 @@ AVAILABLE COMMANDS
 
 **server**
 
- Creates mock of a server that can accept requests from Varnish and send responses. Accepted parameters:
+Creates mock of a server that can accept requests from Varnish and send responses. Accepted parameters:
  
 -wait
  (?)
@@ -131,7 +131,7 @@ AVAILABLE COMMANDS
 
 **client**
 
- Creates a client instance that sends requests to Varnish and receives responses. Accepted parameters:
+Creates a client instance that sends requests to Varnish and receives responses. Accepted parameters:
 
 -wait
  waits for commands to complete
@@ -146,7 +146,7 @@ AVAILABLE COMMANDS
  
 **varnish**
 
- Starts Varnish instance. Accepted arguments:
+Starts Varnish instance. Accepted arguments:
 
 -arg
  pass additional arguments to varnishd
@@ -173,43 +173,43 @@ AVAILABLE COMMANDS
 -expect
  set up a test for asserting variables against expected results. Syntax: "-expect <var> <comparison> <const>"
  
- See tests supplied with Varnish distribution for usage examples for all these directives.
+See tests supplied with Varnish distribution for usage examples for all these directives.
 
 **delay**
 
- Sleeps for specified number of seconds. Can accept floating point numbers. 
+Sleeps for specified number of seconds. Can accept floating point numbers. 
  
- Usage: ``delay 0.1``
+Usage: ``delay 0.1``
 
 **varnishtest**
 
- Accepts a string as an only argument. This being a test name that is being output 
- into the log. By default, test name is not shown, unless it fails.
+Accepts a string as an only argument. This being a test name that is being output 
+into the log. By default, test name is not shown, unless it fails.
 
 **shell**
 
- Executes a shell command. Accepts one argument as a string, and runs the command as is. 
+Executes a shell command. Accepts one argument as a string, and runs the command as is. 
  
- Usage: ``shell "date"``
+Usage: ``shell "date"``
 
 **sema**
 
- (todo)
+(todo)
  
- Semaphores mostly used to synchronize clients and servers "around"
- varnish, so that the server will not send something particular
- until the client tells it to, but it can also be used synchronize
- multiple clients or servers running in parallel.
+Semaphores mostly used to synchronize clients and servers "around"
+varnish, so that the server will not send something particular
+until the client tells it to, but it can also be used synchronize
+multiple clients or servers running in parallel.
 
 **random**
 
- Initializes random generator
+Initializes random generator
 
 **feature**
 
- Checks for features to be present in the test environment. If feature is not present, test is skipped. 
+Checks for features to be present in the test environment. If feature is not present, test is skipped. 
  
- Usage: ``feature 64bit SO_RCVTIMEO_WORKS``
+Usage: ``feature 64bit SO_RCVTIMEO_WORKS``
 
 Possible checks:
 
