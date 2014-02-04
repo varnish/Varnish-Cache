@@ -80,6 +80,7 @@ vmod_duration(const struct vrt_ctx *ctx, const char *p, VCL_DURATION d)
 	case 'h': r *= 60.*60.; break;
 	case 'd': r *= 60.*60.*24.; break;
 	case 'w': r *= 60.*60.*24.*7.; break;
+	case 'y': r *= 52.*60.*60.*24.*7.; break;
 	default:
 		return (d);
 	}
