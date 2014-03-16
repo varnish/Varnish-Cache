@@ -13,7 +13,7 @@ Grace mode
 
 When several clients are requesting the same page Varnish will send
 one request to the backend and place the others on hold while fetching
-one copy from the back end. In some products this is called request
+one copy from the backend. In some products this is called request
 coalescing and Varnish does this automatically.
 
 If you are serving thousands of hits per second the queue of waiting
@@ -74,28 +74,29 @@ can be enabled in VCL::
     set beresp.grace = 5m;
   } 
 
-When we set beresp.saintmode to 10 seconds Varnish will not ask *that*
+When we set `beresp.saintmode` to 10 seconds Varnish will not ask *that*
 server for URL for 10 seconds. A blacklist, more or less. Also a
 restart is performed so if you have other backends capable of serving
 that content Varnish will try those. When you are out of backends
 Varnish will serve the content from its stale cache.
 
-This can really be a life saver.
+This can be a huge life saver.
 
 Known limitations on grace- and saint mode
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If your request fails while it is being fetched you're thrown into
-vcl_error. vcl_error has access to a rather limited set of data so you
-can't enable saint mode or grace mode here. This will be addressed in a
-future release but a work-around available.
+`vcl_error`. `vcl_error` has access to a rather limited set of data so you
+can't enable saint mode or grace mode there. This will be addressed in a
+future release but a work-around is currently available:
 
 * Declare a backend that is always sick.
-* Set a magic marker in vcl_error
+* Set a magic marker in `vcl_error`
 * Restart the transaction
-* Note the magic marker in vcl_recv and set the backend to the one mentioned
+* Note the magic marker in `vcl_recv` and set the backend to the one mentioned
 * Varnish will now serve stale data is any is available
 
+.. XXX:What is a magic marker? benc
 
 God mode
 ~~~~~~~~

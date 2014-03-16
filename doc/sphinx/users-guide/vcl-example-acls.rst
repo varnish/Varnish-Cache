@@ -2,7 +2,7 @@
 ACLs
 ~~~~
 
-You create a named access control list with the *acl* keyword. You can match
+You create a named access control list with the ``acl`` keyword. You can match
 the IP address of the client against an ACL with the match operator.::
 
   # Who is allowed to purge....
@@ -32,3 +32,5 @@ the IP address of the client against an ACL with the match operator.::
       error 404 "Not in cache.";
     }
   }
+
+.. XXX:Maybe a bit more explanation of this code? benc
