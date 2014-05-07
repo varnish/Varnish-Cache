@@ -138,7 +138,7 @@ call certain actions in `vcl_init`.::
 
     sub vcl_recv {
         # send all traffic to the bar director:
-        req.backend_hint = bar.backend();
+        set req.backend_hint = bar.backend();
     }
 
 This director is a round-robin director. This means the director will
