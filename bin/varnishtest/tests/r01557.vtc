@@ -1,0 +1,19 @@
+varnishtest "#1557 regsuball() doesn't honor lookahead assertion on repeated strings"
+
+server s1 {
+	rxreq 
+	txresp 
+} -start
+
+varnish v1 -vcl+backend { 
+	sub vcl_backend_response {
+		set beresp.http.foo = regsuball(bereq.url, "(?<=[&\?])(id|name|age)=[^&]+(?:&|$)", "");
+	}
+} -start 
+
+client c1 {
+	txreq -url "/?id=23&name=foo&age=42"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.foo == "/?"
+} -run
