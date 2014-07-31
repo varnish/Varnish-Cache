@@ -72,6 +72,7 @@
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 #include "cache.h"
 #include "hash/hash_slinger.h"
@@ -704,12 +705,12 @@ HTTP1_CacheReqBody(struct req *req, ssize_t maxsize)
 
 		http_Unset(req->http0, H_Content_Length);
 		http_Unset(req->http0, H_Transfer_Encoding);
-		http_PrintfHeader(req->http0, "Content-Length: %ju",
+		http_PrintfHeader(req->http0, "Content-Length: %"PRIu64,
 		    req->req_bodybytes);
 
 		http_Unset(req->http, H_Content_Length);
 		http_Unset(req->http, H_Transfer_Encoding);
-		http_PrintfHeader(req->http, "Content-Length: %ju",
+		http_PrintfHeader(req->http, "Content-Length: %"PRIu64,
 		    req->req_bodybytes);
 
 		req->req_body_status = REQ_BODY_CACHED;
