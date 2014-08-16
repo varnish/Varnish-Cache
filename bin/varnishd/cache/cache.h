@@ -185,7 +185,6 @@ struct http {
 	txt			*hd;
 	unsigned char		*hdf;
 #define HDF_FILTER		(1 << 0)	/* Filtered by Connection */
-#define HDF_MARKER		(1 << 1)	/* Marker bit */
 
 	/* NB: ->nhd and below zeroed/initialized by http_Teardown */
 	uint16_t		nhd;		/* Next free hd */
@@ -332,6 +331,7 @@ struct worker {
 	struct vxid_pool	vxid_pool;
 
 	unsigned		cur_method;
+	unsigned		seen_methods;
 	unsigned		handling;
 };
 
@@ -373,14 +373,12 @@ struct storage {
  */
 
 typedef struct object *getobj_f(struct dstat *ds, struct objcore *oc);
-typedef unsigned getxid_f(struct dstat *ds, struct objcore *oc);
-typedef void updatemeta_f(struct objcore *oc);
+typedef void updatemeta_f(struct objcore *oc, struct dstat *);
 typedef void freeobj_f(struct dstat *ds, struct objcore *oc);
 typedef struct lru *getlru_f(const struct objcore *oc);
 
 struct objcore_methods {
 	getobj_f	*getobj;
-	getxid_f	*getxid;
 	updatemeta_f	*updatemeta;
 	freeobj_f	*freeobj;
 	getlru_f	*getlru;
@@ -491,13 +489,14 @@ struct busyobj {
 	enum busyobj_state_e	state;
 
 	struct ws		ws[1];
+	char			*ws_bo;
 	struct vbc		*vbc;
 	struct http		*bereq0;
 	struct http		*bereq;
 	struct http		*beresp;
 	struct object		*ims_obj;
+	struct objcore		*ims_oc;
 	struct objcore		*fetch_objcore;
-	struct object		*fetch_obj;
 
 	struct http_conn	htc;
 
@@ -543,29 +542,40 @@ VTAILQ_HEAD(storagehead, storage);
 struct body {
 	struct stevedore	*stevedore;
 	struct storagehead	list;
+	ssize_t			len;
+};
+
+enum obj_attr {
+#define OBJ_ATTR(U, l)	OA_##U,
+#include "tbl/obj_attr.h"
+#undef OBJ_ATTR
+};
+
+enum obj_flags {
+#define OBJ_FLAG(U, l, v)	OF_##U = v,
+#include "tbl/obj_attr.h"
+#undef OBJ_FLAG
 };
 
 struct object {
 	unsigned		magic;
 #define OBJECT_MAGIC		0x32851d42
-	uint32_t		vxid;
+	char			oa_vxid[4];
 	struct storage		*objstore;
 	struct objcore		*objcore;
 
 	uint8_t			*vary;
 
-	unsigned		gziped:1;
-	unsigned		changed_gzip:1;
+	uint8_t			*oa_http;
+
+
+	uint8_t			oa_flags[1];
 
 	/* Bit positions in the gzip stream */
-	ssize_t			gzip_start;
-	ssize_t			gzip_last;
-	ssize_t			gzip_stop;
-
-	ssize_t			len;
+	char			oa_gzipbits[24];
 
 	/* VCL only variables */
-	double			last_modified;
+	char			oa_lastmodified[8];
 
 	struct http		*http;
 
@@ -644,6 +654,7 @@ struct req {
 	struct ws		ws[1];
 	struct object		*obj;
 	struct objcore		*objcore;
+	struct objcore		*ims_oc;
 	/* Lookup stuff */
 	struct SHA256Context	*sha256ctx;
 
@@ -832,6 +843,7 @@ VDP_bytes(struct req *req, enum vdp_action act, const void *ptr, ssize_t len)
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 
+	assert(act > VDP_NULL || len > 0);
 	/* Call the present layer, while pointing to the next layer down */
 	i = req->vdp_nxt--;
 	assert(i >= 0 && i < N_VDPS);
@@ -896,7 +908,7 @@ enum vbf_fetch_mode_e {
 	VBF_BACKGROUND = 2,
 };
 void VBF_Fetch(struct worker *wrk, struct req *req,
-    struct objcore *oc, struct object *oldobj, enum vbf_fetch_mode_e);
+    struct objcore *oc, struct objcore *oldoc, enum vbf_fetch_mode_e);
 
 /* cache_fetch_proc.c */
 struct storage *VFP_GetStorage(struct vfp_ctx *, ssize_t sz);
@@ -923,7 +935,7 @@ int VGZ_ObufFull(const struct vgz *vg);
 enum vgzret_e VGZ_Gzip(struct vgz *, const void **, size_t *len, enum vgz_flag);
 enum vgzret_e VGZ_Gunzip(struct vgz *, const void **, size_t *len);
 enum vgzret_e VGZ_Destroy(struct vgz **);
-void VGZ_UpdateObj(const struct vgz*, struct object *);
+void VGZ_UpdateObj(const struct vfp_ctx *, const struct vgz*);
 vdp_bytes VDP_gunzip;
 
 int VGZ_WrwInit(struct vgz *vg);
@@ -941,7 +953,8 @@ void HTTP_Init(void);
 void http_PutResponse(struct http *to, const char *proto, uint16_t status,
     const char *response);
 void http_FilterReq(struct http *to, const struct http *fm, unsigned how);
-void http_FilterResp(const struct http *fm, struct http *to, unsigned how);
+uint8_t *HTTP_Encode(const struct http *fm, struct ws *ws, unsigned how);
+int HTTP_Decode(struct http *to, uint8_t *fm);
 void http_ForceHeader(struct http *to, const char *hdr, const char *val);
 void http_PrintfHeader(struct http *to, const char *fmt, ...)
     __printflike(2, 3);
@@ -957,6 +970,7 @@ int http_GetHdrField(const struct http *hp, const char *hdr,
     const char *field, char **ptr);
 double http_GetHdrQ(const struct http *hp, const char *hdr, const char *field);
 uint16_t http_GetStatus(const struct http *hp);
+int http_IsStatus(const struct http *hp, int);
 void http_SetStatus(struct http *to, uint16_t status);
 const char *http_GetReq(const struct http *hp);
 int http_HdrIs(const struct http *hp, const char *hdr, const char *val);
@@ -967,7 +981,9 @@ void http_MarkHeader(const struct http *, const char *hdr, unsigned hdrlen,
     uint8_t flag);
 void http_CollectHdr(struct http *hp, const char *hdr);
 void http_VSL_log(const struct http *hp);
-void http_Merge(const struct http *fm, struct http *to, int not_ce);
+void HTTP_Merge(struct objcore *, struct dstat *, struct http *to);
+const char *HTTP_GetHdrPack(struct objcore *, struct dstat *,
+    const char *hdr);
 
 /* cache_http1_proto.c */
 
@@ -1048,10 +1064,26 @@ enum objiter_status ObjIter(struct objiter *, void **, ssize_t *);
 void ObjIterEnd(struct objiter **);
 void ObjTrimStore(struct objcore *, struct dstat *);
 unsigned ObjGetXID(struct objcore *, struct dstat *);
+uint64_t ObjGetLen(struct objcore *oc, struct dstat *ds);
 struct object *ObjGetObj(struct objcore *, struct dstat *);
-void ObjUpdateMeta(struct objcore *);
+void ObjUpdateMeta(struct objcore *, struct dstat *);
 void ObjFreeObj(struct objcore *, struct dstat *);
 struct lru *ObjGetLRU(const struct objcore *);
+void *ObjGetattr(struct objcore *oc, struct dstat *ds, enum obj_attr attr,
+    ssize_t *len);
+void *ObjSetattr(const struct vfp_ctx *, enum obj_attr attr, ssize_t len);
+int ObjCopyAttr(const struct vfp_ctx *, struct objcore *, enum obj_attr attr);
+
+int ObjSetDouble(const struct vfp_ctx*, enum obj_attr, double);
+int ObjSetU32(const struct vfp_ctx *, enum obj_attr, uint32_t);
+int ObjSetU64(const struct vfp_ctx *, enum obj_attr, uint64_t);
+
+int ObjGetDouble(struct objcore *, struct dstat *, enum obj_attr, double *);
+int ObjGetU32(struct objcore *, struct dstat *, enum obj_attr, uint32_t *);
+int ObjGetU64(struct objcore *, struct dstat *, enum obj_attr, uint64_t *);
+
+int ObjCheckFlag(struct objcore *oc, struct dstat *ds, enum obj_flags of);
+void ObjSetFlag(const struct vfp_ctx *vc, enum obj_flags of, int val);
 
 /* cache_panic.c */
 void PAN_Init(void);
@@ -1141,6 +1173,7 @@ int VRY_Create(struct busyobj *bo, struct vsb **psb);
 int VRY_Match(struct req *, const uint8_t *vary);
 unsigned VRY_Validate(const uint8_t *vary);
 void VRY_Prep(struct req *);
+void VRY_Clear(struct req *);
 enum vry_finish_flag { KEEP, DISCARD };
 void VRY_Finish(struct req *req, enum vry_finish_flag);
 

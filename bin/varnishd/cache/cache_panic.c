@@ -39,6 +39,7 @@
 #include <stdlib.h>
 
 #include "cache.h"
+#include "vend.h"
 #include "common/heritage.h"
 
 #include "cache_backend.h"
@@ -215,9 +216,9 @@ pan_object(const char *typ, const struct object *o)
 	const struct storage *st;
 
 	VSB_printf(pan_vsp, "  obj (%s) = %p {\n", typ, o);
-	VSB_printf(pan_vsp, "    vxid = %u,\n", VXID(o->vxid));
+	VSB_printf(pan_vsp, "    vxid = %u,\n", VXID(vbe32dec(o->oa_vxid)));
 	pan_http("obj", o->http, 4);
-	VSB_printf(pan_vsp, "    len = %jd,\n", (intmax_t)o->len);
+	VSB_printf(pan_vsp, "    len = %jd,\n", (intmax_t)o->body->len);
 	VSB_printf(pan_vsp, "    store = {\n");
 	VTAILQ_FOREACH(st, &o->body->list, list)
 		pan_storage(st);
@@ -268,21 +269,42 @@ static void
 pan_wrk(const struct worker *wrk)
 {
 	const char *hand;
+	unsigned m, u;
+	const char *p;
 
 	VSB_printf(pan_vsp, "  worker = %p {\n", wrk);
 	pan_ws(wrk->aws, 4);
 
-	hand = VCL_Method_Name(wrk->cur_method);
+	m = wrk->cur_method;
+	VSB_printf(pan_vsp, "  VCL::method = ");
+	if (m == 0) {
+		VSB_printf(pan_vsp, "none,\n");
+		return;
+	}
+	if (!(m & 1))
+		VSB_printf(pan_vsp, "*");
+	m &= ~1;
+	hand = VCL_Method_Name(m);
 	if (hand != NULL)
-		VSB_printf(pan_vsp, "  VCL::method = %s,\n", hand);
+		VSB_printf(pan_vsp, "%s,\n", hand);
 	else
-		VSB_printf(pan_vsp, "  VCL::method = 0x%x,\n", wrk->cur_method);
+		VSB_printf(pan_vsp, "0x%x,\n", m);
 	hand = VCL_Return_Name(wrk->handling);
 	if (hand != NULL)
 		VSB_printf(pan_vsp, "  VCL::return = %s,\n", hand);
 	else
 		VSB_printf(pan_vsp, "  VCL::return = 0x%x,\n", wrk->handling);
-	VSB_printf(pan_vsp, "  },\n");
+	VSB_printf(pan_vsp, "  VCL::methods = {");
+	m = wrk->seen_methods;
+	p = "";
+	for (u = 1; m ; u <<= 1) {
+		if (m & u) {
+			VSB_printf(pan_vsp, "%s%s", p, VCL_Method_Name(u));
+			m &= ~u;
+			p = ", ";
+		}
+	}
+	VSB_printf(pan_vsp, "},\n  },\n");
 }
 
 static void
@@ -319,8 +341,6 @@ pan_busyobj(const struct busyobj *bo)
 	pan_ws(bo->ws_o, 4);
 	if (bo->fetch_objcore)
 		pan_objcore("FETCH", bo->fetch_objcore);
-	if (bo->fetch_obj)
-		pan_object("FETCH", bo->fetch_obj);
 	if (bo->ims_obj)
 		pan_object("IMS", bo->ims_obj);
 	VSB_printf(pan_vsp, "  }\n");
@@ -375,8 +395,8 @@ pan_req(const struct req *req)
 		pan_vcl(req->vcl);
 
 	if (VALID_OBJ(req->obj, OBJECT_MAGIC)) {
-		if (req->obj->objcore->busyobj != NULL)
-			pan_busyobj(req->obj->objcore->busyobj);
+		if (req->objcore->busyobj != NULL)
+			pan_busyobj(req->objcore->busyobj);
 		pan_object("REQ", req->obj);
 	}
 

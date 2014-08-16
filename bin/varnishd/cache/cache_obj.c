@@ -31,6 +31,7 @@
 #include <stdlib.h>
 
 #include "cache.h"
+#include "vend.h"
 #include "storage/storage.h"
 #include "hash/hash_slinger.h"
 
@@ -77,9 +78,12 @@ ObjIter(struct objiter *oi, void **p, ssize_t *l)
 			oi->st = VTAILQ_FIRST(&oi->obj->body->list);
 		else
 			oi->st = VTAILQ_NEXT(oi->st, list);
+		while(oi->st != NULL && oi->st->len == 0)
+			oi->st = VTAILQ_NEXT(oi->st, list);
 		if (oi->st != NULL) {
 			*p = oi->st->ptr;
 			*l = oi->st->len;
+			assert(*l > 0);
 			return (OIS_DATA);
 		}
 		return (OIS_DONE);
@@ -169,16 +173,6 @@ ObjTrimStore(struct objcore *oc, struct dstat *ds)
 	}
 }
 
-unsigned
-ObjGetXID(struct objcore *oc, struct dstat *ds)
-{
-	const struct objcore_methods *m = obj_getmethods(oc);
-
-	AN(ds);
-	AN(m->getxid);
-	return (m->getxid(ds, oc));
-}
-
 struct object *
 ObjGetObj(struct objcore *oc, struct dstat *ds)
 {
@@ -190,12 +184,12 @@ ObjGetObj(struct objcore *oc, struct dstat *ds)
 }
 
 void
-ObjUpdateMeta(struct objcore *oc)
+ObjUpdateMeta(struct objcore *oc, struct dstat *ds)
 {
 	const struct objcore_methods *m = obj_getmethods(oc);
 
 	if (m->updatemeta != NULL)
-		m->updatemeta(oc);
+		m->updatemeta(oc, ds);
 }
 
 void
@@ -217,4 +211,244 @@ ObjGetLRU(const struct objcore *oc)
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 	AN(m->getlru);
 	return (m->getlru(oc));
+}
+
+void *
+ObjGetattr(struct objcore *oc, struct dstat *ds, enum obj_attr attr,
+   ssize_t *len)
+{
+	struct object *o;
+	ssize_t dummy;
+
+	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+	AN(ds);
+	if (len == NULL)
+		len = &dummy;
+	o = ObjGetObj(oc, ds);
+	CHECK_OBJ_NOTNULL(o, OBJECT_MAGIC);
+	switch (attr) {
+	case OA_ESIDATA:
+		if (o->esidata == NULL)
+			return (NULL);
+		*len = o->esidata->len;
+		return (o->esidata->ptr);
+	case OA_FLAGS:
+		*len = sizeof o->oa_flags;
+		return (o->oa_flags);
+	case OA_GZIPBITS:
+		*len = sizeof o->oa_gzipbits;
+		return (o->oa_gzipbits);
+	case OA_HEADERS:
+		*len = 0;			// XXX: hack
+		return (o->oa_http);
+	case OA_LASTMODIFIED:
+		*len = sizeof o->oa_lastmodified;
+		return (o->oa_lastmodified);
+	case OA_VARY:
+		*len = 4;			// XXX: hack
+		return (o->vary);
+	case OA_VXID:
+		*len = sizeof o->oa_vxid;
+		return (o->oa_vxid);
+	default:
+		break;
+	}
+	WRONG("Unsupported OBJ_ATTR");
+}
+
+void *
+ObjSetattr(const struct vfp_ctx *vc, enum obj_attr attr,
+    ssize_t len)
+{
+	struct object *o;
+
+	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(vc->bo, BUSYOBJ_MAGIC);
+	CHECK_OBJ_NOTNULL(vc->bo->fetch_objcore, OBJCORE_MAGIC);
+	o = ObjGetObj(vc->bo->fetch_objcore, vc->bo->stats);
+	CHECK_OBJ_NOTNULL(o, OBJECT_MAGIC);
+	switch (attr) {
+	case OA_ESIDATA:
+		o->esidata = STV_alloc(vc, len);
+		if (o->esidata == NULL)
+			return (NULL);
+		o->esidata->len = len;
+		return (o->esidata->ptr);
+	case OA_FLAGS:
+		assert(len == sizeof o->oa_flags);
+		return (o->oa_flags);
+	case OA_GZIPBITS:
+		assert(len == sizeof o->oa_gzipbits);
+		return (o->oa_gzipbits);
+	case OA_LASTMODIFIED:
+		assert(len == sizeof o->oa_lastmodified);
+		return (o->oa_lastmodified);
+	case OA_VXID:
+		assert(len == sizeof o->oa_vxid);
+		return (o->oa_vxid);
+	default:
+		break;
+	}
+	WRONG("Unsupported OBJ_ATTR");
+}
+
+int
+ObjCopyAttr(const struct vfp_ctx *vc, struct objcore *ocs, enum obj_attr attr)
+{
+	void *vps, *vpd;
+	ssize_t l;
+
+	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
+
+	vps = ObjGetattr(ocs, vc->bo->stats, attr, &l);
+	// XXX: later we want to have zero-length OA's too
+	if (vps == NULL || l <= 0)
+		return (-1);
+	vpd = ObjSetattr(vc, attr, l);
+	if (vpd == NULL)
+		return (-1);
+	memcpy(vpd, vps, l);
+	return (0);
+}
+
+unsigned
+ObjGetXID(struct objcore *oc, struct dstat *ds)
+{
+	uint32_t u;
+
+	AZ(ObjGetU32(oc, ds, OA_VXID, &u));
+	return (u);
+}
+
+uint64_t
+ObjGetLen(struct objcore *oc, struct dstat *ds)
+{
+	struct object *o;
+
+	o = ObjGetObj(oc, ds);
+	CHECK_OBJ_NOTNULL(o, OBJECT_MAGIC);
+	return (o->body->len);
+}
+
+/*--------------------------------------------------------------------
+ * There is no well-defined byteorder for IEEE-754 double and the
+ * correct solution (frexp(3) and manual encoding) is more work
+ * than our (weak) goal of being endian-agnostic requires at this point.
+ * We give it a shot by memcpy'ing doubles over a uint64_t and then
+ * BE encode that.
+ */
+
+int
+ObjSetDouble(const struct vfp_ctx *vc, enum obj_attr a, double t)
+{
+	void *vp;
+	uint64_t u;
+
+	assert(sizeof t == sizeof u);
+	memcpy(&u, &t, sizeof u);
+	vp = ObjSetattr(vc, a, sizeof u);
+	if (vp == NULL)
+		return (-1);
+	vbe64enc(vp, u);
+	return (0);
+}
+
+int
+ObjGetDouble(struct objcore *oc, struct dstat *ds, enum obj_attr a, double *d)
+{
+	void *vp;
+	uint64_t u;
+	ssize_t l;
+
+	assert(sizeof *d == sizeof u);
+	vp = ObjGetattr(oc, ds, a, &l);
+	if (vp == NULL)
+		return (-1);
+	if (d != NULL) {
+		assert(l == sizeof u);
+		u = vbe64dec(vp);
+		memcpy(d, &u, sizeof *d);
+	}
+	return (0);
+}
+
+/*--------------------------------------------------------------------
+ */
+
+int
+ObjSetU64(const struct vfp_ctx *vc, enum obj_attr a, uint64_t t)
+{
+	void *vp;
+
+	vp = ObjSetattr(vc, a, sizeof t);
+	if (vp == NULL)
+		return (-1);
+	vbe64enc(vp, t);
+	return (0);
+}
+
+int
+ObjGetU64(struct objcore *oc, struct dstat *ds, enum obj_attr a, uint64_t *d)
+{
+	void *vp;
+	ssize_t l;
+
+	vp = ObjGetattr(oc, ds, a, &l);
+	if (vp == NULL || l != sizeof *d)
+		return (-1);
+	if (d != NULL)
+		*d = vbe64dec(vp);
+	return (0);
+}
+
+int
+ObjSetU32(const struct vfp_ctx *vc, enum obj_attr a, uint32_t t)
+{
+	void *vp;
+
+	vp = ObjSetattr(vc, a, sizeof t);
+	if (vp == NULL)
+		return (-1);
+	vbe32enc(vp, t);
+	return (0);
+}
+
+int
+ObjGetU32(struct objcore *oc, struct dstat *ds, enum obj_attr a, uint32_t *d)
+{
+	void *vp;
+	ssize_t l;
+
+	vp = ObjGetattr(oc, ds, a, &l);
+	if (vp == NULL || l != sizeof *d)
+		return (-1);
+	if (d != NULL)
+		*d = vbe32dec(vp);
+	return (0);
+}
+
+/*--------------------------------------------------------------------
+ */
+
+int
+ObjCheckFlag(struct objcore *oc, struct dstat *ds, enum obj_flags of)
+{
+	uint8_t *fp;
+
+	fp = ObjGetattr(oc, ds, OA_FLAGS, NULL);
+	AN(fp);
+	return ((*fp) & of);
+}
+
+void
+ObjSetFlag(const struct vfp_ctx *vc, enum obj_flags of, int val)
+{
+	uint8_t *fp;
+
+	fp = ObjSetattr(vc, OA_FLAGS, 1);
+	AN(fp);
+	if (val)
+		(*fp) |= of;
+	else
+		(*fp) &= ~of;
 }

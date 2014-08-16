@@ -63,6 +63,10 @@ struct params {
 	char			*group;
 	gid_t			gid;
 
+	/* Extra group for compiler access */
+	char			*group_cc;
+	gid_t			gid_cc;
+
 	/* TTL used for lack of anything better */
 	double			default_ttl;
 
@@ -103,7 +107,7 @@ struct params {
 	unsigned		http_resp_hdr_len;
 	unsigned		http_max_hdr;
 
-	unsigned		shm_reclen;
+	unsigned		vsl_reclen;
 
 	double			timeout_linger;
 	double			timeout_idle;

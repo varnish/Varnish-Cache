@@ -42,6 +42,7 @@
 #include <stdlib.h>
 
 #include "cache.h"
+#include "vend.h"
 
 #include "vgz.h"
 
@@ -390,14 +391,16 @@ VGZ_WrwFlush(struct req *req, struct vgz *vg)
 /*--------------------------------------------------------------------*/
 
 void
-VGZ_UpdateObj(const struct vgz *vg, struct object *obj)
+VGZ_UpdateObj(const struct vfp_ctx *vc, const struct vgz *vg)
 {
+	char *p;
 
 	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
-	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
-	obj->gzip_start	= vg->vz.start_bit;
-	obj->gzip_last	= vg->vz.last_bit;
-	obj->gzip_stop	= vg->vz.stop_bit;
+	p = ObjSetattr(vc, OA_GZIPBITS, 24);
+	AN(p);
+	vbe64enc(p, vg->vz.start_bit);
+	vbe64enc(p + 8, vg->vz.last_bit);
+	vbe64enc(p + 16, vg->vz.stop_bit);
 }
 
 /*--------------------------------------------------------------------
@@ -597,7 +600,7 @@ vfp_gzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 
 	if (vr != VGZ_END)
 		return (VFP_Error(vc, "Gzip failed"));
-	VGZ_UpdateObj(vg, vc->bo->fetch_obj);
+	VGZ_UpdateObj(vc, vg);
 	return (VFP_END);
 }
 
@@ -643,7 +646,7 @@ vfp_testgunzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 	if (vp == VFP_END) {
 		if (vr != VGZ_END)
 			return (VFP_Error(vc, "tGunzip failed"));
-		VGZ_UpdateObj(vg, vc->bo->fetch_obj);
+		VGZ_UpdateObj(vc, vg);
 	}
 	return (vp);
 }

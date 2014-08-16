@@ -262,13 +262,16 @@ ESI_Deliver(struct req *req)
 	size_t dl;
 	const void *dp;
 	int i;
+	struct object *obj;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	st = req->obj->esidata;
-	AN(st);
-
-	p = st->ptr;
-	e = st->ptr + st->len;
+	CHECK_OBJ_NOTNULL(req->objcore, OBJCORE_MAGIC);
+	p = ObjGetattr(req->objcore, &req->wrk->stats, OA_ESIDATA, &l);
+	obj = ObjGetObj(req->objcore, &req->wrk->stats);
+	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
+	AN(p);
+	assert(l > 0);
+	e = p + l;
 
 	if (*p == VEC_GZ) {
 		isgzip = 1;
@@ -305,7 +308,7 @@ ESI_Deliver(struct req *req)
 		AZ(dl);
 	}
 
-	st = VTAILQ_FIRST(&req->obj->body->list);
+	st = VTAILQ_FIRST(&obj->body->list);
 	off = 0;
 
 	while (p < e) {
@@ -456,14 +459,15 @@ ESI_Deliver(struct req *req)
  */
 
 static uint8_t
-ved_deliver_byterange(struct req *req, ssize_t low, ssize_t high)
+ved_deliver_byterange(struct req *req, const struct object *obj, ssize_t low,
+    ssize_t high)
 {
 	struct storage *st;
 	ssize_t l, lx;
 	u_char *p;
 
 	lx = 0;
-	VTAILQ_FOREACH(st, &req->obj->body->list, list) {
+	VTAILQ_FOREACH(st, &obj->body->list, list) {
 		p = st->ptr;
 		l = st->len;
 		if (lx + l < low) {
@@ -496,16 +500,24 @@ ESI_DeliverChild(struct req *req)
 	struct storage *st;
 	struct object *obj;
 	ssize_t start, last, stop, lpad;
+	ssize_t l;
+	char *p;
 	u_char cc;
 	uint32_t icrc;
 	uint32_t ilen;
+	uint64_t olen;
 	uint8_t *dbits;
 	int i, j;
 	uint8_t tailbuf[8];
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	if (!req->obj->gziped) {
-		VTAILQ_FOREACH(st, &req->obj->body->list, list)
+	CHECK_OBJ_NOTNULL(req->objcore, OBJCORE_MAGIC);
+
+	obj = ObjGetObj(req->objcore, &req->wrk->stats);
+	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
+
+	if (!ObjCheckFlag(req->objcore, &req->wrk->stats, OF_GZIPED)) {
+		VTAILQ_FOREACH(st, &obj->body->list, list)
 			ved_pretend_gzip(req, st->ptr, st->len);
 		return;
 	}
@@ -517,14 +529,16 @@ ESI_DeliverChild(struct req *req)
 
 	dbits = (void*)WS_Alloc(req->ws, 8);
 	AN(dbits);
-	obj = req->obj;
-	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
-	start = obj->gzip_start;
-	last = obj->gzip_last;
-	stop = obj->gzip_stop;
-	assert(start > 0 && start < obj->len * 8);
-	assert(last > 0 && last < obj->len * 8);
-	assert(stop > 0 && stop < obj->len * 8);
+	p = ObjGetattr(obj->objcore, &req->wrk->stats, OA_GZIPBITS, &l);
+	AN(p);
+	assert(l == 24);
+	start = vbe64dec(p);
+	last = vbe64dec(p + 8);
+	stop = vbe64dec(p + 16);
+	olen = ObjGetLen(obj->objcore, &req->wrk->stats);
+	assert(start > 0 && start < olen * 8);
+	assert(last > 0 && last < olen * 8);
+	assert(stop > 0 && stop < olen * 8);
 	assert(last >= start);
 	assert(last < stop);
 
@@ -535,10 +549,10 @@ ESI_DeliverChild(struct req *req)
 	 * XXX: optimize for the case where the 'last'
 	 * XXX: bit is in a empty copy block
 	 */
-	*dbits = ved_deliver_byterange(req, start/8, last/8);
+	*dbits = ved_deliver_byterange(req, obj, start/8, last/8);
 	*dbits &= ~(1U << (last & 7));
 	req->resp_bodybytes += WRW_Write(req->wrk, dbits, 1);
-	cc = ved_deliver_byterange(req, 1 + last/8, stop/8);
+	cc = ved_deliver_byterange(req, obj, 1 + last/8, stop/8);
 	switch((int)(stop & 7)) {
 	case 0: /* xxxxxxxx */
 		/* I think we have an off by one here, but that's OK */
@@ -584,7 +598,7 @@ ESI_DeliverChild(struct req *req)
 		req->resp_bodybytes += WRW_Write(req->wrk, dbits + 1, lpad);
 
 	/* We need the entire tail, but it may not be in one storage segment */
-	st = VTAILQ_LAST(&req->obj->body->list, storagehead);
+	st = VTAILQ_LAST(&obj->body->list, storagehead);
 	for (i = sizeof tailbuf; i > 0; i -= j) {
 		j = st->len;
 		if (j > i)

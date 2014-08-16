@@ -207,16 +207,17 @@ RFC2616_Body(struct busyobj *bo, struct dstat *stats)
 		return (BS_NONE);
 	}
 
-	if (hp->status <= 199) {
+	if (http_GetStatus(hp) <= 199) {
 		/*
 		 * 1xx responses never have a body.
 		 * [RFC2616 4.3 p33]
+		 * ... but we should never see them.
 		 */
 		stats->fetch_1xx++;
-		return (BS_NONE);
+		return (BS_ERROR);
 	}
 
-	if (hp->status == 204) {
+	if (http_IsStatus(hp, 204)) {
 		/*
 		 * 204 is "No Content", obviously don't expect a body.
 		 * [RFC2616 10.2.5 p60]
@@ -225,7 +226,7 @@ RFC2616_Body(struct busyobj *bo, struct dstat *stats)
 		return (BS_NONE);
 	}
 
-	if (hp->status == 304) {
+	if (http_IsStatus(hp, 304)) {
 		/*
 		 * 304 is "Not Modified" it has no body.
 		 * [RFC2616 10.3.5 p63]
@@ -235,7 +236,7 @@ RFC2616_Body(struct busyobj *bo, struct dstat *stats)
 	}
 
 	if (http_HdrIs(hp, H_Transfer_Encoding, "chunked")) {
-		 stats->fetch_chunked++;
+		stats->fetch_chunked++;
 		return (BS_CHUNKED);
 	}
 
@@ -345,25 +346,25 @@ int
 RFC2616_Do_Cond(const struct req *req)
 {
 	char *p, *e;
-	double ims;
+	double ims, lm;
 	int do_cond = 0;
 
 	/* RFC 2616 13.3.4 states we need to match both ETag
 	   and If-Modified-Since if present*/
 
 	if (http_GetHdr(req->http, H_If_Modified_Since, &p) ) {
-		if (!req->obj->last_modified)
-			return (0);
 		ims = VTIM_parse(p);
 		if (ims > req->t_req)	/* [RFC2616 14.25] */
 			return (0);
-		if (req->obj->last_modified > ims)
+		AZ(ObjGetDouble(req->objcore,  &req->wrk->stats,
+		    OA_LASTMODIFIED, &lm));
+		if (lm > ims)
 			return (0);
 		do_cond = 1;
 	}
 
 	if (http_GetHdr(req->http, H_If_None_Match, &p) &&
-	    http_GetHdr(req->obj->http, H_ETag, &e)) {
+	    http_GetHdr(req->resp, H_ETag, &e)) {
 		if (strcmp(p,e) != 0)
 			return (0);
 		do_cond = 1;

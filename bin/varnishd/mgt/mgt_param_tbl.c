@@ -44,20 +44,22 @@
 	"\tmax_pool\tmaximum size of free pool.\n"			\
 	"\tmax_age\tmax age of free element."
 
-/*
- * Remember to update varnishd.1 whenever you add / remove a parameter or
- * change its default value.
- * XXX: we should generate the relevant section of varnishd.1 from here.
- */
-
 struct parspec mgt_parspec[] = {
 	{ "user", tweak_user, NULL, NULL, NULL,
 		"The unprivileged user to run as.",
-		MUST_RESTART,
+		MUST_RESTART | ONLY_ROOT,
 		"" },
 	{ "group", tweak_group, NULL, NULL, NULL,
 		"The unprivileged group to run as.",
-		MUST_RESTART,
+		MUST_RESTART | ONLY_ROOT,
+		"" },
+	{ "group_cc", tweak_group_cc, NULL, NULL, NULL,
+		"On some systems the C-compiler is restricted so not"
+		" everybody can run it.  This parameter makes it possible"
+		" to add an extra group to the sandbox process which runs the"
+		" cc_command, in order to gain access to such a restricted"
+		" C-compiler.",
+		ONLY_ROOT,
 		"" },
 	{ "default_ttl", tweak_timeout, &mgt_param.default_ttl,
 		"0", NULL,
@@ -160,23 +162,27 @@ struct parspec mgt_parspec[] = {
 		0,
 		"64", "header lines" },
 	{ "vsl_buffer",
-		tweak_bytes_u, &mgt_param.vsl_buffer,
+		tweak_vsl_buffer, &mgt_param.vsl_buffer,
 		"1024", NULL,
 		"Bytes of (req-/backend-)workspace dedicated to buffering"
 		" VSL records.\n"
-		"At a bare minimum, this must be longer than"
-		" the longest HTTP header to be logged.\n"
 		"Setting this too high costs memory, setting it too low"
 		" will cause more VSL flushes and likely increase"
-		" lock-contention on the VSL mutex.\n"
-		"Minimum is 1k bytes.",
+		" lock-contention on the VSL mutex.\n\n"
+		"The minimum tracks the vsl_reclen parameter + 12 bytes.",
 		0,
 		"4k", "bytes" },
-	{ "shm_reclen",
-		tweak_bytes_u, &mgt_param.shm_reclen,
+	{ "vsl_reclen",
+		tweak_vsl_reclen, &mgt_param.vsl_reclen,
 		"16", "65535",
-		"Maximum number of bytes in SHM log record.\n"
-		"Maximum is 65535 bytes.",
+		"Maximum number of bytes in SHM log record.\n\n"
+		"The maximum tracks the vsl_buffer parameter - 12 bytes.",
+		0,
+		"255", "bytes" },
+	{ "shm_reclen",
+		tweak_vsl_reclen, &mgt_param.vsl_reclen,
+		"16", "65535",
+		"Old name for vsl_reclen, use that instead.",
 		0,
 		"255", "bytes" },
 	{ "timeout_idle", tweak_timeout, &mgt_param.timeout_idle,
@@ -534,21 +540,13 @@ struct parspec mgt_parspec[] = {
 		"Directory from which relative VCL filenames (vcl.load and "
 		"include) are opened.",
 		0,
-#ifdef VARNISH_VCL_DIR
 		VARNISH_VCL_DIR,
-#else
-		".",
-#endif
 		NULL },
 	{ "vmod_dir", tweak_string, &mgt_vmod_dir,
 		NULL, NULL,
 		"Directory where VCL modules are to be found.",
 		0,
-#ifdef VARNISH_VMOD_DIR
 		VARNISH_VMOD_DIR,
-#else
-		".",
-#endif
 		NULL },
 
 	{ "vcc_err_unref", tweak_bool, &mgt_vcc_err_unref,

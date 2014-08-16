@@ -35,6 +35,7 @@
 #include <stdlib.h>
 
 #include "cache.h"
+#include "vend.h"
 #include "hash/hash_slinger.h"
 #include "vcl.h"
 #include "vtim.h"
@@ -100,7 +101,6 @@ vbf_beresp2obj(struct busyobj *bo)
 	int varyl = 0;
 	uint16_t nhttp;
 	struct object *obj;
-	struct http *hp, *hp2;
 
 	l = 0;
 
@@ -139,9 +139,6 @@ vbf_beresp2obj(struct busyobj *bo)
 
 	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
 
-	AZ(bo->fetch_obj);
-	bo->fetch_obj = obj;
-
 	if (vary != NULL) {
 		obj->vary = (void *)WS_Copy(obj->http->ws,
 		    VSB_data(vary), varyl);
@@ -150,24 +147,24 @@ vbf_beresp2obj(struct busyobj *bo)
 		VSB_delete(vary);
 	}
 
-	obj->vxid = bo->vsl->wid;
+	AZ(ObjSetU32(bo->vfc, OA_VXID, VXID(bo->vsl->wid)));
 	WS_Assert(bo->ws_o);
 
 	/* Filter into object */
-	hp = bo->beresp;
-	hp2 = obj->http;
+	obj->http->logtag = SLT_ObjMethod;
+	obj->oa_http = HTTP_Encode(bo->beresp, bo->ws_o,
+	    bo->uncacheable ? HTTPH_R_PASS : HTTPH_A_INS);
+	AN(obj->oa_http);
+	AZ(HTTP_Decode(obj->http,
+	    ObjGetattr(bo->fetch_objcore, bo->stats, OA_HEADERS, NULL)));
 
-	hp2->logtag = SLT_ObjMethod;
-	http_FilterResp(hp, hp2, bo->uncacheable ? HTTPH_R_PASS : HTTPH_A_INS);
-	http_CopyHome(hp2);
-
-	if (http_GetHdr(hp, H_Last_Modified, &b))
-		obj->last_modified = VTIM_parse(b);
+	if (http_GetHdr(bo->beresp, H_Last_Modified, &b))
+		AZ(ObjSetDouble(bo->vfc, OA_LASTMODIFIED, VTIM_parse(b)));
 	else
-		obj->last_modified = floor(bo->fetch_objcore->exp.t_origin);
+		AZ(ObjSetDouble(bo->vfc, OA_LASTMODIFIED,
+		    floor(bo->fetch_objcore->exp.t_origin)));
 
-	/* Disassociate the obj from the bo's workspace */
-	hp2->ws = NULL;
+	bo->vfc->body = obj->body;
 
 	return (0);
 }
@@ -179,7 +176,7 @@ vbf_beresp2obj(struct busyobj *bo)
 static enum fetch_step
 vbf_stp_mkbereq(const struct worker *wrk, struct busyobj *bo)
 {
-	char *p;
+	const char *q;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
@@ -204,16 +201,20 @@ vbf_stp_mkbereq(const struct worker *wrk, struct busyobj *bo)
 		http_CopyHome(bo->bereq0);
 	}
 
-	if (bo->ims_obj != NULL && bo->ims_obj->http->status == 200) {
-		if (http_GetHdr(bo->ims_obj->http, H_Last_Modified, &p)) {
+	if (bo->ims_oc != NULL) {
+		q = HTTP_GetHdrPack(bo->ims_oc, bo->stats, H_Last_Modified);
+		if (q != NULL)
 			http_PrintfHeader(bo->bereq0,
-			    "If-Modified-Since: %s", p);
-		}
-		if (http_GetHdr(bo->ims_obj->http, H_ETag, &p)) {
+			    "If-Modified-Since: %s", q);
+		q = HTTP_GetHdrPack(bo->ims_oc, bo->stats, H_ETag);
+		if (q != NULL)
 			http_PrintfHeader(bo->bereq0,
-			    "If-None-Match: %s", p);
-		}
+			    "If-None-Match: %s", q);
 	}
+
+	HTTP_Setup(bo->bereq, bo->ws, bo->vsl, SLT_BereqMethod);
+	bo->ws_bo = WS_Snapshot(bo->ws);
+	HTTP_Copy(bo->bereq, bo->bereq0);
 
 	VBO_setstate(bo, BOS_REQ_DONE);
 	return (F_STP_STARTFETCH);
@@ -261,9 +262,6 @@ vbf_stp_startfetch(struct worker *wrk, struct busyobj *bo)
 		AN(bo->req);
 	else
 		AZ(bo->req);
-
-	HTTP_Setup(bo->bereq, bo->ws, bo->vsl, SLT_BereqMethod);
-	HTTP_Copy(bo->bereq, bo->bereq0);
 
 	http_PrintfHeader(bo->bereq, "X-Varnish: %u", VXID(bo->vsl->wid));
 
@@ -351,10 +349,18 @@ vbf_stp_startfetch(struct worker *wrk, struct busyobj *bo)
 
 	AZ(bo->do_esi);
 
-	if (bo->ims_obj != NULL && bo->beresp->status == 304) {
-		http_Merge(bo->ims_obj->http, bo->beresp,
-		    bo->ims_obj->changed_gzip);
-		assert(bo->beresp->status == 200);
+	if (bo->ims_oc != NULL && http_IsStatus(bo->beresp, 304)) {
+		if (ObjCheckFlag(bo->ims_oc, bo->stats, OF_CHGGZIP)) {
+			/*
+			 * If we changed the gzip status of the object
+			 * the stored Content_Encoding controls and we
+			 * must weaken any new ETag we get.
+			 */
+			http_Unset(bo->beresp, H_Content_Encoding);
+			RFC2616_Weaken_Etag(bo->beresp);
+		}
+		HTTP_Merge(bo->ims_oc, bo->stats, bo->beresp);
+		assert(http_IsStatus(bo->beresp, 200));
 		do_ims = 1;
 	} else
 		do_ims = 0;
@@ -399,7 +405,7 @@ vbf_stp_startfetch(struct worker *wrk, struct busyobj *bo)
 static enum fetch_step
 vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 {
-	struct object *obj;
+	char *p;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
@@ -479,14 +485,17 @@ vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 
 	assert(WRW_IsReleased(wrk));
 
-	obj = bo->fetch_obj;
-	bo->vfc->body = obj->body;
 
 	if (bo->do_gzip || (bo->is_gzip && !bo->do_gunzip))
-		obj->gziped = 1;
+		ObjSetFlag(bo->vfc, OF_GZIPED, 1);
 
 	if (bo->do_gzip || bo->do_gunzip)
-		obj->changed_gzip = 1;
+		ObjSetFlag(bo->vfc, OF_CHGGZIP, 1);
+
+	if (http_IsStatus(bo->beresp, 200) && (
+	    http_GetHdr(bo->beresp, H_Last_Modified, &p) ||
+	    http_GetHdr(bo->beresp, H_ETag, &p)))
+		ObjSetFlag(bo->vfc, OF_IMSCAND, 1);
 
 	if (bo->htc.body_status != BS_NONE)
 		V1F_Setup_Fetch(bo);
@@ -502,7 +511,7 @@ vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 	assert (bo->state == BOS_REQ_DONE);
 
 	if (bo->do_stream) {
-		HSH_Unbusy(&wrk->stats, obj->objcore);
+		HSH_Unbusy(&wrk->stats, bo->fetch_objcore);
 		VBO_setstate(bo, BOS_STREAM);
 	}
 
@@ -518,10 +527,8 @@ vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 
 	if (bo->vfc->failed && !bo->do_stream) {
 		assert(bo->state < BOS_STREAM);
-		if (bo->fetch_obj != NULL) {
+		if (bo->fetch_objcore != NULL)
 			ObjFreeObj(bo->fetch_objcore, bo->stats);
-			bo->fetch_obj = NULL;
-		}
 		return (F_STP_ERROR);
 	}
 
@@ -532,7 +539,7 @@ vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 		assert(bo->state == BOS_STREAM);
 	else {
 		assert(bo->state == BOS_REQ_DONE);
-		HSH_Unbusy(&wrk->stats, obj->objcore);
+		HSH_Unbusy(&wrk->stats, bo->fetch_objcore);
 	}
 
 	/* Recycle the backend connection before setting BOS_FINISHED to
@@ -544,9 +551,8 @@ vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 
 	VBO_setstate(bo, BOS_FINISHED);
 	VSLb_ts_busyobj(bo, "BerespBody", W_TIM_real(wrk));
-	if (bo->ims_obj != NULL)
-		EXP_Rearm(bo->ims_obj->objcore,
-		    bo->ims_obj->objcore->exp.t_origin, 0, 0, 0);
+	if (bo->ims_oc != NULL)
+		EXP_Rearm(bo->ims_oc, bo->ims_oc->exp.t_origin, 0, 0, 0);
 	return (F_STP_DONE);
 }
 
@@ -556,65 +562,40 @@ vbf_stp_fetch(struct worker *wrk, struct busyobj *bo)
 static enum fetch_step
 vbf_stp_condfetch(struct worker *wrk, struct busyobj *bo)
 {
-	struct object *obj;
 	struct objiter *oi;
 	void *sp;
 	ssize_t sl, al, tl;
+	uint64_t ol;
 	struct storage *st;
 	enum objiter_status ois;
-	char *p;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 
-	if (bo->ims_obj->changed_gzip) {
-		/*
-		 * If we modified the gzip status of the IMS object, that
-		 * must control the C-E header, if any.
-		 */
-		http_Unset(bo->beresp, H_Content_Encoding);
-		if (http_GetHdr(bo->ims_obj->http, H_Content_Encoding, &p))
-			http_PrintfHeader(bo->beresp,
-			    "Content-Encoding: %s", p);
-	}
-
 	AZ(vbf_beresp2obj(bo));
-	obj = bo->fetch_obj;
-	bo->vfc->body = obj->body;
 
-	if (bo->ims_obj->esidata != NULL) {
-		sl = bo->ims_obj->esidata->len;
-		obj->esidata = STV_alloc(bo->vfc, sl);
-		if (obj->esidata == NULL || obj->esidata->space < sl) {
-			VSLb(bo->vsl, SLT_Error,
-			    "No space for %zd bytes of ESI data", sl);
-			return (F_STP_FAIL);
-		}
-		memcpy(obj->esidata->ptr, bo->ims_obj->esidata->ptr, sl);
-		obj->esidata->len = sl;
-	}
+	if (ObjGetattr(bo->ims_oc, bo->stats, OA_ESIDATA, NULL) != NULL)
+		AZ(ObjCopyAttr(bo->vfc, bo->ims_oc, OA_ESIDATA));
 
-	obj->gziped = bo->ims_obj->gziped;
-	obj->gzip_start = bo->ims_obj->gzip_start;
-	obj->gzip_last = bo->ims_obj->gzip_last;
-	obj->gzip_stop = bo->ims_obj->gzip_stop;
+	AZ(ObjCopyAttr(bo->vfc, bo->ims_oc, OA_FLAGS));
+	AZ(ObjCopyAttr(bo->vfc, bo->ims_oc, OA_GZIPBITS));
 
 	AZ(WS_Overflowed(bo->ws_o));
 	if (bo->do_stream) {
-		HSH_Unbusy(&wrk->stats, obj->objcore);
+		HSH_Unbusy(&wrk->stats, bo->fetch_objcore);
 		VBO_setstate(bo, BOS_STREAM);
 	}
 
 	st = NULL;
 	al = 0;
 
+	ol = ObjGetLen(bo->ims_oc, bo->stats);
 	oi = ObjIterBegin(wrk, bo->ims_obj);
 	do {
 		ois = ObjIter(oi, &sp, &sl);
 		while (sl > 0) {
 			if (st == NULL)
-				st = VFP_GetStorage(bo->vfc,
-				    bo->ims_obj->len - al);
+				st = VFP_GetStorage(bo->vfc, ol - al);
 			if (st == NULL)
 				break;
 			tl = sl;
@@ -634,12 +615,11 @@ vbf_stp_condfetch(struct worker *wrk, struct busyobj *bo)
 		return (F_STP_FAIL);
 
 	if (!bo->do_stream)
-		HSH_Unbusy(&wrk->stats, obj->objcore);
+		HSH_Unbusy(&wrk->stats, bo->fetch_objcore);
 
-	assert(al == bo->ims_obj->len);
-	assert(obj->len == al);
-	EXP_Rearm(bo->ims_obj->objcore,
-	    bo->ims_obj->objcore->exp.t_origin, 0, 0, 0);
+	assert(al == ol);
+	assert(ObjGetLen(bo->fetch_objcore, bo->stats) == al);
+	EXP_Rearm(bo->ims_oc, bo->ims_oc->exp.t_origin, 0, 0, 0);
 
 	/* Recycle the backend connection before setting BOS_FINISHED to
 	   give predictable backend reuse behavior for varnishtest */
@@ -713,7 +693,6 @@ vbf_stp_error(struct worker *wrk, struct busyobj *bo)
 	if (vbf_beresp2obj(bo))
 		return (F_STP_FAIL);
 
-	bo->vfc->body = bo->fetch_obj->body;
 
 	l = VSB_len(bo->synth_body);
 	if (l > 0) {
@@ -750,7 +729,7 @@ vbf_stp_fail(struct worker *wrk, struct busyobj *bo)
 	HSH_Fail(bo->fetch_objcore);
 	if (bo->fetch_objcore->exp_flags & OC_EF_EXP) {
 		/* Already unbusied - expire it */
-		AN(bo->fetch_obj);
+		AN(bo->fetch_objcore);
 		EXP_Rearm(bo->fetch_objcore,
 		    bo->fetch_objcore->exp.t_origin, 0, 0, 0);
 	}
@@ -805,8 +784,6 @@ vbf_fetch_thread(struct worker *wrk, void *priv)
 	}
 	assert(WRW_IsReleased(wrk));
 
-	bo->stats = NULL;
-
 	if (bo->vbc != NULL) {
 		if (bo->doclose != SC_NULL)
 			VDI_CloseFd(&bo->vbc, &bo->acct);
@@ -821,27 +798,17 @@ vbf_fetch_thread(struct worker *wrk, void *priv)
 	if (bo->state == BOS_FINISHED) {
 		AZ(bo->fetch_objcore->flags & OC_F_FAILED);
 		HSH_Complete(bo->fetch_objcore);
-		VSLb(bo->vsl, SLT_Length, "%zd", bo->fetch_obj->len);
-		{
-		/* Sanity check fetch methods accounting */
-			ssize_t uu;
-			struct storage *st;
-
-			uu = 0;
-			VTAILQ_FOREACH(st, &bo->fetch_obj->body->list, list)
-				uu += st->len;
-			if (bo->do_stream)
-				/* Streaming might have started freeing stuff */
-				assert(uu <= bo->fetch_obj->len);
-
-			else
-				assert(uu == bo->fetch_obj->len);
-		}
+		VSLb(bo->vsl, SLT_Length, "%ju",
+		    (uintmax_t)ObjGetLen(bo->fetch_objcore, bo->stats));
 	}
 	AZ(bo->fetch_objcore->busyobj);
 
-	if (bo->ims_obj != NULL)
-		(void)HSH_DerefObj(&wrk->stats, &bo->ims_obj);
+	if (bo->ims_oc != NULL) {
+		(void)HSH_DerefObjCore(&wrk->stats, &bo->ims_oc);
+		bo->ims_obj = NULL;
+	}
+
+	bo->stats = NULL;
 
 	VBO_DerefBusyObj(wrk, &bo);
 	THR_SetBusyobj(NULL);
@@ -852,15 +819,16 @@ vbf_fetch_thread(struct worker *wrk, void *priv)
 
 void
 VBF_Fetch(struct worker *wrk, struct req *req, struct objcore *oc,
-    struct object *oldobj, enum vbf_fetch_mode_e mode)
+    struct objcore *oldoc, enum vbf_fetch_mode_e mode)
 {
 	struct busyobj *bo;
 	const char *how;
+	struct object *oldobj = NULL;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-	CHECK_OBJ_ORNULL(oldobj, OBJECT_MAGIC);
+	CHECK_OBJ_ORNULL(oldoc, OBJCORE_MAGIC);
 
 
 	switch(mode) {
@@ -894,13 +862,16 @@ VBF_Fetch(struct worker *wrk, struct req *req, struct objcore *oc,
 	bo->fetch_objcore = oc;
 
 	AZ(bo->ims_obj);
-	if (oldobj != NULL) {
-		if (http_GetHdr(oldobj->http, H_Last_Modified, NULL) ||
-		   http_GetHdr(oldobj->http, H_ETag, NULL)) {
-			assert(oldobj->objcore->refcnt > 0);
-			HSH_Ref(oldobj->objcore);
-			bo->ims_obj = oldobj;
-		}
+	AZ(bo->ims_oc);
+	if (oldoc != NULL &&
+	    ObjCheckFlag(oldoc, &req->wrk->stats, OF_IMSCAND)) {
+		assert(oldoc->refcnt > 0);
+		HSH_Ref(oldoc);
+		bo->ims_oc = oldoc;
+
+		oldobj = ObjGetObj(oldoc, &wrk->stats);
+		CHECK_OBJ_NOTNULL(oldobj, OBJECT_MAGIC);
+		bo->ims_obj = oldobj;
 	}
 
 	AZ(bo->req);

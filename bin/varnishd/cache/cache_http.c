@@ -36,6 +36,7 @@
 
 #include "cache.h"
 
+#include "vend.h"
 #include "vct.h"
 
 #define HTTPH(a, b, c) char b[] = "*" a ":";
@@ -135,7 +136,7 @@ HTTP_estimate(unsigned nhttp)
 {
 
 	/* XXX: We trust the structs to size-aligned as necessary */
-	return (sizeof (struct http) + (sizeof (txt) + 1) * nhttp);
+	return (PRNDUP(sizeof (struct http) + sizeof(txt) * nhttp + nhttp));
 }
 
 struct http *
@@ -531,6 +532,15 @@ http_GetStatus(const struct http *hp)
 	return (hp->status);
 }
 
+int
+http_IsStatus(const struct http *hp, int val)
+{
+
+	CHECK_OBJ_NOTNULL(hp, HTTP_MAGIC);
+	assert(val >= 100 && val <= 999);
+	return (val == (hp->status % 1000));
+}
+
 /*--------------------------------------------------------------------
  * Setting the status will also set the Reason appropriately
  */
@@ -604,12 +614,14 @@ http_EstimateWS(const struct http *fm, unsigned how, uint16_t *nhd)
 {
 	unsigned u, l;
 
-	l = 0;
-	*nhd = HTTP_HDR_FIRST;
+	l = 4;
+	*nhd = 1 + HTTP_HDR_FIRST - 3;
 	CHECK_OBJ_NOTNULL(fm, HTTP_MAGIC);
 	for (u = 0; u < fm->nhd; u++) {
-		if (fm->hd[u].b == NULL)
+		if (u == HTTP_HDR_METHOD || u == HTTP_HDR_URL)
 			continue;
+		AN(fm->hd[u].b);
+		AN(fm->hd[u].e);
 		if (fm->hdf[u] & HDF_FILTER)
 			continue;
 #define HTTPH(a, b, c) \
@@ -617,11 +629,177 @@ http_EstimateWS(const struct http *fm, unsigned how, uint16_t *nhd)
 			continue;
 #include "tbl/http_headers.h"
 #undef HTTPH
-		l += PRNDUP(Tlen(fm->hd[u]) + 1L);
+		l += Tlen(fm->hd[u]) + 1L;
 		(*nhd)++;
-		// fm->hdf[u] |= HDF_COPY;
 	}
-	return (l);
+	return (PRNDUP(l + 1L));
+}
+
+/*--------------------------------------------------------------------
+ * Encode http struct as byte string.
+ */
+
+uint8_t *
+HTTP_Encode(const struct http *fm, struct ws *ws, unsigned how)
+{
+	unsigned u, w;
+	uint16_t n;
+	uint8_t *p, *e;
+
+	u = WS_Reserve(ws, 0);
+	p = (uint8_t*)ws->f;
+	e = (uint8_t*)ws->f + u;
+	if (p + 5 > e) {
+		WS_Release(ws, 0);
+		return (NULL);
+	}
+	assert(fm->nhd < fm->shd);
+	n = HTTP_HDR_FIRST - 3;
+	vbe16enc(p + 2, fm->status);
+	p += 4;
+	CHECK_OBJ_NOTNULL(fm, HTTP_MAGIC);
+	for (u = 0; u < fm->nhd; u++) {
+		if (u == HTTP_HDR_METHOD || u == HTTP_HDR_URL)
+			continue;
+		AN(fm->hd[u].b);
+		AN(fm->hd[u].e);
+		if (fm->hdf[u] & HDF_FILTER)
+			continue;
+#define HTTPH(a, b, c) \
+		if (((c) & how) && http_IsHdr(&fm->hd[u], (b))) \
+			continue;
+#include "tbl/http_headers.h"
+#undef HTTPH
+		w = Tlen(fm->hd[u]) + 1L;
+		if (p + w + 1 > e) {
+			WS_Release(ws, 0);
+			return (NULL);
+		}
+		memcpy(p, fm->hd[u].b, w);
+		p += w;
+		n++;
+	}
+	*p++ = '\0';
+	assert(p <= e);
+	e = (uint8_t*)ws->f;
+	vbe16enc(e, n + 1);
+	WS_ReleaseP(ws, (void*)p);
+	return (e);
+}
+
+/*--------------------------------------------------------------------
+ * Decode byte string into http struct
+ *
+ * XXX: cannot make fm const because to->hd isn't.
+ */
+
+int
+HTTP_Decode(struct http *to, uint8_t *fm)
+{
+
+	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
+	AN(fm);
+	if (vbe16dec(fm) > to->shd)
+		return(-1);
+	to->status = vbe16dec(fm + 2);
+	fm += 4;
+	for (to->nhd = 0; to->nhd < to->shd; to->nhd++) {
+		if (to->nhd == HTTP_HDR_METHOD || to->nhd == HTTP_HDR_URL) {
+			to->hd[to->nhd].b = NULL;
+			to->hd[to->nhd].e = NULL;
+			continue;
+		}
+		if (*fm == '\0')
+			return (0);
+		to->hd[to->nhd].b = (void*)fm;
+		fm = (void*)strchr((void*)fm, '\0');
+		to->hd[to->nhd].e = (void*)fm;
+		fm++;
+		if (to->vsl != NULL)
+			http_VSLH(to, to->nhd);
+	}
+	return (-1);
+}
+
+/*--------------------------------------------------------------------*/
+
+const char *
+HTTP_GetHdrPack(struct objcore *oc, struct dstat *ds, const char *hdr)
+{
+	const char *ptr;
+	unsigned l;
+
+	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+	AN(ds);
+	AN(hdr);
+
+	ptr = ObjGetattr(oc, ds, OA_HEADERS, NULL);
+	AN(ptr);
+
+	/* Skip nhd and status */
+	ptr += 4;
+	VSL(SLT_Debug, 0, "%d %s", __LINE__, ptr);
+
+	/* Skip PROTO, STATUS and REASON */
+	ptr = strchr(ptr, '\0') + 1;
+	if (!strcmp(hdr, ":status"))
+		return (ptr);
+	ptr = strchr(ptr, '\0') + 1;
+	ptr = strchr(ptr, '\0') + 1;
+
+	l = hdr[0];
+	assert(l == strlen(hdr + 1));
+	assert(hdr[l] == ':');
+	hdr++;
+
+	while (*ptr != '\0') {
+		if (!strncasecmp(ptr, hdr, l)) {
+			ptr += l;
+			assert (vct_issp(*ptr));
+			ptr++;
+			assert (!vct_issp(*ptr));
+			return (ptr);
+		}
+		ptr = strchr(ptr, '\0') + 1;
+	}
+	return (NULL);
+}
+
+/*--------------------------------------------------------------------
+ * Merge any headers in the oc->OA_HEADER into the struct http if they
+ * are not there already.
+ */
+
+void
+HTTP_Merge(struct objcore *oc, struct dstat *ds, struct http *to)
+{
+	const char *ptr;
+	unsigned u;
+	const char *p;
+
+	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
+	AN(ds);
+
+	ptr = ObjGetattr(oc, ds, OA_HEADERS, NULL);
+	AN(ptr);
+
+	to->status = vbe16dec(ptr + 2);
+	ptr += 4;
+
+	for (u = 0; u < HTTP_HDR_FIRST; u++) {
+		if (u == HTTP_HDR_METHOD || u == HTTP_HDR_URL)
+			continue;
+		http_SetH(to, u, ptr);
+		ptr = strchr(ptr, '\0') + 1;
+	}
+	while (*ptr != '\0') {
+		p = strchr(ptr, ':');
+		AN(p);
+		if (!http_findhdr(to, p - ptr, ptr))
+			http_SetHeader(to, ptr);
+		ptr = strchr(ptr, '\0') + 1;
+	}
 }
 
 /*--------------------------------------------------------------------*/
@@ -679,58 +857,6 @@ http_FilterReq(struct http *to, const struct http *fm, unsigned how)
 	http_linkh(to, fm, HTTP_HDR_URL);
 	http_linkh(to, fm, HTTP_HDR_PROTO);
 	http_filterfields(to, fm, how);
-}
-
-/*--------------------------------------------------------------------*/
-
-void
-http_FilterResp(const struct http *fm, struct http *to, unsigned how)
-{
-
-	CHECK_OBJ_NOTNULL(fm, HTTP_MAGIC);
-	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
-	to->status = fm->status;
-	http_linkh(to, fm, HTTP_HDR_PROTO);
-	http_linkh(to, fm, HTTP_HDR_STATUS);
-	http_linkh(to, fm, HTTP_HDR_REASON);
-	http_filterfields(to, fm, how);
-}
-
-/*--------------------------------------------------------------------
- * Merge two HTTP headers the "wrong" way. Used by backend IMS to
- * merge in the headers of the validated object with the headers of
- * the 304 response.
- */
-
-void
-http_Merge(const struct http *fm, struct http *to, int not_ce)
-{
-	unsigned u, v;
-	const char *p;
-
-	to->status = fm->status;
-	http_linkh(to, fm, HTTP_HDR_PROTO);
-	http_linkh(to, fm, HTTP_HDR_STATUS);
-	http_linkh(to, fm, HTTP_HDR_REASON);
-
-	for (u = HTTP_HDR_FIRST; u < fm->nhd; u++)
-		fm->hdf[u] |= HDF_MARKER;
-	if (not_ce) {
-		u = http_findhdr(fm,
-		    H_Content_Encoding[0] - 1, H_Content_Encoding + 1);
-		if (u > 0)
-			fm->hdf[u] &= ~HDF_MARKER;
-	}
-	for (v = HTTP_HDR_FIRST; v < to->nhd; v++) {
-		p = strchr(to->hd[v].b, ':');
-		AN(p);
-		u = http_findhdr(fm, p - to->hd[v].b, to->hd[v].b);
-		if (u)
-			fm->hdf[u] &= ~HDF_MARKER;
-	}
-	for (u = HTTP_HDR_FIRST; u < fm->nhd; u++)
-		if (fm->hdf[u] & HDF_MARKER)
-			http_SetHeader(to, fm->hd[u].b);
 }
 
 /*--------------------------------------------------------------------

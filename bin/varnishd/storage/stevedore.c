@@ -48,15 +48,6 @@ static const struct stevedore * volatile stv_next;
  * Default objcore methods
  */
 
-static unsigned __match_proto__(getxid_f)
-default_oc_getxid(struct dstat *ds, struct objcore *oc)
-{
-	struct object *o;
-
-	o = ObjGetObj(oc, ds);
-	return (o->vxid);
-}
-
 static struct object * __match_proto__(getobj_f)
 default_oc_getobj(struct dstat *ds, struct objcore *oc)
 {
@@ -97,7 +88,6 @@ default_oc_getlru(const struct objcore *oc)
 
 const struct objcore_methods default_oc_methods = {
 	.getobj = default_oc_getobj,
-	.getxid = default_oc_getxid,
 	.freeobj = default_oc_freeobj,
 	.getlru = default_oc_getlru,
 };
@@ -197,7 +187,6 @@ stv_alloc_obj(const struct vfp_ctx *vc, size_t size)
 	struct storage *st = NULL;
 	struct stevedore *stv;
 	unsigned fail;
-	struct object *obj;
 
 	/*
 	 * Always use the stevedore which allocated the object in order to
@@ -206,9 +195,7 @@ stv_alloc_obj(const struct vfp_ctx *vc, size_t size)
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(vc->bo, BUSYOBJ_MAGIC);
 	AN(vc->bo->stats);
-	obj = vc->bo->fetch_obj;
-	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
-	stv = obj->body->stevedore;
+	stv = vc->body->stevedore;
 	CHECK_OBJ_NOTNULL(stv, STEVEDORE_MAGIC);
 
 	if (size > cache_param->fetch_maxchunksize)

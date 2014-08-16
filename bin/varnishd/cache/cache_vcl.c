@@ -432,8 +432,9 @@ vcl_call_method(struct worker *wrk, struct req *req, struct busyobj *bo,
 		ctx.http_req = req->http;
 		ctx.http_resp = req->resp;
 		ctx.req = req;
-		if (req->obj)
-			ctx.http_obj = req->obj->http;
+		if (method == VCL_MET_HIT)
+			ctx.http_obj =
+			    ObjGetObj(req->objcore, &wrk->stats)->http;
 	}
 	if (bo != NULL) {
 		CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
@@ -450,11 +451,12 @@ vcl_call_method(struct worker *wrk, struct req *req, struct busyobj *bo,
 	aws = WS_Snapshot(wrk->aws);
 	wrk->handling = 0;
 	wrk->cur_method = method;
+	wrk->seen_methods |= method;
 	AN(vsl);
 	VSLb(vsl, SLT_VCL_call, "%s", VCL_Method_Name(method));
 	(void)func(&ctx);
 	VSLb(vsl, SLT_VCL_return, "%s", VCL_Return_Name(wrk->handling));
-	wrk->cur_method = 0;
+	wrk->cur_method |= 1;		// Magic marker
 
 	/*
 	 * VCL/Vmods are not allowed to make permanent allocations from

@@ -92,14 +92,14 @@ v1d_dorange(struct req *req, struct busyobj *bo, const char *r)
 	ssize_t len, low, high, has_low;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	CHECK_OBJ_NOTNULL(req->obj, OBJECT_MAGIC);
-	assert(http_GetStatus(req->obj->http) == 200);
+	CHECK_OBJ_NOTNULL(req->objcore, OBJCORE_MAGIC);
+	assert(http_IsStatus(req->resp, 200));
 
 	/* We must snapshot the length if we're streaming from the backend */
 	if (bo != NULL)
 		len = VBO_waitlen(bo, -1);
 	else
-		len = req->obj->len;
+		len = ObjGetLen(req->objcore, &req->wrk->stats);
 
 	if (strncmp(r, "bytes=", 6))
 		return;
@@ -235,27 +235,28 @@ V1D_Deliver(struct req *req, struct busyobj *bo)
 	ssize_t l;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	CHECK_OBJ_NOTNULL(req->obj, OBJECT_MAGIC);
-	CHECK_OBJ_NOTNULL(req->obj->objcore, OBJCORE_MAGIC);
+	CHECK_OBJ_NOTNULL(req->objcore, OBJCORE_MAGIC);
 
 	req->res_mode = 0;
 
-	if (!req->disable_esi && req->obj->esidata != NULL) {
+	if (!req->disable_esi && ObjGetattr(req->objcore, &req->wrk->stats,
+	    OA_ESIDATA, NULL) != NULL) {
 		/* In ESI mode, we can't know the aggregate length */
 		req->res_mode &= ~RES_LEN;
 		req->res_mode |= RES_ESI;
-	} else if (req->resp->status == 304) {
+	} else if (http_IsStatus(req->resp, 304)) {
 		req->res_mode &= ~RES_LEN;
 		http_Unset(req->resp, H_Content_Length);
 		req->wantbody = 0;
 	} else if (bo == NULL) {
 		/* XXX: Not happy with this convoluted test */
 		req->res_mode |= RES_LEN;
-		if (!(req->obj->objcore->flags & OC_F_PASS) ||
-		    req->obj->len != 0) {
+		if (!(req->objcore->flags & OC_F_PASS) ||
+		    ObjGetLen(req->objcore, &req->wrk->stats) != 0) {
 			http_Unset(req->resp, H_Content_Length);
 			http_PrintfHeader(req->resp,
-			    "Content-Length: %zd", req->obj->len);
+			    "Content-Length: %ju", (uintmax_t)ObjGetLen(
+			    req->objcore, &req->wrk->stats));
 		}
 	}
 
@@ -265,7 +266,8 @@ V1D_Deliver(struct req *req, struct busyobj *bo)
 		req->res_mode |= RES_ESI_CHILD;
 	}
 
-	if (cache_param->http_gzip_support && req->obj->gziped &&
+	if (cache_param->http_gzip_support &&
+	    ObjCheckFlag(req->objcore, &req->wrk->stats, OF_GZIPED) &&
 	    !RFC2616_Req_Gzip(req->http)) {
 		/*
 		 * We don't know what it uncompresses to
@@ -308,7 +310,7 @@ V1D_Deliver(struct req *req, struct busyobj *bo)
 	    req->wantbody &&
 	    !(req->res_mode & (RES_ESI|RES_ESI_CHILD)) &&
 	    cache_param->http_range_support &&
-	    http_GetStatus(req->resp) == 200) {
+	    http_IsStatus(req->resp, 200)) {
 		http_SetHeader(req->resp, "Accept-Ranges: bytes");
 		if (http_GetHdr(req->http, H_Range, &r))
 			v1d_dorange(req, bo, r);
@@ -336,14 +338,15 @@ V1D_Deliver(struct req *req, struct busyobj *bo)
 		ESI_Deliver(req);
 	} else if (req->res_mode & RES_ESI_CHILD && req->gzip_resp) {
 		l = -1;
-		while (req->obj->objcore->busyobj) {
+		while (req->objcore->busyobj) {
 			assert(bo != NULL);
 			l = VBO_waitlen(bo, l);
 		}
 		ESI_DeliverChild(req);
 	} else if (req->res_mode & RES_GUNZIP ||
 	    (req->res_mode & RES_ESI_CHILD &&
-	    !req->gzip_resp && req->obj->gziped)) {
+	    !req->gzip_resp &&
+	    ObjCheckFlag(req->objcore, &req->wrk->stats, OF_GZIPED))) {
 		VDP_push(req, VDP_gunzip);
 		req->vgz = VGZ_NewUngzip(req->vsl, "U D -");
 		AZ(VGZ_WrwInit(req->vgz));
@@ -373,7 +376,7 @@ V1D_Deliver_Synth(struct req *req)
 	AN(req->synth_body);
 
 	req->res_mode = 0;
-	if (req->resp->status == 304) {
+	if (http_IsStatus(req->resp, 304)) {
 		req->res_mode &= ~RES_LEN;
 		http_Unset(req->resp, H_Content_Length);
 		req->wantbody = 0;
@@ -422,7 +425,7 @@ V1D_Deliver_Synth(struct req *req)
 	    req->wantbody &&
 	    !(req->res_mode & RES_ESI_CHILD) &&
 	    cache_param->http_range_support &&
-	    http_GetStatus(req->resp) == 200) {
+	    http_IsStatus(req->resp, 200)) {
 		http_SetHeader(req->resp, "Accept-Ranges: bytes");
 		if (http_GetHdr(req->http, H_Range, &r))
 			v1d_dorange(req, NULL, r);

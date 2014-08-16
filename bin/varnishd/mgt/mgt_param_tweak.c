@@ -36,6 +36,7 @@
 #include <limits.h>
 #include <math.h>
 #include <pwd.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -330,6 +331,45 @@ tweak_bytes_u(struct vsb *vsb, const struct parspec *par, const char *arg)
 }
 
 /*--------------------------------------------------------------------
+ * vsl_buffer and vsl_reclen have dependencies.
+ */
+
+int
+tweak_vsl_buffer(struct vsb *vsb, const struct parspec *par, const char *arg)
+{
+	volatile unsigned *d1;
+	volatile ssize_t dest;
+	char buf[20];
+
+	d1 = par->priv;
+	dest = *d1;
+	if (tweak_generic_bytes(vsb, &dest, arg, par->min, par->max))
+		return (-1);
+	*d1 = dest;
+	bprintf(buf, "%u", *d1 - 12);
+	MCF_SetMaximum("vsl_reclen", strdup(buf));
+	MCF_SetMaximum("shm_reclen", strdup(buf));
+	return (0);
+}
+
+int
+tweak_vsl_reclen(struct vsb *vsb, const struct parspec *par, const char *arg)
+{
+	volatile unsigned *d1;
+	volatile ssize_t dest;
+	char buf[20];
+
+	d1 = par->priv;
+	dest = *d1;
+	if (tweak_generic_bytes(vsb, &dest, arg, par->min, par->max))
+		return (-1);
+	*d1 = dest;
+	bprintf(buf, "%u", *d1 + 12);
+	MCF_SetMinimum("vsl_buffer", strdup(buf));
+	return (0);
+}
+
+/*--------------------------------------------------------------------
  * XXX: slightly magic.  We want to initialize to "nobody" (XXX: shouldn't
  * XXX: that be something autocrap found for us ?) but we don't want to
  * XXX: fail initialization if that user doesn't exists, even though we
@@ -389,6 +429,38 @@ tweak_group(struct vsb *vsb, const struct parspec *par, const char *arg)
 		VSB_printf(vsb, "%s (%d)", mgt_param.group, (int)mgt_param.gid);
 	} else {
 		VSB_printf(vsb, "GID %d", (int)mgt_param.gid);
+	}
+	return (0);
+}
+
+/*--------------------------------------------------------------------
+ * XXX: see comment for tweak_user, same thing here.
+ */
+
+int
+tweak_group_cc(struct vsb *vsb, const struct parspec *par, const char *arg)
+{
+	struct group *gr;
+
+	(void)par;
+	if (arg != NULL) {
+		if (*arg != '\0') {
+			gr = getgrnam(arg);
+			if (gr == NULL) {
+				VSB_printf(vsb, "Unknown group");
+				return(-1);
+			}
+			REPLACE(mgt_param.group_cc, gr->gr_name);
+			mgt_param.gid_cc = gr->gr_gid;
+		} else {
+			REPLACE(mgt_param.group_cc, "");
+			mgt_param.gid_cc = 0;
+		}
+	} else if (strlen(mgt_param.group_cc) > 0) {
+		VSB_printf(vsb, "%s (%d)",
+		    mgt_param.group_cc, (int)mgt_param.gid_cc);
+	} else {
+		VSB_printf(vsb, "<not set>");
 	}
 	return (0);
 }

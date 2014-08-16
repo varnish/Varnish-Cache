@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2011 Varnish Software AS
+ * Copyright (c) 2014 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -28,54 +27,25 @@
  *
  */
 
-struct parspec;
+/*lint -save -e525 -e539 */
 
-typedef int tweak_t(struct vsb *, const struct parspec *, const char *arg);
+/* upper, lower */
+#ifdef OBJ_ATTR
+OBJ_ATTR(VXID,		vxid)
+OBJ_ATTR(EXP,		exp)
+OBJ_ATTR(VARY,		vary)
+OBJ_ATTR(HEADERS,	headers)
+OBJ_ATTR(FLAGS,		flags)
+OBJ_ATTR(GZIPBITS,	gzipbits)
+OBJ_ATTR(ESIDATA,	esidata)
+OBJ_ATTR(LASTMODIFIED,	lastmodified)
+#endif
 
-struct parspec {
-	const char	*name;
-	tweak_t		*func;
-	volatile void	*priv;
-	const char	*min;
-	const char	*max;
-	const char	*descr;
-	int		 flags;
-#define DELAYED_EFFECT	(1<<0)
-#define EXPERIMENTAL	(1<<1)
-#define MUST_RESTART	(1<<2)
-#define MUST_RELOAD	(1<<3)
-#define WIZARD		(1<<4)
-#define PROTECTED	(1<<5)
-#define OBJ_STICKY	(1<<6)
-#define ONLY_ROOT	(1<<7)
-	const char	*def;
-	const char	*units;
-};
+#ifdef OBJ_FLAG
+/* upper, lower, val */
+OBJ_FLAG(GZIPED,	gziped,		(1<<1))
+OBJ_FLAG(CHGGZIP,	chggzip,	(1<<2))
+OBJ_FLAG(IMSCAND,	imscand,	(1<<3))
+#endif
 
-tweak_t tweak_bool;
-tweak_t tweak_bytes;
-tweak_t tweak_bytes_u;
-tweak_t tweak_double;
-tweak_t tweak_group;
-tweak_t tweak_group_cc;
-tweak_t tweak_listen_address;
-tweak_t tweak_poolparam;
-tweak_t tweak_string;
-tweak_t tweak_timeout;
-tweak_t tweak_uint;
-tweak_t tweak_user;
-tweak_t tweak_waiter;
-tweak_t tweak_vsl_buffer;
-tweak_t tweak_vsl_reclen;
-
-int tweak_generic_uint(struct vsb *vsb, volatile unsigned *dest,
-    const char *arg, const char *min, const char *max);
-
-/* mgt_param_tbl.c */
-extern struct parspec mgt_parspec[];
-
-/* mgt_param_vsl.c */
-extern struct parspec VSL_parspec[];
-
-/* mgt_pool.c */
-extern struct parspec WRK_parspec[];
+/*lint -restore */

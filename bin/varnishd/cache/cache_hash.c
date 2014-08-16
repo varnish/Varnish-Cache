@@ -343,10 +343,10 @@ HSH_Lookup(struct req *req, struct objcore **ocp, struct objcore **bocp,
 	struct objhead *oh;
 	struct objcore *oc;
 	struct objcore *exp_oc;
-	struct object *o, *exp_o;
 	double exp_t_origin;
 	int busy_found;
 	enum lookup_e retval;
+	uint8_t *vary;
 
 	AN(ocp);
 	*ocp = NULL;
@@ -391,10 +391,8 @@ HSH_Lookup(struct req *req, struct objcore **ocp, struct objcore **bocp,
 
 	assert(oh->refcnt > 0);
 	busy_found = 0;
-	exp_o = NULL;
 	exp_oc = NULL;
 	exp_t_origin = 0.0;
-	o = NULL;
 	VTAILQ_FOREACH(oc, &oh->objcs, list) {
 		/* Must be at least our own ref + the objcore we examine */
 		assert(oh->refcnt > 1);
@@ -426,10 +424,9 @@ HSH_Lookup(struct req *req, struct objcore **ocp, struct objcore **bocp,
 		if (BAN_CheckObject(wrk, oc, req))
 			continue;
 
-		o = ObjGetObj(oc, &wrk->stats);
-		CHECK_OBJ_NOTNULL(o, OBJECT_MAGIC);
+		vary = ObjGetattr(oc, &wrk->stats, OA_VARY, NULL);
 
-		if (o->vary != NULL && !VRY_Match(req, o->vary))
+		if (vary != NULL && !VRY_Match(req, vary))
 			continue;
 
 		if (EXP_Ttl(req, &oc->exp) >= req->t_req) {
@@ -448,13 +445,11 @@ HSH_Lookup(struct req *req, struct objcore **ocp, struct objcore **bocp,
 		    !(oc->flags & OC_F_PASS)) {
 			/* record the newest object */
 			exp_oc = oc;
-			exp_o = o;
 			exp_t_origin = oc->exp.t_origin;
 		}
 	}
 
 	if (exp_oc != NULL) {
-		AN(exp_o);
 		assert(oh->refcnt > 1);
 		assert(exp_oc->objhead == oh);
 		exp_oc->refcnt++;
@@ -561,44 +556,55 @@ HSH_Purge(struct worker *wrk, struct objhead *oh, double ttl, double grace,
 double keep)
 {
 	struct objcore *oc, **ocp;
-	unsigned spc, nobj, n;
+	unsigned spc, ospc, nobj, n;
+	int more = 0;
 	double now;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(oh, OBJHEAD_MAGIC);
-	spc = WS_Reserve(wrk->aws, 0);
-	ocp = (void*)wrk->aws->f;
-	Lck_Lock(&oh->mtx);
-	assert(oh->refcnt > 0);
-	nobj = 0;
-	now = VTIM_real();
-	VTAILQ_FOREACH(oc, &oh->objcs, list) {
-		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-		assert(oc->objhead == oh);
-		if (oc->flags & OC_F_BUSY) {
-			/*
-			 * We cannot purge busy objects here, because their
-			 * owners have special rights to them, and may nuke
-			 * them without concern for the refcount, which by
-			 * definition always must be one, so they don't check.
-			 */
-			continue;
+	ospc = WS_Reserve(wrk->aws, 0);
+	assert(ospc >= sizeof *ocp);
+	do {
+		more = 0;
+		spc = ospc;
+		nobj = 0;
+		ocp = (void*)wrk->aws->f;
+		Lck_Lock(&oh->mtx);
+		assert(oh->refcnt > 0);
+		now = VTIM_real();
+		VTAILQ_FOREACH(oc, &oh->objcs, list) {
+			CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+			assert(oc->objhead == oh);
+			if (oc->flags & OC_F_BUSY) {
+				/*
+				 * We cannot purge busy objects here, because
+				 * their owners have special rights to them,
+				 * and may nuke them without concern for the
+				 * refcount, which by definition always must
+				 * be one, so they don't check.
+				 */
+				continue;
+			}
+			if (oc->exp_flags & OC_EF_DYING)
+				continue;
+			if (spc < sizeof *ocp) {
+				/* Iterate if aws is not big enough */
+				more = 1;
+				break;
+			}
+			oc->refcnt++;
+			spc -= sizeof *ocp;
+			ocp[nobj++] = oc;
 		}
-		if (oc->exp_flags & OC_EF_DYING)
-			continue;
-		xxxassert(spc >= sizeof *ocp);
-		oc->refcnt++;
-		spc -= sizeof *ocp;
-		ocp[nobj++] = oc;
-	}
-	Lck_Unlock(&oh->mtx);
+		Lck_Unlock(&oh->mtx);
 
-	for (n = 0; n < nobj; n++) {
-		oc = ocp[n];
-		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-		EXP_Rearm(oc, now, ttl, grace, keep);
-		(void)HSH_DerefObjCore(&wrk->stats, &oc);
-	}
+		for (n = 0; n < nobj; n++) {
+			oc = ocp[n];
+			CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
+			EXP_Rearm(oc, now, ttl, grace, keep);
+			(void)HSH_DerefObjCore(&wrk->stats, &oc);
+		}
+	} while (more);
 	WS_Release(wrk->aws, 0);
 	Pool_PurgeStat(nobj);
 }
