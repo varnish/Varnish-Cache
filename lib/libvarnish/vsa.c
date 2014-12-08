@@ -337,3 +337,46 @@ VSA_Port(const struct suckaddr *sua)
 			return (0);
 	}
 }
+
+struct suckaddr *
+VSA_Copy(const struct suckaddr *sua)
+{
+	socklen_t len;
+	const void *sa;
+        
+	CHECK_OBJ_NOTNULL(sua, SUCKADDR_MAGIC);
+	switch(sua->sa.sa_family) {
+		case PF_INET:
+                        sa = (const void *) &sua->sa4;
+                        len = sizeof(sua->sa4);
+                        break;
+		case PF_INET6:
+                        sa = (const void *) &sua->sa6;
+                        len = sizeof(sua->sa6);
+                        break;
+		default:
+			return (NULL);
+	}
+	return VSA_Malloc(sa, len);
+}
+
+void
+VSA_SetPort(struct suckaddr *sua, unsigned short port)
+{
+	CHECK_OBJ_NOTNULL(sua, SUCKADDR_MAGIC);
+	switch(sua->sa.sa_family) {
+		case PF_INET:
+			sua->sa4.sin_port = htons(port);
+		case PF_INET6:
+			sua->sa6.sin6_port = htons(port);
+		default:
+			break;
+	}
+}
+
+void
+VSA_Fini(struct suckaddr *sua)
+{
+	CHECK_OBJ_NOTNULL(sua, SUCKADDR_MAGIC);
+	FREE_OBJ(sua);
+}

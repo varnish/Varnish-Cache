@@ -1,0 +1,47 @@
+varnishtest "Test Backend Polling with a separate port (cf. c00017.vtc)"
+
+server s1 {
+} -start
+
+server s2 {
+	# Probes 
+	loop 8 {
+		rxreq
+		expect req.url == "/"
+		txresp -hdr "Bar: foo" -body "foobar" 
+		accept
+	}
+
+	loop 3 {
+		rxreq
+		expect req.url == "/"
+		txresp -status 404 -hdr "Bar: foo" -body "foobar" 
+		accept
+	}
+	loop 2 {
+		rxreq
+		expect req.url == "/"
+		txresp -proto "FROBOZ" -status 200 -hdr "Bar: foo" -body "foobar" 
+		accept
+	}
+
+	sema r1 sync 2
+} -start
+
+varnish v1 -vcl { 
+
+	backend foo {
+		.host = "${s1_addr}";
+		.port = "${s1_port}";
+		.probe = {
+			.timeout = 1 s;
+			.interval = 0.1 s;
+			.port = ${s2_port};
+		}
+	}
+	
+} -start
+
+sema r1 sync 2
+
+varnish v1 -cli "debug.health"
