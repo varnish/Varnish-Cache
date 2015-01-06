@@ -49,6 +49,7 @@
 #include "vrt.h"
 #include "vtcp.h"
 #include "vtim.h"
+#include "vsa.h"
 
 /* Default averaging rate, we want something pretty responsive */
 #define AVG_RATE			4
@@ -76,6 +77,9 @@ struct vbp_target {
 	char				*req;
 	int				req_len;
 
+	struct suckaddr			*ipv4;
+	struct suckaddr			*ipv6;
+
 	char				resp_buf[128];
 	unsigned			good;
 
@@ -96,6 +100,34 @@ static VTAILQ_HEAD(, vbp_target)	vbp_list =
     VTAILQ_HEAD_INITIALIZER(vbp_list);
 
 static struct lock			vbp_mtx;
+
+static void
+copy_suckaddrs(struct vbp_target *vt, const struct backend *b)
+{
+        CHECK_OBJ_NOTNULL(vt, VBP_TARGET_MAGIC);
+        CHECK_OBJ_NOTNULL(b, BACKEND_MAGIC);
+
+        if (b->ipv4 != NULL) {
+                vt->ipv4 = VSA_Copy(b->ipv4);
+                AN(VSA_Sane(vt->ipv4));
+        }
+
+        if (b->ipv6 != NULL) {
+                vt->ipv6 = VSA_Copy(b->ipv6);
+                AN(VSA_Sane(vt->ipv6));
+        }
+}
+
+static void
+reset_port(struct vbp_target *vt, const struct vrt_backend_probe *p)
+{
+        if (p->port != 0) {
+                if (vt->ipv4 != NULL)
+                        VSA_SetPort(vt->ipv4, p->port);
+                if (vt->ipv6 != NULL)
+                        VSA_SetPort(vt->ipv6, p->port);
+        }
+}
 
 /*--------------------------------------------------------------------
  * Poke one backend, once, but possibly at both IPv4 and IPv6 addresses.
@@ -126,34 +158,30 @@ vbp_poke(struct vbp_target *vt)
 	int s, tmo, i;
 	double t_start, t_now, t_end;
 	unsigned rlen, resp;
-	struct backend *bp;
 	char buf[8192], *p;
 	struct pollfd pfda[1], *pfd = pfda;
-
-	bp = vt->backend;
-	CHECK_OBJ_NOTNULL(bp, BACKEND_MAGIC);
 
 	t_start = t_now = VTIM_real();
 	t_end = t_start + vt->probe.timeout;
 	tmo = (int)round((t_end - t_now) * 1e3);
 
 	s = -1;
-	if (cache_param->prefer_ipv6 && bp->ipv6 != NULL) {
-		s = vbp_connect(PF_INET6, bp->ipv6, tmo);
+	if (cache_param->prefer_ipv6 && vt->ipv6 != NULL) {
+		s = vbp_connect(PF_INET6, vt->ipv6, tmo);
 		t_now = VTIM_real();
 		tmo = (int)round((t_end - t_now) * 1e3);
 		if (s >= 0)
 			vt->good_ipv6 |= 1;
 	}
-	if (tmo > 0 && s < 0 && bp->ipv4 != NULL) {
-		s = vbp_connect(PF_INET, bp->ipv4, tmo);
+	if (tmo > 0 && s < 0 && vt->ipv4 != NULL) {
+		s = vbp_connect(PF_INET, vt->ipv4, tmo);
 		t_now = VTIM_real();
 		tmo = (int)round((t_end - t_now) * 1e3);
 		if (s >= 0)
 			vt->good_ipv4 |= 1;
 	}
-	if (tmo > 0 && s < 0 && bp->ipv6 != NULL) {
-		s = vbp_connect(PF_INET6, bp->ipv6, tmo);
+	if (tmo > 0 && s < 0 && vt->ipv6 != NULL) {
+		s = vbp_connect(PF_INET6, vt->ipv6, tmo);
 		t_now = VTIM_real();
 		tmo = (int)round((t_end - t_now) * 1e3);
 		if (s >= 0)
@@ -499,6 +527,7 @@ VBP_Insert(struct backend *b, const struct vrt_backend_probe *p,
 		b->probe = vt;
 		startthread = 1;
 		VTAILQ_INSERT_TAIL(&vbp_list, vt, list);
+		copy_suckaddrs(vt, b);
 	} else {
 		vt = b->probe;
 	}
@@ -510,6 +539,8 @@ VBP_Insert(struct backend *b, const struct vrt_backend_probe *p,
 	Lck_Lock(&vbp_mtx);
 	VTAILQ_INSERT_TAIL(&vt->vcls, vcl, list);
 	Lck_Unlock(&vbp_mtx);
+
+	reset_port(vt, p);
 
 	if (startthread) {
 		for (u = 0; u < vcl->probe.initial; u++) {
@@ -586,6 +617,10 @@ VBP_Remove(struct backend *b, struct vrt_backend_probe const *p)
 	VTAILQ_REMOVE(&vbp_list, vt, list);
 	b->probe = NULL;
 	VSB_delete(vt->vsb);
+	if (vt->ipv4 != NULL)
+		VSA_Fini(vt->ipv4);
+	if (vt->ipv6 != NULL)
+		VSA_Fini(vt->ipv6);
 	FREE_OBJ(vt);
 }
 

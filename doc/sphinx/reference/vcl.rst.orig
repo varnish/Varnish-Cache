@@ -273,9 +273,6 @@ There are no mandatory options. These are the options you can set:
     How many of the polls in .window must have succeeded for us to
     consider the backend healthy. Defaults to 3.
 
-  port
-    The port to which Varnish should connect for health probes. Default
-    is the same port used for the backend.
 
 Access Control List (ACL)
 -------------------------

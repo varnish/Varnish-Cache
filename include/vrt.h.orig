@@ -148,7 +148,6 @@ struct vrt_backend_probe {
 	unsigned	window;
 	unsigned	threshold;
 	unsigned	initial;
-	unsigned short	port;
 };
 
 /*

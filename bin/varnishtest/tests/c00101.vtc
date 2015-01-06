@@ -1,0 +1,47 @@
+varnishtest "Dropping polling of a backend with a separate port (cf. c00035.vtc)"
+
+server s1 {
+	rxreq
+	expect req.url == /foo
+	txresp -bodylen 4
+} -start
+
+server s2 -repeat 1 {
+	rxreq
+	txresp
+} -start
+
+varnish v1 -vcl {
+	backend s1 {
+		.host = "${s1_addr}";
+		.port = "${s1_port}";
+		.probe = {
+			.window = 8;
+			.initial = 7;
+			.threshold = 8;
+			.interval = 0.1s;
+			.port = ${s2_port};
+		}
+	}
+} -start
+
+delay 1
+
+varnish v1 -vcl {
+	backend s1 {
+		.host = "${s1_addr}";
+		.port = "${s1_port}";
+	}
+} -cliok "vcl.use vcl2" -cliok "vcl.discard vcl1"
+
+delay 1
+
+varnish v1 -cliok "vcl.list"
+varnish v1 -cliok "debug.health"
+
+client c1 {
+	txreq -url /foo
+	rxresp
+	expect resp.status == 200
+	expect resp.bodylen == 4
+} -run

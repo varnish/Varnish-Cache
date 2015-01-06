@@ -65,3 +65,21 @@ varnish v1 -errvcl "Expected '{' or name of probe, got" {
 		.probe = "NONE";
 	}
 }
+
+varnish v1 -errvcl ".port specification out of range" {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = {
+			.port = 65536;
+		}
+	}
+}
+
+varnish v1 -errvcl ".port specification out of range" {
+	backend b1 {
+		.host = "127.0.0.1";
+		.probe = {
+			.port = 0;
+		}
+	}
+}

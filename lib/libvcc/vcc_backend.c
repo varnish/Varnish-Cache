@@ -104,7 +104,7 @@ vcc_ParseProbeSpec(struct vcc *tl)
 	struct token *t_field;
 	struct token *t_did = NULL, *t_window = NULL, *t_threshold = NULL;
 	struct token *t_initial = NULL;
-	unsigned window, threshold, initial, status;
+	unsigned window, threshold, initial, status, port;
 	double t;
 
 	fs = vcc_FldSpec(tl,
@@ -116,6 +116,7 @@ vcc_ParseProbeSpec(struct vcc *tl)
 	    "?window",
 	    "?threshold",
 	    "?initial",
+	    "?port",
 	    NULL);
 
 	SkipToken(tl, '{');
@@ -124,6 +125,7 @@ vcc_ParseProbeSpec(struct vcc *tl)
 	threshold = 0;
 	initial = 0;
 	status = 0;
+	port = 0;
 	Fh(tl, 0, "static const struct vrt_backend_probe vgc_probe__%d = {\n",
 	    tl->nprobe++);
 	while (tl->t->tok != '}') {
@@ -183,6 +185,16 @@ vcc_ParseProbeSpec(struct vcc *tl)
 			t_threshold = tl->t;
 			threshold = vcc_UintVal(tl);
 			ERRCHK(tl);
+		} else if (vcc_IdIs(t_field, "port")) {
+			port = vcc_UintVal(tl);
+			/* Assuming in_port_t == uint16_t */
+			if (port == 0 || port > UINT16_MAX) {
+				VSB_printf(tl->sb,
+					   ".port specification out of range");
+				vcc_ErrWhere(tl, tl->t);
+				return;
+			}
+			ERRCHK(tl);
 		} else {
 			vcc_ErrToken(tl, t_field);
 			vcc_ErrWhere(tl, t_field);
@@ -230,6 +242,7 @@ vcc_ParseProbeSpec(struct vcc *tl)
 		Fh(tl, 0, "\t.initial = ~0U,\n");
 	if (status > 0)
 		Fh(tl, 0, "\t.exp_status = %u,\n", status);
+	Fh(tl, 0, "\t.port = %u,\n", port);
 	Fh(tl, 0, "};\n");
 	SkipToken(tl, '}');
 }

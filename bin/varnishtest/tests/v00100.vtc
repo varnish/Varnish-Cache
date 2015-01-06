@@ -1,0 +1,60 @@
+varnishtest "Check std.healthy() with separate probe port (cf. v00014.vtc)"
+
+server s1 {
+	rxreq
+	expect req.url == "/"
+	txresp -body "slash"
+	rxreq
+	expect req.url == "/foo"
+	txresp -body "foobar"
+} -start
+
+server s2 -repeat 3 {
+	rxreq
+	expect req.url == "/"
+	txresp -body "slash"
+} -start
+
+varnish v1 -vcl {
+
+	import ${vmod_std};
+
+	probe foo {
+		.url = "/";
+		.timeout = 1s;
+		.interval = 1s;
+		.window = 3;
+		.threshold = 2;
+		.initial = 0;
+		.port = ${s2_port};
+	}
+
+	backend default {
+		.host = "${s1_addr}";
+		.port = "${s1_port}";
+		.max_connections = 1;
+		.probe = foo;
+	}
+
+	sub vcl_recv {
+		if (std.healthy(default)) {
+			return(synth(200,"Backend healthy"));
+		} else {
+			return(synth(500,"Backend sick"));
+		}
+	}
+} -start
+
+client c1 {
+	txreq
+	rxresp
+	expect resp.status == 500
+} -run
+
+delay 2
+
+client c1 {
+	txreq -url "/foo"
+	rxresp
+	expect resp.status == 200
+} -run
