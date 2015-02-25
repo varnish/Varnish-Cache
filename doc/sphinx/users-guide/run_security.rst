@@ -57,10 +57,8 @@ much anything the kernel will accept::
 	-T '[fe80::1]:8082'
 
 The default is ``-T localhost:0`` which will pick a random
-port number, which `varnishadm(8)` can learn in the shared
+port number, which `varnishadm(8)` can learn from the shared
 memory.
-
-.. XXX:Me no understand sentence above, (8)? and learn in the shared memory? Stored and retrieved by varnishadm from th e shared memory? benc 
 
 By using a "localhost" address, you restrict CLI access
 to the local machine.
