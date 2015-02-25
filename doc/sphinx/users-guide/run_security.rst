@@ -85,10 +85,8 @@ to your central Varnish management facility.
 
 .. XXX:Maybe a sample command here with a brief explanation? benc
 
-The connection is also in this case without secrecy, but
-the remote end must still satisfy -S/PSK authentication.
-
-.. XXX:Without encryption instead of secrecy? benc
+The connection in this case is also without encryption, but
+the remote end must still authenticate using -S/PSK.
 
 Finally, if you run varnishd with the '-d' option, you get a CLI
 command on stdin/stdout, but since you started the process, it
