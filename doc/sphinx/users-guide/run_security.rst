@@ -102,10 +102,9 @@ CLI interface authentication
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 By default the CLI interface is protected with a simple, yet
-strong "Pre Shared Key" authentication method, which do not provide
-secrecy (ie: The CLI commands and responses are not encrypted).
-
-.. XXX:Encryption instead of secrecy? benc
+powerful "Pre Shared Key" authentication method, but it does not
+provide secrecy (ie: The CLI commands and responses are not
+encrypted).
 
 The way -S/PSK works is really simple:  During startup a file is
 created with a random content and the file is only accessible to
@@ -113,7 +112,7 @@ the user who started `varnishd` (or the superuser).
 
 To authenticate and use a CLI connection, you need to know the
 contents of that file, in order to answer the cryptographic
-challenge `varnishd` issues. 
+challenge `varnishd` issues.
 
 
 (XXX: xref to algo in refman)
