@@ -107,11 +107,7 @@ the user who started `varnishd` (or the superuser).
 
 To authenticate and use a CLI connection, you need to know the
 contents of that file, in order to answer the cryptographic
-challenge `varnishd` issues.
-
-
-(XXX: xref to algo in refman)
-.. XXX:Dunno what this is? benc
+challenge `varnishd` issues, see :ref:`ref_psk_auth`.
 
 `varnishadm` uses all of this to restrict access, it will only
 function, provided it can read the secret file.
