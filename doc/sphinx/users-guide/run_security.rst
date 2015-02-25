@@ -118,12 +118,12 @@ challenge `varnishd` issues.
 (XXX: xref to algo in refman)
 .. XXX:Dunno what this is? benc
 
-`varnishadm` uses all of this to restrict access, it will only function,
-provided it can read the secret file.
+`varnishadm` uses all of this to restrict access, it will only
+function, provided it can read the secret file.
 
-If you want to allow other users, local or remote, to be able to access CLI connections, you must create your
-own secret file and make it possible for (only!) these users to
-read it.
+If you want to allow other users, local or remote, to be able to
+access CLI connections, you must create your own secret file and
+make it possible for (only!) these users to read it.
 
 A good way to create the secret file is::
 
