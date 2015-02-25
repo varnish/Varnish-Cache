@@ -75,9 +75,8 @@ Alternatively you can bind the CLI port to a 'localhost' address,
 and give remote users access via a secure connection to the local
 machine, using ssh/VPN or similar.
 
-If you use `ssh` you can restrict which commands each user can execute to
-just `varnishadm`, or even to wrapper scripts around `varnishadm`, which
-only allow specific CLI commands.
+Using `sudo` and wrapper scripts it is possible to control which
+users can run which `varnishadm` CLI commands.
 
 It is also possible to configure `varnishd` for "reverse mode", using
 the '-M' argument.  In that case `varnishd` will attempt to open a
