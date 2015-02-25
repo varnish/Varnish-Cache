@@ -194,13 +194,8 @@ and operating system, it will not protect your HTTP service.
 We do not currently have a way to restrict specific CLI commands
 to specific CLI connections. One way to get such an effect is to
 "wrap" all CLI access in pre-approved scripts which use `varnishadm(1)`
-
-.. XXX:what does the 1 stand for? benc
-
 to submit the sanitized CLI commands, and restrict a remote user
 to only those scripts, for instance using sshd(8)'s configuration.
-
-.. XXX:what does the 8 stand for? benc
 
 VCL programs
 ------------
