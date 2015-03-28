@@ -8,14 +8,13 @@ The Varnish Reference Manual
 	:maxdepth: 2
 
 	vcl.rst
+	states.rst
 	varnish-cli.rst
 	varnishadm.rst
 	varnishd.rst
 	varnishhist.rst
 	varnishlog.rst
 	varnishncsa.rst
-	varnishreplay.rst
-	varnishsizes.rst
 	varnishstat.rst
 	varnishtest.rst
 	varnishtop.rst

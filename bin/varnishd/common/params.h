@@ -111,7 +111,6 @@ struct params {
 
 	double			timeout_linger;
 	double			timeout_idle;
-	double			timeout_req;
 	double			pipe_timeout;
 	double			send_timeout;
 	double			idle_send_timeout;
@@ -130,9 +129,6 @@ struct params {
 	unsigned		nuke_limit;
 
 	unsigned		accept_filter;
-
-	/* Listen address */
-	char			*listen_address;
 
 	/* Listen depth */
 	unsigned		listen_depth;
@@ -198,6 +194,8 @@ struct params {
 
 	double			critbit_cooloff;
 
+	double			vcl_cooldown;
+
 	double			shortlived;
 
 	struct vre_limits	vre_limits;
@@ -211,7 +209,6 @@ struct params {
 	ssize_t			vsm_space;
 	ssize_t			vsl_space;
 
-	struct poolparam	vbc_pool;
 	struct poolparam	req_pool;
 	struct poolparam	sess_pool;
 	struct poolparam	vbo_pool;

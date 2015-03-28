@@ -34,22 +34,27 @@
 #include <sys/stat.h>
 
 #include <ctype.h>
-#include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <limits.h>
 
-#include "miniobj.h"
+#include "vdef.h"
 #include "vas.h"
+#include "miniobj.h"
+
+#include "vbm.h"
+#include "vnum.h"
+#include "vqueue.h"
+#include "vre.h"
 
 #include "vapi/vsl.h"
 #include "vapi/vsm.h"
-#include "vbm.h"
-#include "vre.h"
+
 #include "vsl_api.h"
 #include "vsm_api.h"
 
@@ -343,13 +348,11 @@ VSL_Arg(struct VSL_data *vsl, int opt, const char *arg)
 		vsl->L_opt = (int)l;
 		return (1);
 	case 'T':
-		d = strtod(arg, &p);
-		while (isspace(*p))
-			p++;
-		if (*p != '\0')
-			return (vsl_diag(vsl, "-P: Syntax error"));
+		d = VNUM(arg);
+		if (!isnan(d))
+			return (vsl_diag(vsl, "-T: Syntax error"));
 		if (d < 0.)
-			return (vsl_diag(vsl, "-L: Range error"));
+			return (vsl_diag(vsl, "-T: Range error"));
 		vsl->T_opt = d;
 		return (1);
 	case 'v': vsl->v_opt = 1; return (1);

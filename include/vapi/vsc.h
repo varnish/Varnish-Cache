@@ -126,13 +126,15 @@ struct VSC_section {
 	struct VSM_fantom *fantom;
 };
 
+/* See include/tbl/vsc_fields.h for descriptions */
 struct VSC_desc {
 	const char *name;		/* field name			*/
-	const char *fmt;		/* field format ("uint64_t")	*/
-	int flag;			/* 'c' = counter, 'g' = gauge	*/
+	const char *ctype;		/* C-type			*/
+	int semantics;			/* semantics			*/
+	int format;			/* display format		*/
+	const struct VSC_level_desc *level; /* verbosity level		*/
 	const char *sdesc;		/* short description		*/
 	const char *ldesc;		/* long description		*/
-	const struct VSC_level_desc *level;
 };
 
 struct VSC_point {
@@ -190,7 +192,7 @@ const struct VSC_level_desc *VSC_LevelDesc(unsigned level);
 #undef VSC_TYPE_F
 
 #define VSC_DO(U,l,t) extern const struct VSC_desc VSC_desc_##l[];
-#define VSC_F(n,t,l,f,v,d,e)
+#define VSC_F(n,t,l,s,f,v,d,e)
 #define VSC_DONE(U,l,t)
 #include "tbl/vsc_all.h"
 #undef VSC_DO

@@ -1,0 +1,61 @@
+varnishtest "Test fallback director"
+
+server s1 {
+	rxreq
+	txresp -hdr "Foo: 1"
+} -start
+
+server s2 {
+	rxreq
+	txresp -hdr "Foo: 2"
+} -start
+
+server s3 {
+	rxreq
+	txresp -hdr "Foo: 3"
+} -start
+
+varnish v1 -vcl+backend {
+	import ${vmod_directors};
+
+	sub vcl_init {
+		new fb1 = directors.fallback();
+		fb1.add_backend(s1);
+		fb1.add_backend(s2);
+		fb1.add_backend(s3);
+	}
+
+	sub vcl_recv {
+		return (pass);
+	}
+
+	sub vcl_backend_fetch {
+		set bereq.backend = fb1.backend();
+	}
+} -start
+
+varnish v1 -cliok "backend.set_health s1 sick"
+varnish v1 -cliok "backend.set_health s2 sick"
+
+client c1 {
+	# s1 & s2 are both sick, expect response from s3
+	txreq
+	rxresp
+	expect resp.http.foo == "3"
+} -run
+
+varnish v1 -cliok "backend.set_health s2 healthy"
+
+client c1 {
+	txreq
+	rxresp
+	expect resp.http.foo == "2"
+} -run
+
+varnish v1 -cliok "backend.set_health s1 healthy"
+
+client c1 {
+	txreq
+	rxresp
+	expect resp.http.foo == "1"
+} -run

@@ -15,10 +15,16 @@ varnish v1 -arg "-i J.F.Nobody" -vcl+backend {
 
 	sub vcl_deliver {
 		set resp.http.server_port = std.port(server.ip);
+		set resp.http.server_port_foo = std.port(server.ip) + "_foo";
+		set resp.http.ttl1 = (req.ttl + 10s);
+		set resp.http.ttl2 = req.ttl + 10s;
 		set resp.http.id = server.identity;
 		set resp.http.esi = req.esi;
 		set resp.http.be = req.backend_hint;
 		set resp.http.c_id = client.identity;
+		set resp.http.l_ip = local.ip;
+		set resp.http.r_ip = remote.ip;
+		if (obj.uncacheable) { }
 	}
 
 	sub vcl_backend_response {
@@ -38,7 +44,6 @@ varnish v1 -arg "-i J.F.Nobody" -vcl+backend {
 	sub vcl_hit {
 		if (obj.proto) { }
 		if (obj.reason) { }
-		if (obj.uncacheable) { }
 		if (obj.keep > 1m) { }
 		if (obj.grace < 3m) {
 			return (deliver);
@@ -49,7 +54,6 @@ varnish v1 -arg "-i J.F.Nobody" -vcl+backend {
 	}
 
 	sub vcl_backend_fetch {
-		set bereq.uncacheable = false;
 		if (bereq.between_bytes_timeout < 10s) {
 			set bereq.http.quick = "please";
 		}

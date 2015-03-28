@@ -1,4 +1,6 @@
-.. _reference-vsl:
+.. role:: ref(emphasis)
+
+.. _vsl(7):
 
 ===
 VSL
@@ -7,6 +9,8 @@ VSL
 ---------------------
 Shared Memory Logging
 ---------------------
+
+:Manual section: 7
 
 OVERVIEW
 ========
@@ -95,7 +99,7 @@ Retry
 	Backend request is being retried.
 
 Error
-	Backend request failed to vcl_error.
+	Backend request failed to vcl_backend_error.
 
 
 HISTORY
@@ -107,7 +111,8 @@ Martin Blix Grydeland.
 
 SEE ALSO
 ========
-* varnishlog(1)
-* varnishhist(1)
-* varnishncsa(1)
-* varnishtop(1)
+
+* :ref:`varnishlog(1)`
+* :ref:`varnishhist(1)`
+* :ref:`varnishncsa(1)`
+* :ref:`varnishtop(1)`

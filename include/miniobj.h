@@ -5,6 +5,12 @@
  *
  */
 
+#define INIT_OBJ(to, type_magic)					\
+	do {								\
+		(void)memset(to, 0, sizeof *to);			\
+		(to)->magic = (type_magic);				\
+	} while (0)
+
 #define ALLOC_OBJ(to, type_magic)					\
 	do {								\
 		(to) = calloc(sizeof *(to), 1);				\
@@ -16,6 +22,7 @@
 	do {								\
 		(to)->magic = (0);					\
 		free(to);						\
+		to = NULL;						\
 	} while (0)
 
 #define VALID_OBJ(ptr, type_magic)					\

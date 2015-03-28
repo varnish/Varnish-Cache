@@ -1,4 +1,6 @@
-.. _reference-vcl:
+.. role:: ref(emphasis)
+
+.. _vcl(7):
 
 ===
 VCL
@@ -7,6 +9,8 @@ VCL
 ------------------------------
 Varnish Configuration Language
 ------------------------------
+
+:Manual section: 7
 
 DESCRIPTION
 ===========
@@ -166,6 +170,21 @@ Example::
         std.log("foo");
     }
 
+Comments
+--------
+
+Single lines of VCL can be commented out using // or #. Multi-line blocks can
+be commented out with \/\* block \/\*.
+
+Example::
+
+    sub vcl_recv {
+        // Single line of out-commented VCL.
+        # Another way of commenting out a single line.
+        /*
+            Multi-line block of commented-out VCL.
+        */
+    }
 
 
 Backend definition
@@ -203,7 +222,7 @@ are available:
     Timeout between bytes.
 
   probe
-    Attach a probe to the backend. See Probes.
+    Attach a probe to the backend. See `Probes`_
 
   max_connections
     Maximum number of open connections towards this backend. If
@@ -211,13 +230,15 @@ are available:
     connections.
 
 Backends can be used with *directors*. Please see the
-vmod_directors(3) man page for more information.
+:ref:`vmod_directors(3)` man page for more information.
+
+.. _reference-vcl_probes:
 
 Probes
 ------
 
 Probes will query the backend for status on a regular basis and mark
-the backend as down it they fail. A probe is defined as this:::
+the backend as down it they fail. A probe is defined as this::
 
     probe name {
          .attribute = "value";
@@ -230,8 +251,8 @@ There are no mandatory options. These are the options you can set:
 
   request
     Specify a full HTTP request using multiple strings. .request will
-    have \r\n automatically inserted after every string. If specified,
-    .request will take precedence over .url.
+    have \\r\\n automatically inserted after every string. If
+    specified, .request will take precedence over .url.
 
   expected_response
     The expected HTTP response code. Defaults to 200.
@@ -399,9 +420,9 @@ For examples, please see the online documentation.
 SEE ALSO
 ========
 
-* varnishd(1)
-* vmod_directors(3)
-* vmod_std(3)
+* :ref:`varnishd(1)`
+* :ref:`vmod_directors(3)`
+* :ref:`vmod_std(3)`
 
 HISTORY
 =======

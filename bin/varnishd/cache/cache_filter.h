@@ -55,6 +55,19 @@ struct vfp {
 	intptr_t	priv2;
 };
 
+struct vfp_entry {
+	unsigned		magic;
+#define VFP_ENTRY_MAGIC		0xbe32a027
+	const struct vfp	*vfp;
+	void			*priv1;
+	intptr_t		priv2;
+	enum vfp_status		closed;
+	VTAILQ_ENTRY(vfp_entry)	list;
+	uint64_t		calls;
+	uint64_t		bytes_out;
+};
+
+
 extern const struct vfp vfp_gunzip;
 extern const struct vfp vfp_gzip;
 extern const struct vfp vfp_testgunzip;
@@ -64,16 +77,37 @@ extern const struct vfp vfp_esi_gzip;
 struct vfp_entry *VFP_Push(struct vfp_ctx *, const struct vfp *, int top);
 void VFP_Setup(struct vfp_ctx *vc);
 int VFP_Open(struct vfp_ctx *bo);
+void VFP_Close(struct vfp_ctx *bo);
 enum vfp_status VFP_Suck(struct vfp_ctx *, void *p, ssize_t *lp);
 enum vfp_status VFP_Error(struct vfp_ctx *, const char *fmt, ...)
-    __printflike(2, 3);
+    __v_printflike(2, 3);
+
+/* cache_fetch_proc.c */
+enum vfp_status VFP_GetStorage(struct vfp_ctx *, ssize_t *sz, uint8_t **ptr);
 
 /* Deliver processors ------------------------------------------------*/
 
 enum vdp_action {
-	VDP_NULL,
-	VDP_FLUSH,
-	VDP_FINISH,
+	VDP_INIT,		/* Happens on VDP_push() */
+	VDP_FINI,		/* Happens on VDP_pop() */
+	VDP_NULL,		/* Input buffer valid after call */
+	VDP_FLUSH,		/* Input buffer will be invalidated */
 };
-typedef int vdp_bytes(struct req *, enum vdp_action, const void *ptr,
-    ssize_t len);
+
+typedef int vdp_bytes(struct req *, enum vdp_action, void **priv,
+    const void *ptr, ssize_t len);
+
+struct vdp_entry {
+	unsigned		magic;
+#define VDP_ENTRY_MAGIC		0x353eb781
+	vdp_bytes		*func;
+	void			*priv;
+	VTAILQ_ENTRY(vdp_entry)	list;
+};
+
+int VDP_bytes(struct req *, enum vdp_action act, const void *ptr, ssize_t len);
+void VDP_push(struct req *, vdp_bytes *func, void *priv, int bottom);
+void VDP_close(struct req *req);
+enum objiter_status VDP_DeliverObj(struct req *req);
+
+vdp_bytes VDP_gunzip;

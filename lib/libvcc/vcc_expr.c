@@ -247,7 +247,7 @@ vcc_new_expr(void)
 
 static struct expr *
 vcc_mk_expr(enum var_type fmt, const char *str, ...)
-    __printflike(2, 3);
+    __v_printflike(2, 3);
 
 static struct expr *
 vcc_mk_expr(enum var_type fmt, const char *str, ...)
@@ -532,15 +532,111 @@ vcc_Eval_Var(struct vcc *tl, struct expr **e, const struct symbol *sym)
 /*--------------------------------------------------------------------
  */
 
+static struct expr *
+vcc_priv_arg(struct vcc *tl, const char *p, const char *name)
+{
+	const char *r;
+	struct expr *e2;
+	char buf[32];
+	struct inifin *ifp;
+
+	if (!strcmp(p, "PRIV_VCL")) {
+		r = strchr(name, '.');
+		AN(r);
+		e2 = vcc_mk_expr(VOID, "&vmod_priv_%.*s",
+		    (int) (r - name), name);
+	} else if (!strcmp(p, "PRIV_CALL")) {
+		bprintf(buf, "vmod_priv_%u", tl->unique++);
+		ifp = New_IniFin(tl);
+		Fh(tl, 0, "static struct vmod_priv %s;\n", buf);
+		VSB_printf(ifp->fin, "\tVRT_priv_fini(&%s);", buf);
+		e2 = vcc_mk_expr(VOID, "&%s", buf);
+	} else if (!strcmp(p, "PRIV_TASK")) {
+		r = strchr(name, '.');
+		AN(r);
+		e2 = vcc_mk_expr(VOID,
+		    "VRT_priv_task(ctx, &VGC_vmod_%.*s)",
+		    (int) (r - name), name);
+	} else if (!strcmp(p, "PRIV_TOP")) {
+		r = strchr(name, '.');
+		AN(r);
+		e2 = vcc_mk_expr(VOID,
+		    "VRT_priv_top(ctx, &VGC_vmod_%.*s)",
+		    (int) (r - name), name);
+	} else {
+		WRONG("Wrong PRIV_ type");
+	}
+	return (e2);
+}
+
+struct func_arg {
+	enum var_type		type;
+	const char		*enum_bits;
+	const char		*name;
+	const char		*val;
+	struct expr		*result;
+	VTAILQ_ENTRY(func_arg)	list;
+};
+
+static void
+vcc_do_arg(struct vcc *tl, struct func_arg *fa)
+{
+	const char *p, *r;
+	struct expr *e2;
+
+	if (fa->type == ENUM) {
+		ExpectErr(tl, ID);
+		ERRCHK(tl);
+		r = p = fa->enum_bits;
+		do {
+			if (vcc_IdIs(tl->t, p))
+				break;
+			p += strlen(p) + 1;
+		} while (*p != '\0');
+		if (*p == '\0') {
+			VSB_printf(tl->sb, "Wrong enum value.");
+			VSB_printf(tl->sb, "  Expected one of:\n");
+			do {
+				VSB_printf(tl->sb, "\t%s\n", r);
+				r += strlen(r) + 1;
+			} while (*r != '\0');
+			vcc_ErrWhere(tl, tl->t);
+			return;
+		}
+		fa->result = vcc_mk_expr(VOID, "\"%.*s\"", PF(tl->t));
+		SkipToken(tl, ID);
+	} else {
+		vcc_expr0(tl, &e2, fa->type);
+		ERRCHK(tl);
+		if (e2->fmt != fa->type) {
+			VSB_printf(tl->sb, "Wrong argument type.");
+			VSB_printf(tl->sb, "  Expected %s.",
+				vcc_Type(fa->type));
+			VSB_printf(tl->sb, "  Got %s.\n",
+				vcc_Type(e2->fmt));
+			vcc_ErrWhere2(tl, e2->t1, tl->t);
+			return;
+		}
+		assert(e2->fmt == fa->type);
+		if (e2->fmt == STRING_LIST) {
+			e2 = vcc_expr_edit(STRING_LIST,
+			    "\v+\n\v1,\nvrt_magic_string_end\v-",
+			    e2, NULL);
+		}
+		fa->result = e2;
+	}
+}
+
 static void
 vcc_func(struct vcc *tl, struct expr **e, const char *cfunc,
     const char *extra, const char *name, const char *args)
 {
-	const char *p, *r;
-	struct expr *e1, *e2;
-	struct inifin *ifp;
-	enum var_type fmt;
-	char buf[32];
+	const char *p;
+	struct expr *e1;
+	struct func_arg *fa, *fa2;
+	enum var_type rfmt;
+	VTAILQ_HEAD(,func_arg) head;
+	struct token *t1;
 
 	AN(cfunc);
 	AN(args);
@@ -549,75 +645,98 @@ vcc_func(struct vcc *tl, struct expr **e, const char *cfunc,
 	p = args;
 	if (extra == NULL)
 		extra = "";
-	e1 = vcc_mk_expr(vcc_arg_type(&p), "%s(ctx%s\v+", cfunc, extra);
+	rfmt = vcc_arg_type(&p);
+	VTAILQ_INIT(&head);
 	while (*p != '\0') {
-		e2 = NULL;
-		fmt = vcc_arg_type(&p);
-		if (fmt == VOID && !strcmp(p, "PRIV_VCL")) {
-			r = strchr(name, '.');
-			AN(r);
-			e2 = vcc_mk_expr(VOID, "&vmod_priv_%.*s",
-			    (int) (r - name), name);
+		fa = calloc(sizeof *fa, 1);
+		AN(fa);
+		VTAILQ_INSERT_TAIL(&head, fa, list);
+		fa->type = vcc_arg_type(&p);
+		if (fa->type == VOID && !memcmp(p, "PRIV_", 5)) {
+			fa->result = vcc_priv_arg(tl, p, name);
+			fa->name = "";
 			p += strlen(p) + 1;
-		} else if (fmt == VOID && !strcmp(p, "PRIV_CALL")) {
-			bprintf(buf, "vmod_priv_%u", tl->unique++);
-			ifp = New_IniFin(tl);
-			Fh(tl, 0, "static struct vmod_priv %s;\n", buf);
-			VSB_printf(ifp->fin, "\tVRT_priv_fini(&%s);", buf);
-			e2 = vcc_mk_expr(VOID, "&%s", buf);
-			p += strlen(p) + 1;
-		} else if (fmt == ENUM) {
-			ExpectErr(tl, ID);
-			ERRCHK(tl);
-			r = p;
-			do {
-				if (vcc_IdIs(tl->t, p))
-					break;
-				p += strlen(p) + 1;
-			} while (*p != '\0');
-			if (*p == '\0') {
-				VSB_printf(tl->sb, "Wrong enum value.");
-				VSB_printf(tl->sb, "  Expected one of:\n");
-				do {
-					VSB_printf(tl->sb, "\t%s\n", r);
-					r += strlen(r) + 1;
-				} while (*r != '\0');
-				vcc_ErrWhere(tl, tl->t);
-				return;
-			}
-			e2 = vcc_mk_expr(VOID, "\"%.*s\"", PF(tl->t));
+			continue;
+		}
+		if (fa->type == ENUM) {
+			fa->enum_bits = p;
 			while (*p != '\0')
 				p += strlen(p) + 1;
-			p++;
-			SkipToken(tl, ID);
-			if (*p != '\0')		/*lint !e448 */
-				SkipToken(tl, ',');
-		} else {
-			vcc_expr0(tl, &e2, fmt);
-			ERRCHK(tl);
-			if (e2->fmt != fmt) {
-				VSB_printf(tl->sb, "Wrong argument type.");
-				VSB_printf(tl->sb, "  Expected %s.",
-					vcc_Type(fmt));
-				VSB_printf(tl->sb, "  Got %s.\n",
-					vcc_Type(e2->fmt));
-				vcc_ErrWhere2(tl, e2->t1, tl->t);
-				return;
-			}
-			assert(e2->fmt == fmt);
-			if (e2->fmt == STRING_LIST) {
-				e2 = vcc_expr_edit(STRING_LIST,
-				    "\v+\n\v1,\nvrt_magic_string_end\v-",
-				    e2, NULL);
-			}
-			if (*p != '\0')
-				SkipToken(tl, ',');
+			p += strlen(p) + 1;
 		}
-		e1 = vcc_expr_edit(e1->fmt, "\v1,\n\v2", e1, e2);
+		if (*p == '\1') {
+			fa->name = p + 1;
+			p = strchr(p, '\0') + 1;
+			if (*p == '\2') {
+				fa->val = p + 1;
+				p = strchr(p, '\0') + 1;
+			}
+		}
 	}
-	SkipToken(tl, ')');
+
+	VTAILQ_FOREACH(fa, &head, list) {
+		if (tl->t->tok == ')')
+			break;
+		if (fa->result != NULL)
+			continue;
+		if (tl->t->tok == ID) {
+			t1 = VTAILQ_NEXT(tl->t, list);
+			if (t1->tok == '=')
+				break;
+		}
+		vcc_do_arg(tl, fa);
+		ERRCHK(tl);
+		if (tl->t->tok == ')')
+			break;
+		SkipToken(tl, ',');
+	}
+	while (tl->t->tok == ID) {
+		VTAILQ_FOREACH(fa, &head, list) {
+			if (fa->name == NULL)
+				continue;
+			if (vcc_IdIs(tl->t, fa->name))
+				break;
+		}
+		if (fa == NULL) {
+			VSB_printf(tl->sb, "Unknown argument '%.*s'\n",
+			    PF(tl->t));
+			vcc_ErrWhere(tl, tl->t);
+			return;
+		}
+		if (fa->result != NULL) {
+			VSB_printf(tl->sb, "Argument '%s' already used\n",
+			    fa->name);
+			vcc_ErrWhere(tl, tl->t);
+			return;
+		}
+		vcc_NextToken(tl);
+		SkipToken(tl, '=');
+		vcc_do_arg(tl, fa);
+		ERRCHK(tl);
+		if (tl->t->tok == ')')
+			break;
+		SkipToken(tl, ',');
+	}
+
+	e1 = vcc_mk_expr(rfmt, "%s(ctx%s\v+", cfunc, extra);
+	VTAILQ_FOREACH_SAFE(fa, &head, list, fa2) {
+		if (fa->result == NULL && fa->val != NULL)
+			fa->result = vcc_mk_expr(fa->type, "%s", fa->val);
+		if (fa->result != NULL)
+			e1 = vcc_expr_edit(e1->fmt, "\v1,\n\v2",
+			    e1, fa->result);
+		else {
+			VSB_printf(tl->sb, "Argument '%s' missing\n",
+			    fa->name);
+			vcc_ErrWhere(tl, tl->t);
+		}
+		free(fa);
+	}
 	e1 = vcc_expr_edit(e1->fmt, "\v1\n)\v-", e1, NULL);
 	*e = e1;
+
+	SkipToken(tl, ')');
+
 }
 
 /*--------------------------------------------------------------------
@@ -660,6 +779,7 @@ vcc_Eval_SymFunc(struct vcc *tl, struct expr **e, const struct symbol *sym)
  * SYNTAX:
  *    Expr4:
  *	'(' Expr0 ')'
+ *	symbol
  *	CNUM
  *	CSTR
  */
@@ -671,6 +791,7 @@ vcc_expr4(struct vcc *tl, struct expr **e, enum var_type fmt)
 	const char *ip;
 	const struct symbol *sym;
 	double d;
+	int i;
 
 	*e = NULL;
 	if (tl->t->tok == '(') {
@@ -687,7 +808,15 @@ vcc_expr4(struct vcc *tl, struct expr **e, enum var_type fmt)
 		 * XXX: what if var and func/proc had same name ?
 		 * XXX: look for SYM_VAR first for consistency ?
 		 */
-		sym = VCC_FindSymbol(tl, tl->t, SYM_NONE);
+		sym = NULL;
+		if (fmt == BACKEND)
+			sym = VCC_FindSymbol(tl, tl->t, SYM_BACKEND);
+		if (sym == NULL)
+			sym = VCC_FindSymbol(tl, tl->t, SYM_VAR);
+		if (sym == NULL)
+			sym = VCC_FindSymbol(tl, tl->t, SYM_FUNC);
+		if (sym == NULL)
+			sym = VCC_FindSymbol(tl, tl->t, SYM_NONE);
 		if (sym == NULL || sym->eval == NULL) {
 			VSB_printf(tl->sb, "Symbol not found: ");
 			vcc_ErrToken(tl, tl->t);
@@ -704,6 +833,11 @@ vcc_expr4(struct vcc *tl, struct expr **e, enum var_type fmt)
 			AN(sym->eval);
 			AZ(*e);
 			sym->eval(tl, e, sym);
+			/* Unless asked for a HEADER, fold to string here */
+			if (*e && fmt != HEADER && (*e)->fmt == HEADER) {
+				vcc_expr_tostring(tl, e, STRING);
+				ERRCHK(tl);
+			}
 			return;
 		default:
 			break;
@@ -751,9 +885,15 @@ vcc_expr4(struct vcc *tl, struct expr **e, enum var_type fmt)
 		} else if (fmt == REAL) {
 			e1 = vcc_mk_expr(REAL, "%f", vcc_DoubleVal(tl));
 			ERRCHK(tl);
-		} else {
+		} else if (fmt == INT) {
 			e1 = vcc_mk_expr(INT, "%.*s", PF(tl->t));
 			vcc_NextToken(tl);
+		} else {
+			vcc_NumVal(tl, &d, &i);
+			if (i)
+				e1 = vcc_mk_expr(REAL, "%f", d);
+			else
+				e1 = vcc_mk_expr(INT, "%ld", (long)d);
 		}
 		e1->constant = EXPR_CONST;
 		*e = e1;
@@ -822,16 +962,21 @@ vcc_expr_mul(struct vcc *tl, struct expr **e, enum var_type fmt)
  */
 
 static void
-vcc_expr_string_add(struct vcc *tl, struct expr **e)
+vcc_expr_string_add(struct vcc *tl, struct expr **e, struct expr *e2)
 {
-	struct expr  *e2;
 	enum var_type f2;
 
+	AN(e);
+	AN(*e);
+	AN(e2);
 	f2 = (*e)->fmt;
+	assert (f2 == STRING || f2 == STRING_LIST);
 
-	while (tl->t->tok == '+') {
-		vcc_NextToken(tl);
-		vcc_expr_mul(tl, &e2, STRING);
+	while (e2 != NULL || tl->t->tok == '+') {
+		if (e2 == NULL) {
+			vcc_NextToken(tl);
+			vcc_expr_mul(tl, &e2, STRING);
+		}
 		ERRCHK(tl);
 		if (e2->fmt != STRING && e2->fmt != STRING_LIST) {
 			vcc_expr_tostring(tl, &e2, f2);
@@ -858,6 +1003,7 @@ vcc_expr_string_add(struct vcc *tl, struct expr **e)
 			*e = vcc_expr_edit(STRING_LIST, "\v1,\n\v2", *e, e2);
 			(*e)->constant = EXPR_VAR;
 		}
+		e2 = NULL;
 	}
 }
 
@@ -873,49 +1019,36 @@ vcc_expr_add(struct vcc *tl, struct expr **e, enum var_type fmt)
 	ERRCHK(tl);
 	f2 = (*e)->fmt;
 
-	/* Unless we specifically ask for a HEADER, fold them to string here */
-	if (fmt != HEADER && f2 == HEADER) {
-		vcc_expr_tostring(tl, e, STRING);
-		ERRCHK(tl);
-		f2 = (*e)->fmt;
-		assert(f2 == STRING);
-	}
-
-	if (tl->t->tok != '+' && tl->t->tok != '-')
-		return;
-
-	switch(f2) {
-	case STRING:
-	case STRING_LIST:
-		vcc_expr_string_add(tl, e);
-		return;
-	case INT:		break;
-	case TIME:		break;
-	case DURATION:		break;
-	case BYTES:		break;
-	default:
-		VSB_printf(tl->sb, "Operator %.*s not possible on type %s.\n",
-		    PF(tl->t), vcc_Type(f2));
-		vcc_ErrWhere(tl, tl->t);
-		return;
-	}
-
 	while (tl->t->tok == '+' || tl->t->tok == '-') {
-		if (f2 == TIME)
-			f2 = DURATION;
 		tk = tl->t;
 		vcc_NextToken(tl);
-		vcc_expr_mul(tl, &e2, f2);
+		if (f2 == TIME)
+			vcc_expr_mul(tl, &e2, DURATION);
+		else
+			vcc_expr_mul(tl, &e2, f2);
 		ERRCHK(tl);
 		if (tk->tok == '-' && (*e)->fmt == TIME && e2->fmt == TIME) {
 			/* OK */
 		} else if ((*e)->fmt == TIME && e2->fmt == DURATION) {
 			f2 = TIME;
 			/* OK */
-		} else if (tk->tok == '-' &&
-		    (*e)->fmt == BYTES && e2->fmt == BYTES) {
+		} else if ((*e)->fmt == BYTES && e2->fmt == BYTES) {
 			/* OK */
-		} else if (e2->fmt != f2) {
+		} else if ((*e)->fmt == INT && e2->fmt == INT) {
+			/* OK */
+		} else if ((*e)->fmt == DURATION && e2->fmt == DURATION) {
+			/* OK */
+		} else if (tk->tok == '+' &&
+		    (*e)->fmt == STRING && e2->fmt == STRING) {
+			vcc_expr_string_add(tl, e, e2);
+			return;
+		} else if (tk->tok == '+' &&
+		    (fmt == STRING || fmt == STRING_LIST)) {
+			/* Time to fold and add as string */
+			vcc_expr_tostring(tl, e, STRING);
+			vcc_expr_string_add(tl, e, e2);
+			return;
+		} else {
 			VSB_printf(tl->sb, "%s %.*s %s not possible.\n",
 			    vcc_Type((*e)->fmt), PF(tk), vcc_Type(e2->fmt));
 			vcc_ErrWhere2(tl, tk, tl->t);
@@ -977,6 +1110,7 @@ static const struct cmps {
 	NUM_REL(DURATION),
 	NUM_REL(BYTES),
 	NUM_REL(REAL),
+	NUM_REL(TIME),
 
 	{STRING,	T_EQ,	"!VRT_strcmp(\v1, \v2)" },
 	{STRING,	T_NEQ,	"VRT_strcmp(\v1, \v2)" },

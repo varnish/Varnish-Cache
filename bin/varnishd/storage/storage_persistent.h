@@ -153,8 +153,6 @@ struct smp_object {
 #define ASSERT_SILO_THREAD(sc) \
     do {assert(pthread_equal(pthread_self(), (sc)->thread));} while (0)
 
-#define OC_F_NEEDFIXUP OC_F_PRIV
-
 /*
  * Context for a signature.
  *
@@ -311,7 +309,7 @@ void smp_new_seg(struct smp_sc *sc);
 void smp_close_seg(struct smp_sc *sc, struct smp_seg *sg);
 void smp_init_oc(struct objcore *oc, struct smp_seg *sg, unsigned objidx);
 void smp_save_segs(struct smp_sc *sc);
-extern const struct objcore_methods smp_oc_methods;
+extern const struct storeobj_methods smp_oc_methods;
 
 /* storage_persistent_subr.c */
 

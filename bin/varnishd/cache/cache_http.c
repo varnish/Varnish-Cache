@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -38,6 +38,7 @@
 
 #include "vend.h"
 #include "vct.h"
+#include "vtim.h"
 
 #define HTTPH(a, b, c) char b[] = "*" a ":";
 #include "tbl/http_headers.h"
@@ -230,7 +231,7 @@ http_PutField(const struct http *to, int field, const char *string)
 
 /*--------------------------------------------------------------------*/
 
-int
+static int
 http_IsHdr(const txt *hh, const char *hdr)
 {
 	unsigned l;
@@ -265,20 +266,23 @@ http_findhdr(const struct http *hp, unsigned l, const char *hdr)
 }
 
 /*--------------------------------------------------------------------
+ * Count how many instances we have of this header
  */
 
-void
-http_MarkHeader(const struct http *hp, const char *hdr, unsigned hdrlen,
-    uint8_t flag)
+unsigned
+http_CountHdr(const struct http *hp, const char *hdr)
 {
+	unsigned retval = 0;
 	unsigned u;
 
 	CHECK_OBJ_NOTNULL(hp, HTTP_MAGIC);
 
-	u = http_findhdr(hp, hdrlen, hdr);
-	if (u == 0)
-		return;
-	hp->hdf[u] |= flag;
+	for (u = HTTP_HDR_FIRST; u < hp->nhd; u++) {
+		Tcheck(hp->hd[u]);
+		if (http_IsHdr(&hp->hd[u], hdr))
+			retval++;
+	}
+	return (retval);
 }
 
 /*--------------------------------------------------------------------
@@ -357,10 +361,10 @@ http_CollectHdr(struct http *hp, const char *hdr)
 /*--------------------------------------------------------------------*/
 
 int
-http_GetHdr(const struct http *hp, const char *hdr, char **ptr)
+http_GetHdr(const struct http *hp, const char *hdr, const char **ptr)
 {
 	unsigned u, l;
-	char *p;
+	const char *p;
 
 	l = hdr[0];
 	assert(l == strlen(hdr + 1));
@@ -381,47 +385,139 @@ http_GetHdr(const struct http *hp, const char *hdr, char **ptr)
 	return (1);
 }
 
-/*--------------------------------------------------------------------
- * Find a given data element in a header according to RFC2616's #rule
+/*-----------------------------------------------------------------------------
+ * Split source string at any of the separators, return pointer to first
+ * and last+1 char of substrings, with whitespace trimed at both ends.
+ * If sep being an empty string is shorthand for VCT::SP
+ * If stop is NULL, src is NUL terminated.
+ */
+
+static int
+http_split(const char **src, const char *stop, const char *sep,
+    const char **b, const char **e)
+{
+	const char *p, *q;
+
+	AN(src);
+	AN(*src);
+	AN(sep);
+	AN(b);
+	AN(e);
+
+	if (stop == NULL)
+		stop = strchr(*src, '\0');
+
+	for (p = *src; p < stop && (vct_issp(*p) || strchr(sep, *p)); p++)
+		continue;
+
+	if (p >= stop) {
+		*b = NULL;
+		*e = NULL;
+		return (0);
+	}
+
+	*b = p;
+	if (*sep == '\0') {
+		for (q = p + 1; q < stop && !vct_issp(*q); q++)
+			continue;
+		*e = q;
+		*src = q;
+		return (1);
+	}
+	for (q = p + 1; q < stop && !strchr(sep, *q); q++)
+		continue;
+	*src = q;
+	while (q > p && vct_issp(q[-1]))
+		q--;
+	*e = q;
+	return (1);
+}
+
+/*-----------------------------------------------------------------------------
+ * Comparison rule for tokens:
+ *	if target string starts with '"', we use memcmp() and expect closing
+ *	double quote as well
+ *	otherwise we use strncascmp()
+ *
+ * On match we increment *bp past the token name.
+ */
+
+static int
+http_istoken(const char **bp, const char *e, const char *token)
+{
+	int fl = strlen(token);
+	const char *b;
+
+	AN(bp);
+	AN(e);
+	AN(token);
+
+	b = *bp;
+
+	if (b + fl + 2 <= e && *b == '"' &&
+	    !memcmp(b + 1, token, fl) && b[fl + 1] == '"') {
+		*bp += fl + 2;
+		return (1);
+	}
+	if (b + fl <= e && !strncasecmp(b, token, fl) &&
+	    (b + fl == e || !vct_istchar(b[fl]))) {
+		*bp += fl;
+		return (1);
+	}
+	return (0);
+}
+
+/*-----------------------------------------------------------------------------
+ * Find a given data element (token) in a header according to RFC2616's #rule
  * (section 2.1, p15)
+ *
+ * On case sensitivity:
+ *
+ * Section 4.2 (Messages Headers) defines field (header) name as case
+ * insensitive, but the field (header) value/content may be case-sensitive.
+ *
+ * http_GetHdrToken looks up a token in a header value and the rfc does not say
+ * explicitly if tokens are to be compared with or without respect to case.
+ *
+ * But all examples and specific statements regarding tokens follow the rule
+ * that unquoted tokens are to be matched case-insensitively and quoted tokens
+ * case-sensitively.
+ *
+ * The optional pb and pe arguments will point to the token content start and
+ * end+1, white space trimmed on both sides.
  */
 
 int
-http_GetHdrData(const struct http *hp, const char *hdr,
-    const char *field, char **ptr)
+http_GetHdrToken(const struct http *hp, const char *hdr,
+    const char *token, const char **pb, const char **pe)
 {
-	char *h, *e;
-	unsigned fl;
+	const char *h, *b, *e;
 
-	if (ptr != NULL)
-		*ptr = NULL;
+	if (pb != NULL)
+		*pb = NULL;
+	if (pe != NULL)
+		*pe = NULL;
 	if (!http_GetHdr(hp, hdr, &h))
 		return (0);
 	AN(h);
-	e = strchr(h, '\0');
-	fl = strlen(field);
-	while (h + fl <= e) {
-		/* Skip leading whitespace and commas */
-		if (vct_islws(*h) || *h == ',') {
-			h++;
+
+	while(http_split(&h, NULL, ",", &b, &e))
+		if (http_istoken(&b, e, token))
+			break;
+	if (b == NULL)
+		return (0);
+	if (pb != NULL) {
+		for (; vct_islws(*b); b++)
 			continue;
+		if (b == e) {
+			b = NULL;
+			e = NULL;
 		}
-		/* Check for substrings before memcmp() */
-		if ((h + fl == e || vct_issepctl(h[fl])) &&
-		    !memcmp(h, field, fl)) {
-			if (ptr != NULL) {
-				h += fl;
-				while (vct_islws(*h))
-					h++;
-				*ptr = h;
-			}
-			return (1);
-		}
-		/* Skip until end of header or comma */
-		while (*h && *h != ',')
-			h++;
+		*pb = b;
+		if (pe != NULL)
+			*pe = e;
 	}
-	return (0);
+	return (1);
 }
 
 /*--------------------------------------------------------------------
@@ -431,45 +527,44 @@ http_GetHdrData(const struct http *hp, const char *hdr,
 double
 http_GetHdrQ(const struct http *hp, const char *hdr, const char *field)
 {
-	char *h;
+	const char *hb, *he, *b, *e;
 	int i;
-	double a, b;
+	double a, f;
 
-	h = NULL;
-	i = http_GetHdrData(hp, hdr, field, &h);
+	i = http_GetHdrToken(hp, hdr, field, &hb, &he);
 	if (!i)
 		return (0.);
 
-	if (h == NULL)
+	if (hb == NULL)
 		return (1.);
-	/* Skip whitespace, looking for '=' */
-	while (*h && vct_issp(*h))
-		h++;
-	if (*h++ != ';')
-		return (1.);
-	while (*h && vct_issp(*h))
-		h++;
-	if (*h++ != 'q')
-		return (1.);
-	while (*h && vct_issp(*h))
-		h++;
-	if (*h++ != '=')
-		return (1.);
-	while (*h && vct_issp(*h))
-		h++;
-	a = 0.;
-	while (vct_isdigit(*h)) {
-		a *= 10.;
-		a += *h - '0';
-		h++;
+	while(http_split(&hb, he, ";", &b, &e)) {
+		if (*b != 'q')
+			continue;
+		for (b++; b < e && vct_issp(*b); b++)
+			continue;
+		if (b == e || *b != '=')
+			continue;
+		break;
 	}
-	if (*h++ != '.')
+	if (b == NULL)
+		return (1.);
+	for (b++; b < e && vct_issp(*b); b++)
+		continue;
+	if (b == e || (*b != '.' && !vct_isdigit(*b)))
+		return (0.);
+	a = 0;
+	while (b < e && vct_isdigit(*b)) {
+		a *= 10.;
+		a += *b - '0';
+		b++;
+	}
+	if (b == e || *b++ != '.')
 		return (a);
-	b = .1;
-	while (vct_isdigit(*h)) {
-		a += b * (*h - '0');
-		b *= .1;
-		h++;
+	f = .1;
+	while (b < e && vct_isdigit(*b)) {
+		a += f * (*b - '0');
+		f *= .1;
+		b++;
 	}
 	return (a);
 }
@@ -480,16 +575,16 @@ http_GetHdrQ(const struct http *hp, const char *hdr, const char *field)
 
 int
 http_GetHdrField(const struct http *hp, const char *hdr,
-    const char *field, char **ptr)
+    const char *field, const char **ptr)
 {
-	char *h;
+	const char *h;
 	int i;
 
 	if (ptr != NULL)
 		*ptr = NULL;
 
 	h = NULL;
-	i = http_GetHdrData(hp, hdr, field, &h);
+	i = http_GetHdrToken(hp, hdr, field, &h, NULL);
 	if (!i)
 		return (i);
 
@@ -509,10 +604,82 @@ http_GetHdrField(const struct http *hp, const char *hdr,
 
 /*--------------------------------------------------------------------*/
 
+ssize_t
+http_GetContentLength(const struct http *hp)
+{
+	ssize_t cl, cll;
+	const char *b;
+
+	CHECK_OBJ_NOTNULL(hp, HTTP_MAGIC);
+
+	if (!http_GetHdr(hp, H_Content_Length, &b))
+		return (-1);
+	cl = 0;
+	if (!vct_isdigit(*b))
+		return (-2);
+	for (;vct_isdigit(*b); b++) {
+		cll = cl;
+		cl *= 10;
+		cl += *b - '0';
+		if (cll != cl / 10)
+			return (-2);
+	}
+	while (vct_islws(*b))
+		b++;
+	if (*b != '\0')
+		return (-2);
+	return (cl);
+}
+
+/*--------------------------------------------------------------------
+ */
+
+enum sess_close
+http_DoConnection(struct http *hp)
+{
+	const char *h, *b, *e;
+	enum sess_close retval;
+	unsigned u, v;
+
+	if (hp->protover < 11)
+		retval = SC_REQ_HTTP10;
+	else
+		retval = SC_NULL;
+
+	http_CollectHdr(hp, H_Connection);
+	if (!http_GetHdr(hp, H_Connection, &h))
+		return (retval);
+	AN(h);
+	while (http_split(&h, NULL, ",", &b, &e)) {
+		u = pdiff(b, e);
+		if (u == 5 && !strncasecmp(b, "close", u))
+			retval = SC_REQ_CLOSE;
+		if (u == 10 && !strncasecmp(b, "keep-alive", u))
+			retval = SC_NULL;
+
+		/* Refuse removal of well-known-headers if they would pass. */
+/*lint -save -e506 */
+#define HTTPH(a, x, c)						\
+		if (!((c) & HTTPH_R_PASS) &&			\
+		    strlen(a) == u && !strncasecmp(a, b, u))	\
+			return (SC_RX_BAD);
+#include "tbl/http_headers.h"
+#undef HTTPH
+/*lint -restore */
+
+		v = http_findhdr(hp, u, b);
+		if (v > 0)
+			hp->hdf[v] |= HDF_FILTER;
+	}
+	return (retval);
+}
+
+/*--------------------------------------------------------------------*/
+
 int
 http_HdrIs(const struct http *hp, const char *hdr, const char *val)
 {
-	char *p;
+	const char *p;
 
 	if (!http_GetHdr(hp, hdr, &p))
 		return (0);
@@ -566,7 +733,7 @@ http_SetStatus(struct http *to, uint16_t status)
 /*--------------------------------------------------------------------*/
 
 const char *
-http_GetReq(const struct http *hp)
+http_GetMethod(const struct http *hp)
 {
 
 	CHECK_OBJ_NOTNULL(hp, HTTP_MAGIC);
@@ -610,12 +777,11 @@ http_PutResponse(struct http *to, const char *proto, uint16_t status,
  */
 
 unsigned
-http_EstimateWS(const struct http *fm, unsigned how, uint16_t *nhd)
+http_EstimateWS(const struct http *fm, unsigned how)
 {
 	unsigned u, l;
 
 	l = 4;
-	*nhd = 1 + HTTP_HDR_FIRST - 3;
 	CHECK_OBJ_NOTNULL(fm, HTTP_MAGIC);
 	for (u = 0; u < fm->nhd; u++) {
 		if (u == HTTP_HDR_METHOD || u == HTTP_HDR_URL)
@@ -630,7 +796,6 @@ http_EstimateWS(const struct http *fm, unsigned how, uint16_t *nhd)
 #include "tbl/http_headers.h"
 #undef HTTPH
 		l += Tlen(fm->hd[u]) + 1L;
-		(*nhd)++;
 	}
 	return (PRNDUP(l + 1L));
 }
@@ -639,20 +804,18 @@ http_EstimateWS(const struct http *fm, unsigned how, uint16_t *nhd)
  * Encode http struct as byte string.
  */
 
-uint8_t *
-HTTP_Encode(const struct http *fm, struct ws *ws, unsigned how)
+void
+HTTP_Encode(const struct http *fm, uint8_t *p0, unsigned l, unsigned how)
 {
 	unsigned u, w;
 	uint16_t n;
 	uint8_t *p, *e;
 
-	u = WS_Reserve(ws, 0);
-	p = (uint8_t*)ws->f;
-	e = (uint8_t*)ws->f + u;
-	if (p + 5 > e) {
-		WS_Release(ws, 0);
-		return (NULL);
-	}
+	AN(p0);
+	AN(l);
+	p = p0;
+	e = p + l;
+	assert(p + 5 <= e);
 	assert(fm->nhd < fm->shd);
 	n = HTTP_HDR_FIRST - 3;
 	vbe16enc(p + 2, fm->status);
@@ -670,31 +833,24 @@ HTTP_Encode(const struct http *fm, struct ws *ws, unsigned how)
 			continue;
 #include "tbl/http_headers.h"
 #undef HTTPH
+		http_VSLH(fm, u);
 		w = Tlen(fm->hd[u]) + 1L;
-		if (p + w + 1 > e) {
-			WS_Release(ws, 0);
-			return (NULL);
-		}
+		assert(p + w + 1 <= e);
 		memcpy(p, fm->hd[u].b, w);
 		p += w;
 		n++;
 	}
 	*p++ = '\0';
 	assert(p <= e);
-	e = (uint8_t*)ws->f;
-	vbe16enc(e, n + 1);
-	WS_ReleaseP(ws, (void*)p);
-	return (e);
+	vbe16enc(p0, n + 1);
 }
 
 /*--------------------------------------------------------------------
  * Decode byte string into http struct
- *
- * XXX: cannot make fm const because to->hd isn't.
  */
 
 int
-HTTP_Decode(struct http *to, uint8_t *fm)
+HTTP_Decode(struct http *to, const uint8_t *fm)
 {
 
 	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
@@ -711,9 +867,9 @@ HTTP_Decode(struct http *to, uint8_t *fm)
 		}
 		if (*fm == '\0')
 			return (0);
-		to->hd[to->nhd].b = (void*)fm;
-		fm = (void*)strchr((void*)fm, '\0');
-		to->hd[to->nhd].e = (void*)fm;
+		to->hd[to->nhd].b = (const void*)fm;
+		fm = (const void*)strchr((const void*)fm, '\0');
+		to->hd[to->nhd].e = (const void*)fm;
 		fm++;
 		if (to->vsl != NULL)
 			http_VSLH(to, to->nhd);
@@ -723,17 +879,29 @@ HTTP_Decode(struct http *to, uint8_t *fm)
 
 /*--------------------------------------------------------------------*/
 
+uint16_t
+HTTP_GetStatusPack(struct worker *wrk, struct objcore *oc)
+{
+	const char *ptr;
+	ptr = ObjGetattr(wrk, oc, OA_HEADERS, NULL);
+	AN(ptr);
+
+	return(vbe16dec(ptr + 2));
+}
+
+/*--------------------------------------------------------------------*/
+
 const char *
-HTTP_GetHdrPack(struct objcore *oc, struct dstat *ds, const char *hdr)
+HTTP_GetHdrPack(struct worker *wrk, struct objcore *oc, const char *hdr)
 {
 	const char *ptr;
 	unsigned l;
 
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-	AN(ds);
 	AN(hdr);
 
-	ptr = ObjGetattr(oc, ds, OA_HEADERS, NULL);
+	ptr = ObjGetattr(wrk, oc, OA_HEADERS, NULL);
 	AN(ptr);
 
 	/* Skip nhd and status */
@@ -741,10 +909,14 @@ HTTP_GetHdrPack(struct objcore *oc, struct dstat *ds, const char *hdr)
 	VSL(SLT_Debug, 0, "%d %s", __LINE__, ptr);
 
 	/* Skip PROTO, STATUS and REASON */
+	if (!strcmp(hdr, ":proto"))
+		return (ptr);
 	ptr = strchr(ptr, '\0') + 1;
 	if (!strcmp(hdr, ":status"))
 		return (ptr);
 	ptr = strchr(ptr, '\0') + 1;
+	if (!strcmp(hdr, ":reason"))
+		return (ptr);
 	ptr = strchr(ptr, '\0') + 1;
 
 	l = hdr[0];
@@ -771,17 +943,17 @@ HTTP_GetHdrPack(struct objcore *oc, struct dstat *ds, const char *hdr)
  */
 
 void
-HTTP_Merge(struct objcore *oc, struct dstat *ds, struct http *to)
+HTTP_Merge(struct worker *wrk, struct objcore *oc, struct http *to)
 {
 	const char *ptr;
 	unsigned u;
 	const char *p;
 
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
-	AN(ds);
 
-	ptr = ObjGetattr(oc, ds, OA_HEADERS, NULL);
+	ptr = ObjGetattr(wrk, oc, OA_HEADERS, NULL);
 	AN(ptr);
 
 	to->status = vbe16dec(ptr + 2);
@@ -937,6 +1109,27 @@ http_PrintfHeader(struct http *to, const char *fmt, ...)
 	to->hd[to->nhd].e = to->ws->f + n;
 	to->hdf[to->nhd] = 0;
 	WS_Release(to->ws, n + 1);
+	http_VSLH(to, to->nhd);
+	to->nhd++;
+}
+
+void
+http_TimeHeader(struct http *to, const char *fmt, double now)
+{
+	char *p;
+
+	CHECK_OBJ_NOTNULL(to, HTTP_MAGIC);
+	p = WS_Alloc(to->ws, strlen(fmt) + VTIM_FORMAT_SIZE);
+	if (p == NULL) {
+		http_fail(to);
+		VSLb(to->vsl, SLT_LostHeader, "%s", fmt);
+		return;
+	}
+	strcpy(p, fmt);
+	VTIM_format(now, strchr(p, '\0'));
+	to->hd[to->nhd].b = p;
+	to->hd[to->nhd].e = strchr(p, '\0');
+	to->hdf[to->nhd] = 0;
 	http_VSLH(to, to->nhd);
 	to->nhd++;
 }

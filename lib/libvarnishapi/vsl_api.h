@@ -29,16 +29,11 @@
  *
  */
 
-#include "vdef.h"
-#include "vqueue.h"
-#include "vre.h"
-#include "vapi/vsm.h"
-
 #define VSL_FILE_ID			"VSL"
 
 /*lint -esym(534, vsl_diag) */
 int vsl_diag(struct VSL_data *vsl, const char *fmt, ...)
-    __printflike(2, 3);
+    __v_printflike(2, 3);
 void vsl_vbm_bitset(int bit, void *priv);
 void vsl_vbm_bitclr(int bit, void *priv);
 

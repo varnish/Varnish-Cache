@@ -37,21 +37,18 @@
 #include "cache/cache.h"
 
 #include "waiter/waiter.h"
+#include "waiter/waiter_priv.h"
 #include "vtim.h"
-#include "vfil.h"
-
-#define NEEV	128
 
 struct vwp {
 	unsigned		magic;
 #define VWP_MAGIC		0x4b2cc735
-	int			pipes[2];
-	pthread_t		poll_thread;
+	struct waiter		*waiter;
+
+	pthread_t		thread;
 	struct pollfd		*pollfd;
 	unsigned		npoll;
 	unsigned		hpoll;
-
-	VTAILQ_HEAD(,sess)	sesshead;
 };
 
 /*--------------------------------------------------------------------*/
@@ -82,14 +79,19 @@ vwp_pollspace(struct vwp *vwp, unsigned fd)
 
 /*--------------------------------------------------------------------*/
 
-static void
-vwp_poll(struct vwp *vwp, int fd)
+static void __match_proto__(waiter_inject_f)
+vwp_inject(const struct waiter *w, struct waited *wp)
 {
+	struct vwp *vwp;
+	int fd;
 
+	CAST_OBJ_NOTNULL(vwp, w->priv, VWP_MAGIC);
+	CHECK_OBJ_NOTNULL(wp, WAITED_MAGIC);
+	fd = wp->fd;
+VSL(SLT_Debug, 0, "POLL Inject %d", fd);
 	assert(fd >= 0);
 	vwp_pollspace(vwp, (unsigned)fd);
 	assert(fd < vwp->npoll);
-
 	if (vwp->hpoll < fd)
 		vwp->hpoll = fd;
 
@@ -101,17 +103,19 @@ vwp_poll(struct vwp *vwp, int fd)
 	vwp->pollfd[fd].events = POLLIN;
 }
 
-static void
-vwp_unpoll(struct vwp *vwp, int fd)
+static void __match_proto__(waiter_evict_f)
+vwp_evict(const struct waiter *w, struct waited *wp)
 {
+	struct vwp *vwp;
+	int fd;
 
+	CAST_OBJ_NOTNULL(vwp, w->priv, VWP_MAGIC);
+	CHECK_OBJ_NOTNULL(wp, WAITED_MAGIC);
+	fd = wp->fd;
+VSL(SLT_Debug, 0, "POLL Evict %d", fd);
 	assert(fd >= 0);
 	assert(fd < vwp->npoll);
 	vwp_pollspace(vwp, (unsigned)fd);
-
-	assert(vwp->pollfd[fd].fd == fd);
-	assert(vwp->pollfd[fd].events == POLLIN);
-	AZ(vwp->pollfd[fd].revents);
 
 	vwp->pollfd[fd].fd = -1;
 	vwp->pollfd[fd].events = 0;
@@ -124,32 +128,29 @@ vwp_main(void *priv)
 {
 	int v, v2;
 	struct vwp *vwp;
-	struct sess *ss[NEEV], *sp, *sp2;
-	double now, deadline;
-	int i, j, fd;
+	struct waited *sp, *sp2;
+	double now, idle;
+	int fd;
 
 	CAST_OBJ_NOTNULL(vwp, priv, VWP_MAGIC);
 	THR_SetName("cache-poll");
 
-	vwp_poll(vwp, vwp->pipes[0]);
-
-	while (1) {
+	while (!vwp->waiter->dismantle) {
 		assert(vwp->hpoll < vwp->npoll);
 		while (vwp->hpoll > 0 && vwp->pollfd[vwp->hpoll].fd == -1)
 			vwp->hpoll--;
-		assert(vwp->pipes[0] <= vwp->hpoll);
-		assert(vwp->pollfd[vwp->pipes[0]].fd == vwp->pipes[0]);
-		assert(vwp->pollfd[vwp->pipes[1]].fd == -1);
-		v = poll(vwp->pollfd, vwp->hpoll + 1, 100);
+		v = poll(vwp->pollfd, vwp->hpoll + 1, -1);
 		assert(v >= 0);
-		now = VTIM_real();
-		deadline = now - cache_param->timeout_idle;
 		v2 = v;
-		VTAILQ_FOREACH_SAFE(sp, &vwp->sesshead, list, sp2) {
+		now = VTIM_real();
+		idle = now - *vwp->waiter->tmo;
+		VTAILQ_FOREACH_SAFE(sp, &vwp->waiter->waithead, list, sp2) {
 			if (v != 0 && v2 == 0)
 				break;
-			CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+			CHECK_OBJ_NOTNULL(sp, WAITED_MAGIC);
 			fd = sp->fd;
+			VSL(SLT_Debug, 0,
+			    "POLL Handle %d %x", fd, vwp->pollfd[fd].revents);
 			assert(fd >= 0);
 			assert(fd <= vwp->hpoll);
 			assert(fd < vwp->npoll);
@@ -157,74 +158,55 @@ vwp_main(void *priv)
 			if (vwp->pollfd[fd].revents) {
 				v2--;
 				vwp->pollfd[fd].revents = 0;
-				VTAILQ_REMOVE(&vwp->sesshead, sp, list);
-				vwp_unpoll(vwp, fd);
-				SES_Handle(sp, now);
-			} else if (sp->t_idle <= deadline) {
-				VTAILQ_REMOVE(&vwp->sesshead, sp, list);
-				vwp_unpoll(vwp, fd);
-				// XXX: not yet (void)VTCP_linger(sp->fd, 0);
-				SES_Delete(sp, SC_RX_TIMEOUT, now);
+				Wait_Handle(vwp->waiter, sp, WAITER_ACTION,
+				    now);
+			} else if (sp->idle <= idle) {
+				Wait_Handle(vwp->waiter, sp, WAITER_TIMEOUT,
+				    now);
 			}
 		}
-		if (v2 && vwp->pollfd[vwp->pipes[0]].revents) {
-
-			if (vwp->pollfd[vwp->pipes[0]].revents != POLLIN)
-				VSL(SLT_Debug, 0, "pipe.revents= 0x%x",
-				    vwp->pollfd[vwp->pipes[0]].revents);
-			assert(vwp->pollfd[vwp->pipes[0]].revents == POLLIN);
-			vwp->pollfd[vwp->pipes[0]].revents = 0;
-			v2--;
-			i = read(vwp->pipes[0], ss, sizeof ss);
-			assert(i >= 0);
-			AZ((unsigned)i % sizeof ss[0]);
-			for (j = 0; j * sizeof ss[0] < i; j++) {
-				CHECK_OBJ_NOTNULL(ss[j], SESS_MAGIC);
-				assert(ss[j]->fd >= 0);
-				VTAILQ_INSERT_TAIL(&vwp->sesshead, ss[j], list);
-				vwp_poll(vwp, ss[j]->fd);
-			}
-		}
-		AZ(v2);
+		Wait_Handle(vwp->waiter, NULL, WAITER_ACTION, now);
 	}
 	NEEDLESS_RETURN(NULL);
 }
 
 /*--------------------------------------------------------------------*/
 
-static void
-vwp_poll_pass(void *priv, struct sess *sp)
+static void __match_proto__(waiter_init_f)
+vwp_init(struct waiter *w)
 {
 	struct vwp *vwp;
 
-	CAST_OBJ_NOTNULL(vwp, priv, VWP_MAGIC);
-
-	WAIT_Write_Session(sp, vwp->pipes[1]);
-}
-
-/*--------------------------------------------------------------------*/
-
-static void *
-vwp_poll_init(void)
-{
-	struct vwp *vwp;
-
-	ALLOC_OBJ(vwp, VWP_MAGIC);
-	AN(vwp);
-	VTAILQ_INIT(&vwp->sesshead);
-	AZ(pipe(vwp->pipes));
-
-	AZ(VFIL_nonblocking(vwp->pipes[1]));
+	CHECK_OBJ_NOTNULL(w, WAITER_MAGIC);
+	vwp = w->priv;
+	INIT_OBJ(vwp, VWP_MAGIC);
+	vwp->waiter = w;
 
 	vwp_pollspace(vwp, 256);
-	AZ(pthread_create(&vwp->poll_thread, NULL, vwp_main, vwp));
-	return (vwp);
+	Wait_UsePipe(w);
+	AZ(pthread_create(&vwp->thread, NULL, vwp_main, vwp));
 }
 
 /*--------------------------------------------------------------------*/
 
-const struct waiter waiter_poll = {
+static void __match_proto__(waiter_fini_f)
+vwp_fini(struct waiter *w)
+{
+	struct vwp *vwp;
+	void *vp;
+
+	CAST_OBJ_NOTNULL(vwp, w->priv, VWP_MAGIC);
+	AZ(pthread_join(vwp->thread, &vp));
+	free(vwp->pollfd);
+}
+
+/*--------------------------------------------------------------------*/
+
+const struct waiter_impl waiter_poll = {
 	.name =		"poll",
-	.init =		vwp_poll_init,
-	.pass =		vwp_poll_pass,
+	.init =		vwp_init,
+	.fini =		vwp_fini,
+	.inject =	vwp_inject,
+	.evict =	vwp_evict,
+	.size =		sizeof(struct vwp),
 };

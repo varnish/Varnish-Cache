@@ -29,8 +29,6 @@
  * Common functions for the utilities
  */
 
-#include "vdef.h"
-
 typedef int VUT_cb_f(void);
 
 struct VUT {
@@ -41,6 +39,7 @@ struct VUT {
 	int		d_opt;
 	int		D_opt;
 	int		g_arg;
+	int		k_arg;
 	char		*P_arg;
 	char		*q_arg;
 	char		*r_arg;
@@ -64,7 +63,7 @@ struct VUT {
 extern struct VUT VUT;
 
 void VUT_Error(int status, const char *fmt, ...)
-	__printflike(2, 3);
+	__v_printflike(2, 3);
 
 int VUT_g_Arg(const char *arg);
 

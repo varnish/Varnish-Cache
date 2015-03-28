@@ -39,25 +39,24 @@
 #include <sys/event.h>
 
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "cache/cache.h"
 
 #include "waiter/waiter.h"
+#include "waiter/waiter_priv.h"
 #include "vtim.h"
-#include "vfil.h"
 
 #define NKEV	100
 
 struct vwk {
 	unsigned		magic;
 #define VWK_MAGIC		0x1cc2acc2
+	struct waiter		*waiter;
+
 	pthread_t		thread;
-	int			pipes[2];
 	int			kq;
 	struct kevent		ki[NKEV];
 	unsigned		nki;
-	VTAILQ_HEAD(,sess)	sesshead;
 };
 
 /*--------------------------------------------------------------------*/
@@ -75,12 +74,11 @@ vwk_kq_flush(struct vwk *vwk)
 }
 
 static void
-vwk_kq_sess(struct vwk *vwk, struct sess *sp, short arm)
+vwk_kq_sess(struct vwk *vwk, struct waited *sp, short arm)
 {
 
-	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	CHECK_OBJ_NOTNULL(sp, WAITED_MAGIC);
 	assert(sp->fd >= 0);
-	DSL(DBG_WAITER, sp->vxid, "KQ: EV_SET sp %p arm %x", sp, arm);
 	EV_SET(&vwk->ki[vwk->nki], sp->fd, EVFILT_READ, arm, 0, 0, sp);
 	if (++vwk->nki == NKEV)
 		vwk_kq_flush(vwk);
@@ -89,55 +87,52 @@ vwk_kq_sess(struct vwk *vwk, struct sess *sp, short arm)
 /*--------------------------------------------------------------------*/
 
 static void
-vwk_pipe_ev(struct vwk *vwk, const struct kevent *kp)
+vwk_inject(const struct waiter *w, struct waited *wp)
 {
-	int i, j;
-	struct sess *ss[NKEV];
+	struct vwk *vwk;
 
-	AN(kp->udata);
-	assert(kp->udata == vwk->pipes);
-	j = 0;
-	i = read(vwk->pipes[0], ss, sizeof ss);
-	if (i == -1 && errno == EAGAIN)
-		return;
-	while (i >= sizeof ss[0]) {
-		CHECK_OBJ_NOTNULL(ss[j], SESS_MAGIC);
-		assert(ss[j]->fd >= 0);
-		VTAILQ_INSERT_TAIL(&vwk->sesshead, ss[j], list);
-		vwk_kq_sess(vwk, ss[j], EV_ADD | EV_ONESHOT);
-		j++;
-		i -= sizeof ss[0];
-	}
-	AZ(i);
+	CAST_OBJ_NOTNULL(vwk, w->priv, VWK_MAGIC);
+	if (wp == w->pipe_w)
+		vwk_kq_sess(vwk, wp, EV_ADD);
+	else
+		vwk_kq_sess(vwk, wp, EV_ADD | EV_ONESHOT);
 }
+
+#if 0
+static void
+vwk_evict(const struct waiter *w, struct waited *wp)
+{
+	struct vwk *vwk;
+
+	CAST_OBJ_NOTNULL(vwk, w->priv, VWK_MAGIC);
+	vwk_kq_sess(vwk, wp, EV_DELETE);
+}
+#endif
 
 /*--------------------------------------------------------------------*/
 
 static void
-vwk_sess_ev(struct vwk *vwk, const struct kevent *kp, double now)
+vwk_sess_ev(const struct vwk *vwk, const struct kevent *kp, double now)
 {
-	struct sess *sp;
+	struct waited *sp;
+	double idle;
 
 	AN(kp->udata);
-	assert(kp->udata != vwk->pipes);
-	CAST_OBJ_NOTNULL(sp, kp->udata, SESS_MAGIC);
-	DSL(DBG_WAITER, sp->vxid, "KQ: sp %p kev data %lu flags 0x%x%s",
-	    sp, (unsigned long)kp->data, kp->flags,
-	    (kp->flags & EV_EOF) ? " EOF" : "");
+	CAST_OBJ_NOTNULL(sp, kp->udata, WAITED_MAGIC);
 
-	if (kp->data > 0) {
-		VTAILQ_REMOVE(&vwk->sesshead, sp, list);
-		SES_Handle(sp, now);
-		return;
+	idle = now - *vwk->waiter->tmo;
+
+	if (sp->idle <= idle) {
+		Wait_Handle(vwk->waiter, sp, WAITER_TIMEOUT, now);
 	} else if (kp->flags & EV_EOF) {
-		VTAILQ_REMOVE(&vwk->sesshead, sp, list);
-		SES_Delete(sp, SC_REM_CLOSE, now);
-		return;
+		Wait_Handle(vwk->waiter, sp, WAITER_REMCLOSE, now);
 	} else {
-		VSL(SLT_Debug, sp->vxid,
-		    "KQ: sp %p kev data %lu flags 0x%x%s",
-		    sp, (unsigned long)kp->data, kp->flags,
-		    (kp->flags & EV_EOF) ? " EOF" : "");
+		if (kp->data == 0)
+			VSL(SLT_Debug, 0,
+			    "KQR d %ju filter %d data %jd flags 0x%x idle %g",
+			    (uintmax_t)kp->ident, kp->filter,
+			    (intmax_t)kp->data, kp->flags, sp->idle - idle);
+		Wait_Handle(vwk->waiter, sp, WAITER_ACTION, now);
 	}
 }
 
@@ -148,109 +143,74 @@ vwk_thread(void *priv)
 {
 	struct vwk *vwk;
 	struct kevent ke[NKEV], *kp;
-	int j, n, dotimer;
-	double now, deadline;
-	struct sess *sp;
+	int j, n;
+	double now;
 
 	CAST_OBJ_NOTNULL(vwk, priv, VWK_MAGIC);
 	THR_SetName("cache-kqueue");
 
-	vwk->kq = kqueue();
-	assert(vwk->kq >= 0);
-
-	j = 0;
-	EV_SET(&ke[j], 0, EVFILT_TIMER, EV_ADD, 0, 100, NULL);
-	j++;
-	EV_SET(&ke[j], vwk->pipes[0], EVFILT_READ, EV_ADD, 0, 0, vwk->pipes);
-	j++;
-	AZ(kevent(vwk->kq, ke, j, NULL, 0, NULL));
+	vwk_kq_flush(vwk);
 
 	vwk->nki = 0;
-	while (1) {
-		dotimer = 0;
+	while (!vwk->waiter->dismantle) {
 		n = kevent(vwk->kq, vwk->ki, vwk->nki, ke, NKEV, NULL);
-		now = VTIM_real();
 		assert(n <= NKEV);
 		if (n == 0) {
 			/* This happens on OSX in m00011.vtc */
-			dotimer = 1;
 			(void)usleep(10000);
 		}
 		vwk->nki = 0;
+		now = VTIM_real();
 		for (kp = ke, j = 0; j < n; j++, kp++) {
-			if (kp->filter == EVFILT_TIMER) {
-				dotimer = 1;
-			} else if (kp->filter == EVFILT_READ &&
-			    kp->udata == vwk->pipes) {
-				vwk_pipe_ev(vwk, kp);
-			} else {
-				assert(kp->filter == EVFILT_READ);
-				vwk_sess_ev(vwk, kp, now);
-			}
+			assert(kp->filter == EVFILT_READ);
+			vwk_sess_ev(vwk, kp, now);
 		}
-		if (!dotimer)
-			continue;
-		/*
-		 * Make sure we have no pending changes for the fd's
-		 * we are about to close, in case the accept(2) in the
-		 * other thread creates new fd's betwen our close and
-		 * the kevent(2) at the top of this loop, the kernel
-		 * would not know we meant "the old fd of this number".
-		 */
-		vwk_kq_flush(vwk);
-		deadline = now - cache_param->timeout_idle;
-		for (;;) {
-			sp = VTAILQ_FIRST(&vwk->sesshead);
-			if (sp == NULL)
-				break;
-			if (sp->t_idle > deadline)
-				break;
-			VTAILQ_REMOVE(&vwk->sesshead, sp, list);
-			// XXX: not yet (void)VTCP_linger(sp->fd, 0);
-			SES_Delete(sp, SC_RX_TIMEOUT, now);
-		}
+		Wait_Handle(vwk->waiter, NULL, WAITER_ACTION, now);
 	}
 	NEEDLESS_RETURN(NULL);
 }
 
 /*--------------------------------------------------------------------*/
 
-static void
-vwk_pass(void *priv, struct sess *sp)
+static void __match_proto__(waiter_init_f)
+vwk_init(struct waiter *w)
 {
 	struct vwk *vwk;
 
-	CAST_OBJ_NOTNULL(vwk, priv, VWK_MAGIC);
+	CHECK_OBJ_NOTNULL(w, WAITER_MAGIC);
+	vwk = w->priv;
+	INIT_OBJ(vwk, VWK_MAGIC);
+	vwk->waiter = w;
 
-	WAIT_Write_Session(sp, vwk->pipes[1]);
-}
+	vwk->kq = kqueue();
+	assert(vwk->kq >= 0);
 
-/*--------------------------------------------------------------------*/
-
-static void *
-vwk_init(void)
-{
-	struct vwk *vwk;
-
-	ALLOC_OBJ(vwk, VWK_MAGIC);
-	AN(vwk);
-
-	VTAILQ_INIT(&vwk->sesshead);
-	AZ(pipe(vwk->pipes));
-
-	AZ(VFIL_nonblocking(vwk->pipes[0]));
-	AZ(VFIL_nonblocking(vwk->pipes[1]));
+	Wait_UsePipe(w);
 
 	AZ(pthread_create(&vwk->thread, NULL, vwk_thread, vwk));
-	return (vwk);
 }
 
 /*--------------------------------------------------------------------*/
 
-const struct waiter waiter_kqueue = {
+static void __match_proto__(waiter_fini_f)
+vwk_fini(struct waiter *w)
+{
+	struct vwk *vwk;
+	void *vp;
+
+	CAST_OBJ_NOTNULL(vwk, w->priv, VWK_MAGIC);
+	AZ(pthread_join(vwk->thread, &vp));
+	AZ(close(vwk->kq));
+}
+
+/*--------------------------------------------------------------------*/
+
+const struct waiter_impl waiter_kqueue = {
 	.name =		"kqueue",
 	.init =		vwk_init,
-	.pass =		vwk_pass,
+	.fini =		vwk_fini,
+	.inject =	vwk_inject,
+	.size =		sizeof(struct vwk),
 };
 
 #endif /* defined(HAVE_KQUEUE) */

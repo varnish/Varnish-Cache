@@ -1,0 +1,24 @@
+varnishtest "Test std.substr"
+
+server s1 -repeat 2 {
+	rxreq
+	txresp
+} -start
+
+varnish v1 -vcl+backend {
+	import ${vmod_std};
+
+	sub vcl_deliver {
+		set resp.http.sub = std.strstr(req.url, "b");
+	}
+} -start
+
+client c1 {
+	txreq -url "/foobar"
+	rxresp
+	expect resp.http.sub == "bar"
+
+	txreq -url "/quux"
+	rxresp
+	expect resp.http.sub == ""
+} -run

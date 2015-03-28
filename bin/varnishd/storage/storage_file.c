@@ -33,6 +33,7 @@
 
 #include <sys/mman.h>
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -40,6 +41,7 @@
 #include "storage/storage.h"
 
 #include "vnum.h"
+#include "vfil.h"
 
 #ifndef MAP_NOCORE
 #define MAP_NOCORE 0 /* XXX Linux */
@@ -99,19 +101,6 @@ struct smf_sc {
 /*--------------------------------------------------------------------*/
 
 static void
-smf_initfile(struct smf_sc *sc, const char *size)
-{
-	sc->filesize = STV_FileSize(sc->fd, size, &sc->pagesize, "-sfile");
-
-	AZ(ftruncate(sc->fd, (off_t)sc->filesize));
-
-	/* XXX: force block allocation here or in open ? */
-}
-
-static const char default_size[] = "100M";
-static const char default_filename[] = ".";
-
-static void
 smf_init(struct stevedore *parent, int ac, char * const *av)
 {
 	const char *size, *fn, *r;
@@ -121,14 +110,14 @@ smf_init(struct stevedore *parent, int ac, char * const *av)
 
 	AZ(av[ac]);
 
-	fn = default_filename;
-	size = default_size;
+	size = NULL;
 	page_size = getpagesize();
 
 	if (ac > 3)
 		ARGV_ERR("(-sfile) too many arguments\n");
-	if (ac > 0 && *av[0] != '\0')
-		fn = av[0];
+	if (ac < 1 || *av[0] == '\0')
+		ARGV_ERR("(-sfile) path is mandatory\n");
+	fn = av[0];
 	if (ac > 1 && *av[1] != '\0')
 		size = av[1];
 	if (ac > 2 && *av[2] != '\0') {
@@ -139,7 +128,6 @@ smf_init(struct stevedore *parent, int ac, char * const *av)
 	}
 
 	AN(fn);
-	AN(size);
 
 	ALLOC_OBJ(sc, SMF_SC_MAGIC);
 	XXXAN(sc);
@@ -152,9 +140,10 @@ smf_init(struct stevedore *parent, int ac, char * const *av)
 	parent->priv = sc;
 
 	(void)STV_GetFile(fn, &sc->fd, &sc->filename, "-sfile");
-
 	mgt_child_inherit(sc->fd, "storage_file");
-	smf_initfile(sc, size);
+	sc->filesize = STV_FileSize(sc->fd, size, &sc->pagesize, "-sfile");
+	if (VFIL_allocate(sc->fd, (off_t)sc->filesize, 0))
+		ARGV_ERR("(-sfile) allocation error: %s\n", strerror(errno));
 }
 
 /*--------------------------------------------------------------------
@@ -354,9 +343,8 @@ new_smf(struct smf_sc *sc, unsigned char *ptr, off_t off, size_t len)
 	struct smf *sp, *sp2;
 
 	AZ(len % sc->pagesize);
-	sp = calloc(sizeof *sp, 1);
+	ALLOC_OBJ(sp, SMF_MAGIC);
 	XXXAN(sp);
-	sp->magic = SMF_MAGIC;
 	sp->s.magic = STORAGE_MAGIC;
 	sc->stats->g_smf++;
 
@@ -443,7 +431,7 @@ smf_open(const struct stevedore *st)
 
 	/* XXX */
 	if (sum < MINPAGES * (off_t)getpagesize())
-		exit (2);
+		exit(4);
 
 	sc->stats->g_space += sc->filesize;
 }
@@ -451,7 +439,7 @@ smf_open(const struct stevedore *st)
 /*--------------------------------------------------------------------*/
 
 static struct storage *
-smf_alloc(struct stevedore *st, size_t size)
+smf_alloc(const struct stevedore *st, size_t size)
 {
 	struct smf *smf;
 	struct smf_sc *sc;
@@ -481,7 +469,6 @@ smf_alloc(struct stevedore *st, size_t size)
 	smf->s.priv = smf;
 	smf->s.ptr = smf->ptr;
 	smf->s.len = 0;
-	smf->s.stevedore = st;
 	return (&smf->s);
 }
 

@@ -67,7 +67,7 @@ vcl_error is now vcl_backend_error
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 To make a distinction between internally generated errors and
-VCL synthetic responses, `vcl_backend_error` will be called when 
+VCL synthetic responses, `vcl_backend_error` will be called when
 varnish encounters an error when trying to fetch an object.
 
 error() is now synth()
@@ -145,14 +145,7 @@ The `purge;` keyword has been retired.
 obj is now read-only
 ~~~~~~~~~~~~~~~~~~~~
 
-`obj` is now read-only. `obj.hits`, if enabled in VCL, now counts per
-objecthead, not per object. `obj.last_use` has been retired.
-
-Note that obj.hits may not be reset in some cases where bans are in use. See
-bug 1492_ for details.
-
-.. _1492: https://www.varnish-cache.org/trac/ticket/1492
-
+`obj` is now read-only.  `obj.last_use` has been retired.
 
 Some return values have been replaced
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -192,13 +185,22 @@ The `remove` keyword is gone
 Replaced by `unset`.
 
 
+X-Forwarded-For is now set before vcl_recv
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In many cases, people unintentionally removed X-Forwarded-For when
+implementing their own vcl_recv. Therefore it has been moved to before
+vcl_recv, so if you don't want an IP added to it, you should remove it
+in vcl_recv.
+
 
 Changes to existing parameters
 ==============================
 
 session_linger
 ~~~~~~~~~~~~~~
-`session_linger` has been renamed to `timeout_linger`.
+`session_linger` has been renamed to `timeout_linger` and it is in
+seconds now (previously was milliseconds).
 
 sess_timeout
 ~~~~~~~~~~~~
@@ -217,6 +219,14 @@ If you are using a lot of VMODs,  you may need to increase
 either `workspace_backend` and `workspace_client` based on where
 your VMOD is doing its work.
 
+thread_pool_purge_delay
+~~~~~~~~~~~~~~~~~~~~~~~
+`thread_pool_purge_delay` has been renamed to `thread_pool_destroy_delay`
+and it is in seconds now (previously was milliseconds).
+
+thread_pool_add_delay and thread_pool_fail_delay
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+They are in seconds now (previously were milliseconds).
 
 New parameters since 3.0
 ========================
@@ -233,7 +243,6 @@ Other changes
 New log filtering
 ~~~~~~~~~~~~~~~~~
 
-The logging framework has a new filtering language, which means
-that the -m switch has been replaced with a new -q switch.
-See :ref:`ref-vsl-query` for more information about the new
-query language.
+The logging framework has a new filtering language, which means that
+the -m switch has been replaced with a new -q switch.  See
+:ref:`vsl-query(7)` for more information about the new query language.

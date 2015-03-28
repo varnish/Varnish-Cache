@@ -57,7 +57,9 @@
 #include "vapi/vsl.h"
 #include "vapi/voptget.h"
 #include "vas.h"
+#include "vdef.h"
 #include "vcs.h"
+#include "vnum.h"
 #include "vsb.h"
 #include "vut.h"
 #include "vqueue.h"
@@ -182,16 +184,61 @@ flushout(void)
 	return (0);
 }
 
+static int
+vsb_esc_cat(struct vsb *sb, const char *b, const char *e)
+{
+	AN(b);
+
+	for (; b < e; b++) {
+		if (isspace(*b)) {
+			switch (*b) {
+			case '\n':
+				VSB_cat(sb, "\\n");
+				break;
+			case '\t':
+				VSB_cat(sb, "\\t");
+				break;
+			case '\f':
+				VSB_cat(sb, "\\f");
+				break;
+			case '\r':
+				VSB_cat(sb, "\\r");
+				break;
+			case '\v':
+				VSB_cat(sb, "\\v");
+				break;
+			default:
+				VSB_putc(sb, *b);
+				break;
+			}
+		} else if (isprint(*b)) {
+			switch (*b) {
+			case '"':
+				VSB_cat(sb, "\\\"");
+				break;
+			case '\\':
+				VSB_cat(sb, "\\\\");
+				break;
+			default:
+				VSB_putc(sb, *b);
+				break;
+			}
+		} else
+			VSB_printf(sb, "\\x%02hhx", *b);
+	}
+
+	return (VSB_error(sb));
+}
+
 static inline int
 vsb_fcat(struct vsb *vsb, const struct fragment *f, const char *dflt)
 {
-
 	if (f->gen == CTX.gen) {
 		assert(f->b <= f->e);
-		return (VSB_bcat(vsb, f->b, f->e - f->b));
+		return (vsb_esc_cat(vsb, f->b, f->e));
 	}
 	if (dflt)
-		return (VSB_cat(vsb, dflt));
+		return (vsb_esc_cat(vsb, dflt, dflt + strlen(dflt)));
 	return (-1);
 }
 
@@ -226,10 +273,10 @@ format_fragment(const struct format *format)
 	if (format->frag->gen != CTX.gen) {
 		if (format->string == NULL)
 			return (-1);
-		AZ(VSB_cat(CTX.vsb, format->string));
+		AZ(vsb_esc_cat(CTX.vsb, format->string,
+		    format->string + strlen(format->string)));
 		return (0);
 	}
-
 	AZ(vsb_fcat(CTX.vsb, format->frag, NULL));
 	return (1);
 }
@@ -238,16 +285,13 @@ static int __match_proto__(format_f)
 format_time(const struct format *format)
 {
 	double t_start, t_end;
-	char *p;
 	char buf[64];
 	time_t t;
 	struct tm tm;
 
 	CHECK_OBJ_NOTNULL(format, FORMAT_MAGIC);
 	if (CTX.frag[F_tstart].gen == CTX.gen) {
-		t_start = strtod(CTX.frag[F_tstart].b, &p);
-		if (p != CTX.frag[F_tstart].e)
-			t_start = NAN;
+		t_start = VNUM(CTX.frag[F_tstart].b);
 	} else
 		t_start = NAN;
 	if (isnan(t_start)) {
@@ -260,8 +304,8 @@ format_time(const struct format *format)
 
 	/* Missing t_end defaults to t_start */
 	if (CTX.frag[F_tend].gen == CTX.gen) {
-		t_end = strtod(CTX.frag[F_tend].b, &p);
-		if (p != CTX.frag[F_tend].e)
+		t_end = VNUM(CTX.frag[F_tend].b);
+		if (isnan(t_end))
 			t_end = t_start;
 	} else
 		t_end = t_start;
@@ -300,7 +344,7 @@ format_requestline(const struct format *format)
 		AZ(vsb_fcat(CTX.vsb, &CTX.frag[F_host], NULL));
 	} else
 		AZ(VSB_cat(CTX.vsb, "http://localhost"));
-	AZ(vsb_fcat(CTX.vsb, &CTX.frag[F_U], "-"));
+	AZ(vsb_fcat(CTX.vsb, &CTX.frag[F_U], ""));
 	AZ(vsb_fcat(CTX.vsb, &CTX.frag[F_q], ""));
 	AZ(VSB_putc(CTX.vsb, ' '));
 	AZ(vsb_fcat(CTX.vsb, &CTX.frag[F_H], "HTTP/1.0"));
@@ -318,13 +362,14 @@ format_auth(const struct format *format)
 		CTX.frag[F_auth].e)) {
 		if (format->string == NULL)
 			return (-1);
-		AZ(VSB_cat(CTX.vsb, format->string));
+		AZ(vsb_esc_cat(CTX.vsb, format->string,
+			format->string + strlen(format->string)));
 		return (0);
 	}
 	q = strchr(buf, ':');
 	if (q != NULL)
 		*q = '\0';
-	AZ(VSB_cat(CTX.vsb, buf));
+	AZ(vsb_esc_cat(CTX.vsb, buf, buf + strlen(buf)));
 	return (1);
 }
 
@@ -653,7 +698,7 @@ isprefix(const char *str, const char *prefix, const char *end,
 }
 
 static void
-frag_fields(const char *b, const char *e, ...)
+frag_fields(int force, const char *b, const char *e, ...)
 {
 	va_list ap;
 	const char *p, *q;
@@ -680,7 +725,7 @@ frag_fields(const char *b, const char *e, ...)
 			q++;
 
 		if (field == n) {
-			if (frag->gen != CTX.gen) {
+			if (frag->gen != CTX.gen || force) {
 				/* We only grab the same matching field once */
 				frag->gen = CTX.gen;
 				frag->b = p;
@@ -696,10 +741,10 @@ frag_fields(const char *b, const char *e, ...)
 }
 
 static void
-frag_line(const char *b, const char *e, struct fragment *f)
+frag_line(int force, const char *b, const char *e, struct fragment *f)
 {
 
-	if (f->gen == CTX.gen)
+	if (f->gen == CTX.gen && !force)
 		/* We only grab the same matching record once */
 		return;
 
@@ -724,7 +769,7 @@ process_hdr(const struct watch_head *head, const char *b, const char *e)
 	VTAILQ_FOREACH(w, head, list) {
 		if (strncasecmp(b, w->key, w->keylen))
 			continue;
-		frag_line(b + w->keylen, e, &w->frag);
+		frag_line(1, b + w->keylen, e, &w->frag);
 	}
 }
 
@@ -737,7 +782,6 @@ dispatch_f(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 	const char *b, *e, *p;
 	struct watch *w;
 	int i, skip;
-
 	(void)vsl;
 	(void)priv;
 
@@ -760,33 +804,38 @@ dispatch_f(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 				e--;
 
 			switch (tag) {
+			case SLT_HttpGarbage:
+				skip = 1;
+				break;
 			case SLT_PipeAcct:
-				frag_fields(b, e,
+				frag_fields(0, b, e,
 				    3, &CTX.frag[F_I],
 				    4, &CTX.frag[F_O],
 				    0, NULL);
 				break;
 			case SLT_ReqStart:
-				frag_fields(b, e, 1, &CTX.frag[F_h], 0, NULL);
+				frag_fields(0, b, e,
+				    1, &CTX.frag[F_h],
+				    0, NULL);
 				break;
 			case SLT_ReqMethod:
-				frag_line(b, e, &CTX.frag[F_m]);
+				frag_line(0, b, e, &CTX.frag[F_m]);
 				break;
 			case SLT_ReqURL:
 				p = memchr(b, '?', e - b);
 				if (p == NULL)
 					p = e;
-				frag_line(b, p, &CTX.frag[F_U]);
-				frag_line(p, e, &CTX.frag[F_q]);
+				frag_line(0, b, p, &CTX.frag[F_U]);
+				frag_line(0, p, e, &CTX.frag[F_q]);
 				break;
 			case SLT_ReqProtocol:
-				frag_line(b, e, &CTX.frag[F_H]);
+				frag_line(0, b, e, &CTX.frag[F_H]);
 				break;
 			case SLT_RespStatus:
-				frag_line(b, e, &CTX.frag[F_s]);
+				frag_line(1, b, e, &CTX.frag[F_s]);
 				break;
 			case SLT_ReqAcct:
-				frag_fields(b, e,
+				frag_fields(0, b, e,
 				    3, &CTX.frag[F_I],
 				    5, &CTX.frag[F_b],
 				    6, &CTX.frag[F_O],
@@ -794,26 +843,26 @@ dispatch_f(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 				break;
 			case SLT_Timestamp:
 				if (isprefix(b, "Start:", e, &p)) {
-					frag_fields(p, e, 1,
+					frag_fields(0, p, e, 1,
 					    &CTX.frag[F_tstart], 0, NULL);
 
 				} else if (isprefix(b, "Resp:", e, &p) ||
 					isprefix(b, "PipeSess:", e, &p)) {
-					frag_fields(p, e, 1,
+					frag_fields(0, p, e, 1,
 					    &CTX.frag[F_tend], 0, NULL);
 
 				} else if (isprefix(b, "Process:", e, &p) ||
 					isprefix(b, "Pipe:", e, &p)) {
-					frag_fields(p, e, 2,
+					frag_fields(0, p, e, 2,
 					    &CTX.frag[F_ttfb], 0, NULL);
 				}
 				break;
 			case SLT_ReqHeader:
 				if (isprefix(b, "Host:", e, &p))
-					frag_line(p, e, &CTX.frag[F_host]);
+					frag_line(0, p, e, &CTX.frag[F_host]);
 				else if (isprefix(b, "Authorization:", e, &p) &&
 				    isprefix(p, "basic", e, &p))
-					frag_line(p, e, &CTX.frag[F_auth]);
+					frag_line(0, p, e, &CTX.frag[F_auth]);
 				break;
 			case SLT_VCL_call:
 				if (!strcasecmp(b, "recv")) {
@@ -847,7 +896,6 @@ dispatch_f(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 			default:
 				break;
 			}
-
 			if (tag == SLT_VCL_Log) {
 				VTAILQ_FOREACH(w, &CTX.watch_vcl_log, list) {
 					CHECK_OBJ_NOTNULL(w, WATCH_MAGIC);
@@ -859,7 +907,7 @@ dispatch_f(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 					p++;
 					if (p > e)
 						continue;
-					frag_line(p, e, &w->frag);
+					frag_line(0, p, e, &w->frag);
 				}
 			}
 			if (tag == SLT_ReqHeader)

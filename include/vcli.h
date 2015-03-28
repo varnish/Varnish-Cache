@@ -43,26 +43,12 @@
  *	const char *	request_help (for long help)
  *	unsigned	minimum_arguments
  *	unsigned	maximum_arguments
- *
- * If you only want a subset of these fields do this:
- *	#define CLIF145(a,b,c,d,e)	a,d,e
- *	[...]
- *	CLIF145(CLI_URL_QUERY)
- *
  */
-
-#define CLI_URL_QUERY							\
-	"url.query",							\
-	"url.query <url>",						\
-	"\tQuery the cache status of a specific URL.\n"			\
-	    "\tReturns the TTL, size and checksum of the object.",	\
-	1, 1
 
 #define CLI_BAN								\
 	"ban",								\
-	"ban <field> <operator> <arg> [&& <field> <oper> <arg>]...",	\
-	"\tAll objects where the all the conditions match will be "	\
-	    "marked obsolete.",						\
+	"ban <field> <operator> <arg> [&& <field> <oper> <arg> ...]",	\
+	"\tMark obsolete all objects where all the conditions match.",	\
 	3, UINT_MAX
 
 #define CLI_BAN_LIST							\
@@ -73,14 +59,20 @@
 
 #define CLI_VCL_LOAD							\
 	"vcl.load",							\
-	"vcl.load <configname> <filename>",				\
+	"vcl.load <configname> <filename> [auto|cold|warm]",		\
 	"\tCompile and load the VCL file under the name provided.",	\
-	2, 2
+	2, 3
 
 #define CLI_VCL_INLINE							\
 	"vcl.inline",							\
-	"vcl.inline <configname> <quoted_VCLstring>",			\
+	"vcl.inline <configname> <quoted_VCLstring> [auto|cold|warm]",	\
 	"\tCompile and load the VCL data under the name provided.",	\
+	2, 3
+
+#define CLI_VCL_STATE							\
+	"vcl.state",							\
+	"vcl.state <configname> [auto|cold|warm]",			\
+	"\tForce the state of the named configuration.",		\
 	2, 2
 
 #define CLI_VCL_DISCARD							\
@@ -97,7 +89,7 @@
 
 #define CLI_VCL_SHOW							\
 	"vcl.show",							\
-	"vcl.show <configname>",					\
+	"vcl.show [-v] <configname>",					\
 	"\tDisplay the source code for the specified configuration.",	\
 	1, 2
 
@@ -122,7 +114,7 @@
 #define CLI_SERVER_STOP							\
 	"stop",								\
 	"stop",								\
-	"\tStop the Varnish cache process",				\
+	"\tStop the Varnish cache process.",				\
 	0, 0
 
 #define CLI_SERVER_START						\
@@ -133,20 +125,20 @@
 
 #define CLI_PING							\
 	"ping",								\
-	"ping [timestamp]",						\
-	"\tKeep connection alive",					\
+	"ping [<timestamp>]",						\
+	"\tKeep connection alive.",					\
 	0, 1
 
 #define CLI_HELP							\
 	"help",								\
-	"help [command]",						\
-	"\tShow command/protocol help",					\
+	"help [<command>]",						\
+	"\tShow command/protocol help.",				\
 	0, 1
 
 #define CLI_QUIT							\
 	"quit",								\
 	"quit",								\
-	"\tClose connection",						\
+	"\tClose connection.",						\
 	0, 0
 
 #define CLI_SERVER_STATUS						\
@@ -163,7 +155,7 @@
 
 #define CLI_AUTH							\
 	"auth",								\
-	"auth response",						\
+	"auth <response>",						\
 	"\tAuthenticate.",						\
 	1, 1
 
@@ -175,9 +167,9 @@
 
 #define CLI_PANIC_CLEAR							\
 	"panic.clear",							\
-	"panic.clear",							\
+	"panic.clear [-z]",						\
 	"\tClear the last panic, if any.",				\
-	0, 0
+	0, 1
 
 /*
  * Status/return codes in the CLI protocol

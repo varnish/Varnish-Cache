@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2014 Varnish Software AS
  * All rights reserved.
  *
  * Author: Martin Blix Grydeland <martin@varnish-software.com>
@@ -34,11 +34,11 @@
 
 #include <stdlib.h>
 #include <stddef.h>
-#include <stdio.h>
 
 #include "cache.h"
 
 #include "hash/hash_slinger.h"
+#include "cache/cache_filter.h"
 
 static struct mempool		*vbopool;
 
@@ -82,6 +82,7 @@ VBO_Free(struct busyobj **bop)
 	bo = *bop;
 	*bop = NULL;
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	AZ(bo->htc);
 	AZ(bo->refcount);
 	AZ(pthread_cond_destroy(&bo->cond));
 	Lck_Delete(&bo->mtx);
@@ -144,13 +145,18 @@ VBO_GetBusyObj(struct worker *wrk, const struct req *req)
 
 	bo->do_stream = 1;
 
-	bo->director = req->director_hint;
+	bo->director_req = req->director_hint;
 	bo->vcl = req->vcl;
 	VCL_Ref(bo->vcl);
 
 	bo->t_first = bo->t_prev = NAN;
-	bo->content_length = -1;
 	bo->doclose = SC_NULL;
+
+	memcpy(bo->digest, req->digest, sizeof bo->digest);
+
+	VRTPRIV_init(bo->privs);
+
+	VFP_Setup(bo->vfc);
 
 	return (bo);
 }
@@ -186,6 +192,11 @@ VBO_DerefBusyObj(struct worker *wrk, struct busyobj **pbo)
 	if (r)
 		return;
 
+	AZ(bo->htc);
+
+	VRTPRIV_dynamic_kill(bo->privs, (uintptr_t)bo);
+	assert(VTAILQ_EMPTY(&bo->privs->privs));
+
 	VSLb(bo->vsl, SLT_BereqAcct, "%ju %ju %ju %ju %ju %ju",
 	    (uintmax_t)bo->acct.bereq_hdrbytes,
 	    (uintmax_t)bo->acct.bereq_bodybytes,
@@ -196,9 +207,11 @@ VBO_DerefBusyObj(struct worker *wrk, struct busyobj **pbo)
 
 	VSL_End(bo->vsl);
 
+	AZ(bo->htc);
+
 	if (bo->fetch_objcore != NULL) {
 		AN(wrk);
-		(void)HSH_DerefObjCore(&wrk->stats, &bo->fetch_objcore);
+		(void)HSH_DerefObjCore(wrk, &bo->fetch_objcore);
 	}
 
 	VCL_Rel(&bo->vcl);
@@ -218,7 +231,6 @@ VBO_DerefBusyObj(struct worker *wrk, struct busyobj **pbo)
 void
 VBO_extend(struct busyobj *bo, ssize_t l)
 {
-	struct storage *st;
 
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 	CHECK_OBJ_NOTNULL(bo->vfc, VFP_CTX_MAGIC);
@@ -226,27 +238,29 @@ VBO_extend(struct busyobj *bo, ssize_t l)
 		return;
 	assert(l > 0);
 	Lck_Lock(&bo->mtx);
-	st = VTAILQ_LAST(&bo->vfc->body->list, storagehead);
-	CHECK_OBJ_NOTNULL(st, STORAGE_MAGIC);
-	st->len += l;
-	bo->vfc->body->len += l;
+	ObjExtend(bo->wrk, bo->vfc->oc, l);
 	AZ(pthread_cond_broadcast(&bo->cond));
 	Lck_Unlock(&bo->mtx);
 }
 
 ssize_t
-VBO_waitlen(struct busyobj *bo, ssize_t l)
+VBO_waitlen(struct worker *wrk, struct busyobj *bo, ssize_t l)
 {
+	ssize_t rv;
+
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 	Lck_Lock(&bo->mtx);
+	rv = ObjGetLen(wrk, bo->fetch_objcore);
 	while (1) {
-		assert(l <= bo->vfc->body->len || bo->state == BOS_FAILED);
-		if (bo->vfc->body->len > l || bo->state >= BOS_FINISHED)
+		assert(l <= rv || bo->state == BOS_FAILED);
+		if (rv > l || bo->state >= BOS_FINISHED)
 			break;
 		(void)Lck_CondWait(&bo->cond, &bo->mtx, 0);
+		rv = ObjGetLen(wrk, bo->fetch_objcore);
 	}
-	l = bo->vfc->body->len;
 	Lck_Unlock(&bo->mtx);
-	return (l);
+	return (rv);
 }
 
 void

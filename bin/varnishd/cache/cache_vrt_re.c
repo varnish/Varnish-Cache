@@ -35,8 +35,21 @@
 
 #include "cache.h"
 
-#include "vre.h"
 #include "vrt.h"
+
+static void
+Tadd(char **b, char *e, const char *p, int l)
+{
+	assert((*b) <= e);
+
+	if (l <= 0) {
+	} if ((*b) + l < e) {
+		memcpy((*b), p, l);
+		(*b) += l;
+	} else {
+		(*b) = e;
+	}
+}
 
 void
 VRT_re_init(void **rep, const char *re)
@@ -62,7 +75,7 @@ VRT_re_fini(void *rep)
 }
 
 int
-VRT_re_match(const struct vrt_ctx *ctx, const char *s, void *re)
+VRT_re_match(VRT_CTX, const char *s, void *re)
 {
 	vre_t *t;
 	int i;
@@ -81,17 +94,19 @@ VRT_re_match(const struct vrt_ctx *ctx, const char *s, void *re)
 }
 
 const char *
-VRT_regsub(const struct vrt_ctx *ctx, int all, const char *str, void *re,
+VRT_regsub(VRT_CTX, int all, const char *str, void *re,
     const char *sub)
 {
 	int ovector[30];
 	vre_t *t;
 	int i, l;
-	txt res;
+	char *res_b;
+	char *res_e;
 	char *b0;
 	const char *s;
 	unsigned u, x;
 	int options = 0;
+	int offset = 0;
 	size_t len;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -115,36 +130,35 @@ VRT_regsub(const struct vrt_ctx *ctx, int all, const char *str, void *re,
 	}
 
 	u = WS_Reserve(ctx->ws, 0);
-	res.e = res.b = b0 = ctx->ws->f;
-	res.e += u;
+	res_e = res_b = b0 = ctx->ws->f;
+	res_e += u;
 
 	do {
 		/* Copy prefix to match */
-		Tadd(&res, str, ovector[0]);
+		Tadd(&res_b, res_e, str + offset, ovector[0] - offset);
 		for (s = sub ; *s != '\0'; s++ ) {
 			if (*s != '\\' || s[1] == '\0') {
-				if (res.b < res.e)
-					*res.b++ = *s;
+				if (res_b < res_e)
+					*res_b++ = *s;
 				continue;
 			}
 			s++;
 			if (isdigit(*s)) {
 				x = *s - '0';
 				l = ovector[2*x+1] - ovector[2*x];
-				Tadd(&res, str + ovector[2*x], l);
+				Tadd(&res_b, res_e, str + ovector[2*x], l);
 				continue;
 			} else {
-				if (res.b < res.e)
-					*res.b++ = *s;
+				if (res_b < res_e)
+					*res_b++ = *s;
 			}
 		}
-		str += ovector[1];
-		len -= ovector[1];
+		offset = ovector[1];
 		if (!all)
 			break;
-		memset(&ovector, 0, sizeof(ovector));
+		memset(ovector, 0, sizeof(ovector));
 		options |= VRE_NOTEMPTY;
-		i = VRE_exec(t, str, len, 0, options, ovector, 30,
+		i = VRE_exec(t, str, len, offset, options, ovector, 30,
 		    &cache_param->vre_limits);
 		if (i < VRE_ERROR_NOMATCH ) {
 			WS_Release(ctx->ws, 0);
@@ -155,12 +169,12 @@ VRT_regsub(const struct vrt_ctx *ctx, int all, const char *str, void *re,
 	} while (i != VRE_ERROR_NOMATCH);
 
 	/* Copy suffix to match */
-	Tadd(&res, str, len+1);
-	if (res.b >= res.e) {
+	Tadd(&res_b, res_e, str + offset, 1 + len - offset);
+	if (res_b >= res_e) {
 		WS_Release(ctx->ws, 0);
 		return (str);
 	}
-	Tcheck(res);
-	WS_ReleaseP(ctx->ws, res.b);
+	assert(res_b <= res_e);
+	WS_ReleaseP(ctx->ws, res_b);
 	return (b0);
 }

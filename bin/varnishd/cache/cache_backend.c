@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -26,66 +26,21 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * Handle backend connections and backend request structures.
+ * The director implementation for VCL backends.
  *
  */
 
 #include "config.h"
 
-#include <poll.h>
 #include <stdlib.h>
-#include <stddef.h>
-#include <stdio.h>
 
 #include "cache.h"
 
 #include "cache_backend.h"
+#include "cache_director.h"
+#include "vcl.h"
 #include "vrt.h"
 #include "vtcp.h"
-
-static struct mempool	*vbcpool;
-
-static unsigned		vbcps = sizeof(struct vbc);
-
-/*--------------------------------------------------------------------
- * The "simple" director really isn't, since thats where all the actual
- * connections happen.  Nonetheless, pretend it is simple by sequestering
- * the directoricity of it under this line.
- */
-
-struct vdi_simple {
-	unsigned		magic;
-#define VDI_SIMPLE_MAGIC	0x476d25b7
-	struct director		dir;
-	struct backend		*backend;
-	const struct vrt_backend *vrt;
-};
-
-/*--------------------------------------------------------------------
- * Create default Host: header for backend request
- */
-void
-VDI_AddHostHeader(struct http *hp, const struct vbc *vbc)
-{
-
-	CHECK_OBJ_NOTNULL(vbc, VBC_MAGIC);
-	CHECK_OBJ_NOTNULL(vbc->vdis, VDI_SIMPLE_MAGIC);
-	http_PrintfHeader(hp,
-	    "Host: %s", vbc->vdis->vrt->hosthdr);
-}
-
-/*--------------------------------------------------------------------*/
-
-/* Private interface from backend_cfg.c */
-void
-VBE_ReleaseConn(struct vbc *vc)
-{
-
-	CHECK_OBJ_NOTNULL(vc, VBC_MAGIC);
-	assert(vc->backend == NULL);
-	assert(vc->fd < 0);
-	MPL_Free(vbcpool, vc);
-}
 
 #define FIND_TMO(tmx, dst, bo, be)					\
 	do {								\
@@ -96,128 +51,6 @@ VBE_ReleaseConn(struct vbc *vc)
 		if (dst == 0.0)						\
 			dst = cache_param->tmx;				\
 	} while (0)
-
-/*--------------------------------------------------------------------
- * Attempt to connect to a given addrinfo entry.
- *
- * Must be called with locked backend, but will release the backend
- * lock during the slow/sleeping stuff, so that other worker threads
- * can have a go, while we ponder.
- *
- */
-
-static int
-vbe_TryConnect(const struct busyobj *bo, int pf,
-    const struct suckaddr *sa, const struct vdi_simple *vs)
-{
-	int s, i, tmo;
-	double tmod;
-
-	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
-	CHECK_OBJ_NOTNULL(vs, VDI_SIMPLE_MAGIC);
-
-	s = socket(pf, SOCK_STREAM, 0);
-	if (s < 0)
-		return (s);
-
-	FIND_TMO(connect_timeout, tmod, bo, vs->vrt);
-
-	tmo = (int)(tmod * 1000.0);
-
-	i = VTCP_connect(s, sa, tmo);
-
-	if (i != 0) {
-		AZ(close(s));
-		return (-1);
-	}
-
-	return (s);
-}
-
-/*--------------------------------------------------------------------*/
-
-static void
-bes_conn_try(struct busyobj *bo, struct vbc *vc, const struct vdi_simple *vs)
-{
-	int s;
-	struct backend *bp = vs->backend;
-	char abuf1[VTCP_ADDRBUFSIZE];
-	char pbuf1[VTCP_PORTBUFSIZE];
-
-	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
-	CHECK_OBJ_NOTNULL(vs, VDI_SIMPLE_MAGIC);
-
-	Lck_Lock(&bp->mtx);
-	bp->refcount++;
-	bp->n_conn++;		/* It mostly works */
-	Lck_Unlock(&bp->mtx);
-
-	s = -1;
-	assert(bp->ipv6 != NULL || bp->ipv4 != NULL);
-
-	/* release lock during stuff that can take a long time */
-
-	if (cache_param->prefer_ipv6 && bp->ipv6 != NULL) {
-		s = vbe_TryConnect(bo, PF_INET6, bp->ipv6, vs);
-		vc->addr = bp->ipv6;
-	}
-	if (s == -1 && bp->ipv4 != NULL) {
-		s = vbe_TryConnect(bo, PF_INET, bp->ipv4, vs);
-		vc->addr = bp->ipv4;
-	}
-	if (s == -1 && !cache_param->prefer_ipv6 && bp->ipv6 != NULL) {
-		s = vbe_TryConnect(bo, PF_INET6, bp->ipv6, vs);
-		vc->addr = bp->ipv6;
-	}
-
-	vc->fd = s;
-	if (s < 0) {
-		Lck_Lock(&bp->mtx);
-		bp->n_conn--;
-		bp->refcount--;		/* Only keep ref on success */
-		Lck_Unlock(&bp->mtx);
-		vc->addr = NULL;
-	} else {
-		VTCP_myname(s, abuf1, sizeof abuf1, pbuf1, sizeof pbuf1);
-		VSLb(bo->vsl, SLT_BackendOpen, "%d %s %s %s ",
-		    vc->fd, vs->backend->display_name, abuf1, pbuf1);
-	}
-}
-
-/*--------------------------------------------------------------------
- * Check that there is still something at the far end of a given socket.
- * We poll the fd with instant timeout, if there are any events we can't
- * use it (backends are not allowed to pipeline).
- */
-
-static int
-vbe_CheckFd(int fd)
-{
-	struct pollfd pfd;
-
-	pfd.fd = fd;
-	pfd.events = POLLIN;
-	pfd.revents = 0;
-	return(poll(&pfd, 1, 0) == 0);
-}
-
-/*--------------------------------------------------------------------
- * Manage a pool of vbc structures.
- * XXX: as an experiment, make this caching controlled by a parameter
- * XXX: so we can see if it has any effect.
- */
-
-static struct vbc *
-vbe_NewConn(void)
-{
-	struct vbc *vc;
-
-	vc = MPL_Get(vbcpool, NULL);
-	XXXAN(vc);
-	vc->magic = VBC_MAGIC;
-	vc->fd = -1;
-	return (vc);
-}
 
 /*--------------------------------------------------------------------
  * Test if backend is healthy and report when it last changed
@@ -241,211 +74,304 @@ VBE_Healthy(const struct backend *backend, double *changed)
 }
 
 /*--------------------------------------------------------------------
- * Get a connection to a particular backend.
+ * Get a connection to the backend
  */
 
-static struct vbc *
-vbe_GetVbe(struct busyobj *bo, struct vdi_simple *vs)
+static int __match_proto__(vdi_getfd_f)
+vbe_dir_getfd(const struct director *d, struct busyobj *bo)
 {
 	struct vbc *vc;
 	struct backend *bp;
-
-	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
-	CHECK_OBJ_NOTNULL(vs, VDI_SIMPLE_MAGIC);
-	bp = vs->backend;
-	CHECK_OBJ_NOTNULL(bp, BACKEND_MAGIC);
-
-	/* first look for vbc's we can recycle */
-	while (1) {
-		Lck_Lock(&bp->mtx);
-		vc = VTAILQ_FIRST(&bp->connlist);
-		if (vc != NULL) {
-			bp->refcount++;
-			assert(vc->backend == bp);
-			assert(vc->fd >= 0);
-			AN(vc->addr);
-			VTAILQ_REMOVE(&bp->connlist, vc, list);
-		}
-		Lck_Unlock(&bp->mtx);
-		if (vc == NULL)
-			break;
-		if (vbe_CheckFd(vc->fd)) {
-			/* XXX locking of stats */
-			VSC_C_main->backend_reuse += 1;
-			VSLb(bo->vsl, SLT_Backend, "%d %s %s",
-			    vc->fd, bo->director->vcl_name,
-			    bp->display_name);
-			vc->vdis = vs;
-			vc->recycled = 1;
-			return (vc);
-		}
-		VSC_C_main->backend_toolate++;
-		VSLb(bo->vsl, SLT_BackendClose, "%d %s toolate",
-		    vc->fd, bp->display_name);
-
-		/* Checkpoint log to flush all info related to this connection
-		   before the OS reuses the FD */
-		VSL_Flush(bo->vsl, 0);
-
-		VTCP_close(&vc->fd);
-		VBE_DropRefConn(bp, NULL);
-		vc->backend = NULL;
-		VBE_ReleaseConn(vc);
-	}
-
-	if (!VBE_Healthy(bp, NULL)) {
-		VSC_C_main->backend_unhealthy++;
-		return (NULL);
-	}
-
-	if (vs->vrt->max_connections > 0 &&
-	    bp->n_conn >= vs->vrt->max_connections) {
-		VSC_C_main->backend_busy++;
-		return (NULL);
-	}
-
-	vc = vbe_NewConn();
-	assert(vc->fd == -1);
-	AZ(vc->backend);
-	bes_conn_try(bo, vc, vs);
-	if (vc->fd < 0) {
-		VBE_ReleaseConn(vc);
-		VSC_C_main->backend_fail++;
-		return (NULL);
-	}
-	vc->backend = bp;
-	VSC_C_main->backend_conn++;
-	VSLb(bo->vsl, SLT_Backend, "%d %s %s",
-	    vc->fd, bo->director->vcl_name, bp->display_name);
-	vc->vdis = vs;
-	return (vc);
-}
-
-/*--------------------------------------------------------------------
- *
- */
-
-void
-VBE_UseHealth(const struct director *vdi)
-{
-	struct vdi_simple *vs;
-
-	ASSERT_CLI();
-
-	if (strcmp(vdi->name, "simple"))
-		return;
-	CAST_OBJ_NOTNULL(vs, vdi->priv, VDI_SIMPLE_MAGIC);
-	if (vs->vrt->probe == NULL)
-		return;
-	VBP_Use(vs->backend, vs->vrt->probe);
-}
-
-/*--------------------------------------------------------------------
- *
- */
-
-void
-VBE_DiscardHealth(const struct director *vdi)
-{
-	struct vdi_simple *vs;
-
-	ASSERT_CLI();
-
-	if (strcmp(vdi->name, "simple"))
-		return;
-	CAST_OBJ_NOTNULL(vs, vdi->priv, VDI_SIMPLE_MAGIC);
-	if (vs->vrt->probe == NULL)
-		return;
-	VBP_Remove(vs->backend, vs->vrt->probe);
-}
-
-/*--------------------------------------------------------------------
- *
- */
-
-static struct vbc * __match_proto__(vdi_getfd_f)
-vdi_simple_getfd(const struct director *d, struct busyobj *bo)
-{
-	struct vdi_simple *vs;
-	struct vbc *vc;
+	double tmod;
+	const struct vrt_backend *vrt;
+	char abuf1[VTCP_ADDRBUFSIZE], abuf2[VTCP_ADDRBUFSIZE];
+	char pbuf1[VTCP_PORTBUFSIZE], pbuf2[VTCP_PORTBUFSIZE];
 
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
-	CAST_OBJ_NOTNULL(vs, d->priv, VDI_SIMPLE_MAGIC);
-	vc = vbe_GetVbe(bo, vs);
-	if (vc != NULL) {
-		FIND_TMO(first_byte_timeout,
-		    vc->first_byte_timeout, bo, vs->vrt);
-		FIND_TMO(between_bytes_timeout,
-		    vc->between_bytes_timeout, bo, vs->vrt);
+	CAST_OBJ_NOTNULL(bp, d->priv, BACKEND_MAGIC);
+	CAST_OBJ_NOTNULL(vrt, d->priv2, VRT_BACKEND_MAGIC);
+
+	if (!VBE_Healthy(bp, NULL)) {
+		// XXX: per backend stats ?
+		VSC_C_main->backend_unhealthy++;
+		return (-1);
 	}
-	return (vc);
+
+	if (vrt->max_connections > 0 &&
+	    bp->n_conn >= vrt->max_connections) {
+		// XXX: per backend stats ?
+		VSC_C_main->backend_busy++;
+		return (-1);
+	}
+
+	FIND_TMO(connect_timeout, tmod, bo, vrt);
+	vc = VBT_Get(bp->tcp_pool, tmod);
+	if (vc == NULL) {
+		// XXX: Per backend stats ?
+		VSC_C_main->backend_fail++;
+		VSLb(bo->vsl, SLT_FetchError, "no backend connection");
+		return (-1);
+	}
+
+	assert(vc->fd >= 0);
+	vc->backend = bp;
+	AN(vc->addr);
+
+	Lck_Lock(&bp->mtx);
+	bp->refcount++;
+	bp->n_conn++;
+	bp->vsc->conn++;
+	Lck_Unlock(&bp->mtx);
+
+	VTCP_myname(vc->fd, abuf1, sizeof abuf1, pbuf1, sizeof pbuf1);
+	VTCP_hisname(vc->fd, abuf2, sizeof abuf2, pbuf2, sizeof pbuf2);
+	VSLb(bo->vsl, SLT_BackendOpen, "%d %s %s %s %s %s",
+	    vc->fd, bp->display_name, abuf2, pbuf2, abuf1, pbuf1);
+
+	vc->backend->vsc->req++;
+	if (bo->htc == NULL)
+		bo->htc = WS_Alloc(bo->ws, sizeof *bo->htc);
+	AN(bo->htc);
+	INIT_OBJ(bo->htc, HTTP_CONN_MAGIC);
+	bo->htc->vbc = vc;
+	bo->htc->fd = vc->fd;
+	FIND_TMO(first_byte_timeout,
+	    bo->htc->first_byte_timeout, bo, vrt);
+	FIND_TMO(between_bytes_timeout,
+	    bo->htc->between_bytes_timeout, bo, vrt);
+	return (vc->fd);
 }
 
-static unsigned
-vdi_simple_healthy(const struct director *d, double *changed)
+static unsigned __match_proto__(vdi_healthy_f)
+vbe_dir_healthy(const struct director *d, const struct busyobj *bo,
+    double *changed)
 {
-	struct vdi_simple *vs;
 	struct backend *be;
 
 	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
-	CAST_OBJ_NOTNULL(vs, d->priv, VDI_SIMPLE_MAGIC);
-	be = vs->backend;
-	CHECK_OBJ_NOTNULL(be, BACKEND_MAGIC);
+	CHECK_OBJ_ORNULL(bo, BUSYOBJ_MAGIC);
+	CAST_OBJ_NOTNULL(be, d->priv, BACKEND_MAGIC);
 	return (VBE_Healthy(be, changed));
+}
+
+static void __match_proto__(vdi_finish_f)
+vbe_dir_finish(const struct director *d, struct worker *wrk,
+    struct busyobj *bo)
+{
+	struct backend *bp;
+
+	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+
+	CHECK_OBJ_NOTNULL(bo->htc, HTTP_CONN_MAGIC);
+	if (bo->htc->vbc == NULL)
+		return;
+	bp = bo->htc->vbc->backend;
+	if (bo->doclose != SC_NULL) {
+		VSLb(bo->vsl, SLT_BackendClose, "%d %s", bo->htc->vbc->fd,
+		    bp->display_name);
+		VBT_Close(bp->tcp_pool, &bo->htc->vbc);
+		Lck_Lock(&bp->mtx);
+	} else {
+		VSLb(bo->vsl, SLT_BackendReuse, "%d %s", bo->htc->vbc->fd,
+		    bp->display_name);
+		Lck_Lock(&bp->mtx);
+		VSC_C_main->backend_recycle++;
+		VBT_Recycle(bp->tcp_pool, &bo->htc->vbc);
+	}
+#define ACCT(foo)	bp->vsc->foo += bo->acct.foo;
+#include "tbl/acct_fields_bereq.h"
+#undef ACCT
+	Lck_Unlock(&bp->mtx);
+	bo->htc->vbc = NULL;
+	bo->htc = NULL;
+}
+
+static int __match_proto__(vdi_gethdrs_f)
+vbe_dir_gethdrs(const struct director *d, struct worker *wrk,
+    struct busyobj *bo)
+{
+	int i;
+	const struct vrt_backend *vrt;
+
+	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	CAST_OBJ_NOTNULL(vrt, d->priv2, VRT_BACKEND_MAGIC);
+
+	i = vbe_dir_getfd(d, bo);
+	if (i < 0) {
+		VSLb(bo->vsl, SLT_FetchError, "no backend connection");
+		return (-1);
+	}
+	AN(bo->htc);
+
+	i = V1F_fetch_hdr(wrk, bo, vrt->hosthdr);
+	/*
+	 * If we recycle a backend connection, there is a finite chance
+	 * that the backend closed it before we get a request to it.
+	 * Do a single retry in that case.
+	 */
+	if (i == 1 && bo->htc->vbc->recycled) {
+		vbe_dir_finish(d, wrk, bo);
+		AZ(bo->htc);
+		VSC_C_main->backend_retry++;
+		bo->doclose = SC_NULL;
+		i = vbe_dir_getfd(d, bo);
+		if (i < 0) {
+			VSLb(bo->vsl, SLT_FetchError, "no backend connection");
+			bo->htc = NULL;
+			return (-1);
+		}
+		AN(bo->htc);
+		i = V1F_fetch_hdr(wrk, bo, vrt->hosthdr);
+	}
+	if (i != 0) {
+		vbe_dir_finish(d, wrk, bo);
+		bo->doclose = SC_NULL;
+		AZ(bo->htc);
+	} else {
+		AN(bo->htc->vbc);
+	}
+	return (i);
+}
+
+static int __match_proto__(vdi_getbody_f)
+vbe_dir_getbody(const struct director *d, struct worker *wrk,
+    struct busyobj *bo)
+{
+
+	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	CHECK_OBJ_NOTNULL(bo->vfc, VFP_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(bo->htc, HTTP_CONN_MAGIC);
+
+	V1F_Setup_Fetch(bo->vfc, bo->htc);
+	return (0);
+}
+
+static const struct suckaddr * __match_proto__(vdi_getip_f)
+vbe_dir_getip(const struct director *d, struct worker *wrk,
+    struct busyobj *bo)
+{
+
+	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	CHECK_OBJ_NOTNULL(bo->htc, HTTP_CONN_MAGIC);
+	CHECK_OBJ_NOTNULL(bo->htc->vbc, VBC_MAGIC);
+
+	return (bo->htc->vbc->addr);
+}
+
+/*--------------------------------------------------------------------*/
+
+static void
+vbe_dir_http1pipe(const struct director *d, struct req *req, struct busyobj *bo)
+{
+	int i;
+
+	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+
+	i = vbe_dir_getfd(d, bo);
+	V1P_Process(req, bo, i);
+	vbe_dir_finish(d, bo->wrk, bo);
 }
 
 /*--------------------------------------------------------------------*/
 
 void
-VRT_fini_dir(struct cli *cli, struct director *d)
+VRT_init_vbe(VRT_CTX, struct director **dp, const struct vrt_backend *vrt)
 {
-	struct vdi_simple *vs;
+	struct director *d;
+	struct backend *be;
 
-	(void)cli;
 	ASSERT_CLI();
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	AN(dp);
+	AZ(*dp);
+	CHECK_OBJ_NOTNULL(vrt, VRT_BACKEND_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->vcl, VCL_CONF_MAGIC);
+
+	be = VBE_AddBackend(ctx->vcl->loaded_name, vrt);
+	AN(be);
+	ALLOC_OBJ(d, DIRECTOR_MAGIC);
+	XXXAN(d);
+	d->priv = be;
+	d->priv2 = vrt;
+	d->name = "backend";
+	REPLACE(d->vcl_name, vrt->vcl_name);
+	d->http1pipe = vbe_dir_http1pipe;
+	d->healthy = vbe_dir_healthy;
+	d->gethdrs = vbe_dir_gethdrs;
+	d->getbody = vbe_dir_getbody;
+	d->getip = vbe_dir_getip;
+	d->finish = vbe_dir_finish;
+
+	if (vrt->probe != NULL)
+		VBP_Insert(be, vrt->probe, vrt->hosthdr);
+
+	*dp = d;
+}
+
+void
+VRT_event_vbe(VRT_CTX, enum vcl_event_e ev, const struct director *d,
+    const struct vrt_backend *vrt)
+{
+	struct backend *be;
+
+	ASSERT_CLI();
+	(void)ev;
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
-	CAST_OBJ_NOTNULL(vs, d->priv, VDI_SIMPLE_MAGIC);
+	CHECK_OBJ_NOTNULL(vrt, VRT_BACKEND_MAGIC);
+	assert(d->priv2 == vrt);
 
-	VBE_DropRefVcl(vs->backend);
-	free(vs->dir.vcl_name);
-	vs->dir.magic = 0;
-	FREE_OBJ(vs);
-	d->priv = NULL;
+	CAST_OBJ_NOTNULL(be, d->priv, BACKEND_MAGIC);
+	if (ev == VCL_EVENT_WARM) {
+		be->vsc = VSM_Alloc(sizeof *be->vsc,
+		    VSC_CLASS, VSC_type_vbe, be->display_name);
+		AN(be->vsc);
+	}
+
+	if (be->probe != NULL && ev == VCL_EVENT_WARM)
+		VBP_Control(be, 0);
+
+	if (be->probe != NULL && ev == VCL_EVENT_COLD)
+		VBP_Control(be, 1);
+
+	if (ev == VCL_EVENT_COLD) {
+		VSM_Free(be->vsc);
+		be->vsc = NULL;
+	}
 }
 
 void
-VRT_init_dir(struct cli *cli, struct director **bp, int idx, const void *priv)
+VRT_fini_vbe(VRT_CTX, struct director **dp, const struct vrt_backend *vrt)
 {
-	const struct vrt_backend *t;
-	struct vdi_simple *vs;
+	struct director *d;
+	struct backend *be;
 
 	ASSERT_CLI();
-	(void)cli;
-	t = priv;
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	AN(dp);
+	AN(*dp);
+	CHECK_OBJ_NOTNULL(vrt, VRT_BACKEND_MAGIC);
 
-	ALLOC_OBJ(vs, VDI_SIMPLE_MAGIC);
-	XXXAN(vs);
-	vs->dir.magic = DIRECTOR_MAGIC;
-	vs->dir.priv = vs;
-	vs->dir.name = "simple";
-	REPLACE(vs->dir.vcl_name, t->vcl_name);
-	vs->dir.getfd = vdi_simple_getfd;
-	vs->dir.healthy = vdi_simple_healthy;
+	d = *dp;
+	*dp = NULL;
+	CHECK_OBJ_NOTNULL(d, DIRECTOR_MAGIC);
+	assert(d->priv2 == vrt);
+	CAST_OBJ_NOTNULL(be, d->priv, BACKEND_MAGIC);
 
-	vs->vrt = t;
+	if (vrt->probe != NULL)
+		VBP_Remove(be);
 
-	vs->backend = VBE_AddBackend(cli, t);
-	if (vs->vrt->probe != NULL)
-		VBP_Insert(vs->backend, vs->vrt->probe, vs->vrt->hosthdr);
-
-	bp[idx] = &vs->dir;
-}
-
-void
-VDI_Init(void)
-{
-
-	vbcpool = MPL_New("vbc", &cache_param->vbc_pool, &vbcps);
-	AN(vbcpool);
+	VBE_DeleteBackend(be);
+	free(d->vcl_name);
+	FREE_OBJ(d);
 }

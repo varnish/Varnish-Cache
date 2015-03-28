@@ -1,0 +1,93 @@
+varnishtest "Deeper test of random director"
+
+random
+
+server s1 {
+	rxreq
+	txresp -body "1"
+} -start
+
+server s2 {
+	rxreq
+	txresp -body "22"
+	rxreq
+	txresp -body "22"
+	rxreq
+	txresp -body "22"
+	rxreq
+	txresp -body "22"
+} -start
+
+server s3 {
+	rxreq
+	txresp -body "333"
+} -start
+
+server s4 {
+	rxreq
+	txresp -body "4444"
+	rxreq
+	txresp -body "4444"
+	rxreq
+	txresp -body "4444"
+	rxreq
+	txresp -body "4444"
+} -start
+
+varnish v1 -vcl+backend {
+	import ${vmod_directors};
+
+	sub vcl_init {
+		new foo = directors.random();
+		foo.add_backend(s1, 1);
+		foo.add_backend(s2, 1);
+		foo.add_backend(s3, 1);
+		foo.add_backend(s4, 1);
+	}
+
+	sub vcl_recv {
+		return(pass);
+	}
+
+	sub vcl_backend_fetch {
+		set bereq.backend = foo.backend();
+	}
+} -start
+
+# NB: Do not change the number 1
+# NB: Only srandom(1) is standardized as deterministic.
+
+varnish v1 -cliok "debug.srandom 1"
+
+client c1 {
+	txreq
+	rxresp
+	expect resp.bodylen == 2
+	txreq
+	rxresp
+	expect resp.bodylen == 4
+	txreq
+	rxresp
+	expect resp.bodylen == 4
+	txreq
+	rxresp
+	expect resp.bodylen == 4
+	txreq
+	rxresp
+	expect resp.bodylen == 1
+	txreq
+	rxresp
+	expect resp.bodylen == 2
+	txreq
+	rxresp
+	expect resp.bodylen == 4
+	txreq
+	rxresp
+	expect resp.bodylen == 2
+	txreq
+	rxresp
+	expect resp.bodylen == 3
+	txreq
+	rxresp
+	expect resp.bodylen == 2
+} -run

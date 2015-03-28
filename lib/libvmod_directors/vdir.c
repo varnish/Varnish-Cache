@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@FreeBSD.org>
@@ -31,7 +31,7 @@
 #include <stdlib.h>
 
 #include "cache/cache.h"
-#include "cache/cache_backend.h"
+#include "cache/cache_director.h"
 
 #include "vrt.h"
 #include "vbm.h"
@@ -51,8 +51,8 @@ vdir_expand(struct vdir *vd, unsigned n)
 }
 
 void
-vdir_new(struct vdir **vdp, const char *vcl_name, vdi_healthy *healthy,
-    vdi_getfd_f *getfd, void *priv)
+vdir_new(struct vdir **vdp, const char *vcl_name, vdi_healthy_f *healthy,
+    vdi_resolve_f *resolve, void *priv)
 {
 	struct vdir *vd;
 
@@ -69,7 +69,7 @@ vdir_new(struct vdir **vdp, const char *vcl_name, vdi_healthy *healthy,
 	REPLACE(vd->dir->vcl_name, vcl_name);
 	vd->dir->priv = priv;
 	vd->dir->healthy = healthy;
-	vd->dir->getfd = getfd;
+	vd->dir->resolve = resolve;
 	vd->vbm = vbit_init(8);
 	AN(vd->vbm);
 }
@@ -129,7 +129,7 @@ vdir_add_backend(struct vdir *vd, VCL_BACKEND be, double weight)
 }
 
 unsigned
-vdir_any_healthy(struct vdir *vd, double *changed)
+vdir_any_healthy(struct vdir *vd, const struct busyobj *bo, double *changed)
 {
 	unsigned retval = 0;
 	VCL_BACKEND be;
@@ -137,13 +137,14 @@ vdir_any_healthy(struct vdir *vd, double *changed)
 	double c;
 
 	CHECK_OBJ_NOTNULL(vd, VDIR_MAGIC);
+	CHECK_OBJ_ORNULL(bo, BUSYOBJ_MAGIC);
 	vdir_lock(vd);
 	if (changed != NULL)
 		*changed = 0;
 	for (u = 0; u < vd->n_backend; u++) {
 		be = vd->backend[u];
 		CHECK_OBJ_NOTNULL(be, DIRECTOR_MAGIC);
-		retval = be->healthy(be, &c);
+		retval = be->healthy(be, bo, &c);
 		if (changed != NULL && c > *changed)
 			*changed = c;
 		if (retval)
@@ -174,33 +175,25 @@ vdir_pick_by_weight(const struct vdir *vd, double w,
 }
 
 VCL_BACKEND
-vdir_pick_be(struct vdir *vd, double w, unsigned nloops)
+vdir_pick_be(struct vdir *vd, double w)
 {
-	struct vbitmap *vbm = NULL;
-	unsigned u, v, l;
+	unsigned u;
+	double tw = 0.0;
 	VCL_BACKEND be = NULL;
-	double tw;
-	int nbe;
 
-	tw = vd->total_weight;
-	nbe = vd->n_backend;
-	assert(w >= 0.0 && w < 1.0);
 	vdir_lock(vd);
-	for (l = 0; nbe > 0 && tw > 0.0 && l <nloops; l++) {
-		u = vdir_pick_by_weight(vd, w * tw, vbm);
+	for (u = 0; u < vd->n_backend; u++) {
+		if (vd->backend[u]->healthy(vd->backend[u], NULL, NULL)) {
+			vbit_clr(vd->vbm, u);
+			tw += vd->weight[u];
+		} else
+			vbit_set(vd->vbm, u);
+	}
+	if (tw > 0.0) {
+		u = vdir_pick_by_weight(vd, w * tw, vd->vbm);
+		assert(u < vd->n_backend);
 		be = vd->backend[u];
 		CHECK_OBJ_NOTNULL(be, DIRECTOR_MAGIC);
-		if (be->healthy(be, NULL))
-			break;
-		if (l == 0) {
-			vbm = vd->vbm;
-			for (v = 0; v < nbe; v++)
-				vbit_clr(vbm, v);
-		}
-		vbit_set(vbm, u);
-		nbe--;
-		tw -= vd->weight[u];
-		be = NULL;
 	}
 	vdir_unlock(vd);
 	return (be);

@@ -66,9 +66,8 @@ void HSH_Cleanup(struct worker *w);
 enum lookup_e HSH_Lookup(struct req *, struct objcore **, struct objcore **,
     int wait_for_busy, int always_insert);
 void HSH_Ref(struct objcore *o);
-void HSH_Drop(struct worker *, struct object **);
 void HSH_Init(const struct hash_slinger *slinger);
-void HSH_AddString(const struct req *, const char *str);
+void HSH_AddString(struct req *, const char *str);
 void HSH_Insert(struct worker *, const void *hash, struct objcore *);
 void HSH_Purge(struct worker *, struct objhead *, double ttl, double grace,
     double keep);
@@ -95,8 +94,6 @@ struct objhead {
 	uint8_t			digest[DIGEST_LEN];
 	struct waitinglist	*waitinglist;
 
-	long			hits;
-
 	/*----------------------------------------------------
 	 * The fields below are for the sole private use of
 	 * the hash implementation(s).
@@ -112,12 +109,11 @@ struct objhead {
 };
 
 void HSH_Fail(struct objcore *);
-void HSH_Unbusy(struct dstat *, struct objcore *);
+void HSH_Unbusy(struct worker *, struct objcore *);
 void HSH_Complete(struct objcore *oc);
-void HSH_DeleteObjHead(struct dstat *, struct objhead *oh);
-int HSH_DerefObjHead(struct dstat *, struct objhead **poh);
-int HSH_DerefObjCore(struct dstat *, struct objcore **ocp);
-int HSH_DerefObj(struct dstat *, struct object **o);
+void HSH_DeleteObjHead(struct worker *, struct objhead *oh);
+int HSH_DerefObjHead(struct worker *, struct objhead **poh);
+int HSH_DerefObjCore(struct worker *, struct objcore **ocp);
 #endif /* VARNISH_CACHE_CHILD */
 
 extern const struct hash_slinger hsl_slinger;

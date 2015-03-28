@@ -194,6 +194,12 @@ PRIV_VCL
 PRIV_CALL
 	See below
 
+PRIV_TASK
+	See below
+
+PRIV_TOP
+	See below
+
 VOID
 	C-type: ``void``
 
@@ -231,21 +237,34 @@ It is often useful for library functions to maintain local state,
 this can be anything from a precompiled regexp to open file descriptors
 and vast data structures.
 
-The VCL compiler supports two levels of private pointers, "per call"
-and "per VCL"
+The VCL compiler supports the following private pointers:
 
-"per call" private pointers are useful to cache/store state relative
-to the specific call or its arguments, for instance a compiled regular
-expression specific to a regsub() statement or a simply caching the
-last output of some expensive lookup.
+* ``PRIV_CALL`` "per call" private pointers are useful to cache/store
+  state relative to the specific call or its arguments, for instance a
+  compiled regular expression specific to a regsub() statement or a
+  simply caching the last output of some expensive lookup.
 
-"per vcl" private pointers are useful for such global state that
-applies to all calls in this VCL, for instance flags that determine
-if regular expressions are case-sensitive in this vmod or similar.
+* ``PRIV_VCL`` "per vcl" private pointers are useful for such global
+  state that applies to all calls in this VCL, for instance flags that
+  determine if regular expressions are case-sensitive in this vmod or
+  similar.
+
+* ``PRIV_TASK`` "per task" private pointers are useful for state that
+  applies to calls for either a specific request or a backend
+  request. For instance this can be the result of a parsed cookie
+  specific to a client. Note that ``PRIV_TASK`` contexts are separate
+  for the client side and the backend side, so use in
+  ``vcl_backend_*`` will yield a different private pointer from the
+  one used on the client side.
+
+* ``PRIV_TOP`` "per top-request" private pointers live for the
+  duration of one request and all its ESI-includes. They are only
+  defined for the client side. When used from backend VCL subs, a NULL
+  pointer will be passed.
 
 The way it works in the vmod code, is that a ``struct vmod_priv *`` is
-passed to the functions where argument type PRIV_VCL or PRIV_CALL
-is specified.
+passed to the functions where one of the ``PRIV_*`` argument types is
+specified.
 
 This structure contains two members::
 
@@ -273,7 +292,7 @@ malloc would look like this::
 	if (priv->priv == NULL) {
 		priv->priv = calloc(sizeof(struct myfoo), 1);
 		AN(priv->priv);
-		priv->priv = free;	/* free(3) */
+		priv->free = free;	/* free(3) */
 		mystate = priv->priv;
 		mystate->foo = 21;
 		...
@@ -325,3 +344,33 @@ unless they access VMOD specific global state, shared with other VCLs.
 
 Traffic in other VCLs which also import this VMOD, will be happening
 while housekeeping is going on.
+
+Updating VMODs
+==============
+
+A compiled VMOD is a shared library file which Varnish dlopen(3)'s
+using flags RTLD_NOW | RTLD_LOCAL.
+
+As a general rule, once a file is opened with dlopen(3) you should
+never modify it, but it is safe to rename it and put a new file
+under the name it had, which is how most tools installs and updates
+shared libraries.
+
+However, when you call dlopen(3) with the same filename multiple
+times it will give you the same single copy of the shared library
+file, without checking if it was updated in the meantime.
+
+This is obviously an oversight in the design of the dlopen(3) library
+function, but back in the late 1980ies nobody could imagine why a
+program would ever want to have multiple different versions of the
+same shared library mapped at the same time.
+
+Varnish does that, and therefore you must restart the worker process
+before Varnish will discover an updated VMOD.
+
+If you want to test a new version of a VMOD, while being able to
+instantly switch back to the old version, you will have to install
+each version with a distinct filename or in a distinct subdirectory
+and use ``import foo from "...";`` to reference it in your VCL.
+
+We're not happy about this, but have found no sensible workarounds.

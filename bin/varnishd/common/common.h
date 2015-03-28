@@ -28,7 +28,6 @@
  *
  */
 
-#include <errno.h>
 #include <stdint.h>
 
 #include <sys/types.h>
@@ -51,6 +50,24 @@ enum baninfo {
 	BI_DROP
 };
 
+enum obj_attr {
+#define OBJ_ATTR(U, l)	OA_##U,
+#include "tbl/obj_attr.h"
+#undef OBJ_ATTR
+};
+
+enum obj_flags {
+#define OBJ_FLAG(U, l, v)	OF_##U = v,
+#include "tbl/obj_attr.h"
+#undef OBJ_FLAG
+};
+
+enum sess_step {
+#define SESS_STEP(l, u)		S_STP_##u,
+#include "tbl/steps.h"
+#undef SESS_STEP
+};
+
 struct cli;
 
 /**********************************************************************
@@ -63,16 +80,6 @@ struct cli;
  * Pass no argument.
  */
 #define __state_variable__(xxx)		/*lint -esym(838,xxx) */
-
-/**********************************************************************
- * NI_MAXHOST and less so NI_MAXSERV, are ridiculously large for numeric
- * representations of TCP/IP socket addresses, so we use our own.
- * <netinet/in6.h>::INET6_ADDRSTRLEN is 46
- */
-
-#define ADDR_BUFSIZE	48
-#define PORT_BUFSIZE	8
-
 
 /**********************************************************************/
 
@@ -109,15 +116,15 @@ void VSM_common_free(struct vsm_sc *sc, void *ptr);
 void VSM_common_delete(struct vsm_sc **sc);
 void VSM_common_copy(struct vsm_sc *to, const struct vsm_sc *from);
 void VSM_common_cleaner(struct vsm_sc *sc, struct VSC_C_main *stats);
-void VSM_common_ageupdate(struct vsm_sc *sc);
+void VSM_common_ageupdate(const struct vsm_sc *sc);
 
 /*---------------------------------------------------------------------
  * Generic power-2 rounding macros
  */
 
-#define PWR2(x)     ((((x)-1)&(x))==0)		/* Is a power of two */
-#define RDN2(x, y)  ((x)&(~((y)-1)))		/* if y is powers of two */
-#define RUP2(x, y)  (((x)+((y)-1))&(~((y)-1)))	/* if y is powers of two */
+#define PWR2(x)     ((((x)-1UL)&(x))==0)		/* Is a power of two */
+#define RDN2(x, y)  ((x)&(~((uintptr_t)(y)-1UL)))	/* PWR2(y) true */
+#define RUP2(x, y)  (((x)+((y)-1))&(~((uintptr_t)(y)-1UL))) /* PWR2(y) true */
 
 /*--------------------------------------------------------------------
  * Pointer aligment magic

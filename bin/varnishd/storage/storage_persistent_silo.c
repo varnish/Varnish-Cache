@@ -47,6 +47,13 @@
 
 #include "storage/storage_persistent.h"
 
+/*
+ * We use the low bit to mark objects still needing fixup
+ * In theory this may need to be platform dependent
+ */
+
+#define NEED_FIXUP	(1U << 31)
+
 /*--------------------------------------------------------------------
  * Write the segmentlist back to the silo.
  *
@@ -152,14 +159,14 @@ smp_load_seg(struct worker *wrk, const struct smp_sc *sc,
 			continue;
 		ALLOC_OBJ(oc, OBJCORE_MAGIC);
 		AN(oc);
-		oc->flags |= OC_F_NEEDFIXUP;
 		oc->flags &= ~OC_F_BUSY;
-		oc->stevedore = sc->parent;
+		oc->stobj->stevedore = sc->parent;
 		smp_init_oc(oc, sg, no);
+		oc->stobj->priv2 |= NEED_FIXUP;
 		oc->ban = BAN_RefBan(oc, so->ban, sc->tailban);
 		HSH_Insert(wrk, so->hash, oc);
 		oc->exp = so->exp;
-		EXP_Inject(oc, sg->lru);
+		EXP_Inject(wrk, oc, sg->lru);
 		sg->nobj++;
 	}
 	Pool_Sumstat(wrk);
@@ -181,8 +188,7 @@ smp_new_seg(struct smp_sc *sc)
 
 	/* XXX: find where it goes in silo */
 
-	memset(&tmpsg, 0, sizeof tmpsg);
-	tmpsg.magic = SMP_SEG_MAGIC;
+	INIT_OBJ(&tmpsg, SMP_SEG_MAGIC);
 	tmpsg.sc = sc;
 	tmpsg.p.offset = sc->free_offset;
 	/* XXX: align */
@@ -321,6 +327,7 @@ smp_find_so(const struct smp_seg *sg, unsigned priv2)
 {
 	struct smp_object *so;
 
+	priv2 &= ~NEED_FIXUP;
 	assert(priv2 > 0);
 	assert(priv2 <= sg->p.lobjlist);
 	so = &sg->objs[sg->p.lobjlist - priv2];
@@ -380,7 +387,7 @@ smp_loaded_st(const struct smp_sc *sc, const struct smp_seg *sg,
  */
 
 static struct object *
-smp_oc_getobj(struct dstat *ds, struct objcore *oc)
+smp_oc_getobj(struct worker *wrk, struct objcore *oc)
 {
 	struct object *o;
 	struct smp_seg *sg;
@@ -390,14 +397,13 @@ smp_oc_getobj(struct dstat *ds, struct objcore *oc)
 	int bad;
 
 	/* Some calls are direct, but they should match anyway */
-	assert(oc->stevedore->methods->getobj == smp_oc_getobj);
+	assert(oc->stobj->stevedore->methods->getobj == smp_oc_getobj);
 
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-	if (ds == NULL)
-		AZ(oc->flags & OC_F_NEEDFIXUP);
 
-	CAST_OBJ_NOTNULL(sg, oc->priv, SMP_SEG_MAGIC);
-	so = smp_find_so(sg, oc->priv2);
+	CAST_OBJ_NOTNULL(sg, oc->stobj->priv, SMP_SEG_MAGIC);
+	so = smp_find_so(sg, oc->stobj->priv2);
 
 	o = (void*)(sg->sc->base + so->ptr);
 	/*
@@ -413,25 +419,23 @@ smp_oc_getobj(struct dstat *ds, struct objcore *oc)
 	 * If this flag is not set, it will not be, and the lock is not
 	 * needed to test it.
 	 */
-	if (!(oc->flags & OC_F_NEEDFIXUP))
+	if (!(oc->stobj->priv2 & NEED_FIXUP))
 		return (o);
 
-	AN(ds);
 	Lck_Lock(&sg->sc->mtx);
 	/* Check again, we might have raced. */
-	if (oc->flags & OC_F_NEEDFIXUP) {
+	if (oc->stobj->priv2 & NEED_FIXUP) {
 		/* We trust caller to have a refcnt for us */
-		o->objcore = oc;
 
 		bad = 0;
 		l = 0;
-		VTAILQ_FOREACH(st, &o->body->list, list) {
+		VTAILQ_FOREACH(st, &o->list, list) {
 			bad |= smp_loaded_st(sg->sc, sg, st);
 			if (bad)
 				break;
 			l += st->len;
 		}
-		if (l != o->body->len)
+		if (l != o->len)
 			bad |= 0x100;
 
 		if(bad) {
@@ -440,9 +444,9 @@ smp_oc_getobj(struct dstat *ds, struct objcore *oc)
 		}
 
 		sg->nfixed++;
-		ds->n_object++;
-		ds->n_vampireobject--;
-		oc->flags &= ~OC_F_NEEDFIXUP;
+		wrk->stats->n_object++;
+		wrk->stats->n_vampireobject--;
+		oc->stobj->priv2 &= ~NEED_FIXUP;
 	}
 	Lck_Unlock(&sg->sc->mtx);
 	EXP_Rearm(oc, NAN, NAN, NAN, NAN);	// XXX: Shouldn't be needed
@@ -450,19 +454,20 @@ smp_oc_getobj(struct dstat *ds, struct objcore *oc)
 }
 
 static void
-smp_oc_updatemeta(struct objcore *oc, struct dstat *ds)
+smp_oc_updatemeta(struct worker *wrk, struct objcore *oc)
 {
 	struct object *o;
 	struct smp_seg *sg;
 	struct smp_object *so;
 
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-	o = smp_oc_getobj(ds, oc);
+	o = smp_oc_getobj(wrk, oc);
 	AN(o);
 
-	CAST_OBJ_NOTNULL(sg, oc->priv, SMP_SEG_MAGIC);
+	CAST_OBJ_NOTNULL(sg, oc->stobj->priv, SMP_SEG_MAGIC);
 	CHECK_OBJ_NOTNULL(sg->sc, SMP_SC_MAGIC);
-	so = smp_find_so(sg, oc->priv2);
+	so = smp_find_so(sg, oc->stobj->priv2);
 
 	if (sg == sg->sc->cur_seg) {
 		/* Lock necessary, we might race close_seg */
@@ -477,16 +482,16 @@ smp_oc_updatemeta(struct objcore *oc, struct dstat *ds)
 }
 
 static void __match_proto__(freeobj_f)
-smp_oc_freeobj(struct dstat *ds, struct objcore *oc)
+smp_oc_freeobj(struct worker *wrk, struct objcore *oc)
 {
 	struct smp_seg *sg;
 	struct smp_object *so;
 
-	AN(ds);
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 
-	CAST_OBJ_NOTNULL(sg, oc->priv, SMP_SEG_MAGIC);
-	so = smp_find_so(sg, oc->priv2);
+	CAST_OBJ_NOTNULL(sg, oc->stobj->priv, SMP_SEG_MAGIC);
+	so = smp_find_so(sg, oc->stobj->priv2);
 
 	Lck_Lock(&sg->sc->mtx);
 	EXP_Clr(&so->exp);
@@ -494,12 +499,12 @@ smp_oc_freeobj(struct dstat *ds, struct objcore *oc)
 
 	assert(sg->nobj > 0);
 	sg->nobj--;
-	if (oc->flags & OC_F_NEEDFIXUP) {
-		ds->n_vampireobject--;
+	if (oc->stobj->priv2 & NEED_FIXUP) {
+		wrk->stats->n_vampireobject--;
 	} else {
 		assert(sg->nfixed > 0);
 		sg->nfixed--;
-		ds->n_object--;
+		wrk->stats->n_object--;
 	}
 
 	Lck_Unlock(&sg->sc->mtx);
@@ -514,11 +519,11 @@ smp_oc_getlru(const struct objcore *oc)
 {
 	struct smp_seg *sg;
 
-	CAST_OBJ_NOTNULL(sg, oc->priv, SMP_SEG_MAGIC);
+	CAST_OBJ_NOTNULL(sg, oc->stobj->priv, SMP_SEG_MAGIC);
 	return (sg->lru);
 }
 
-const struct objcore_methods smp_oc_methods = {
+const struct storeobj_methods smp_oc_methods = {
 	.getobj =		smp_oc_getobj,
 	.updatemeta =		smp_oc_updatemeta,
 	.freeobj =		smp_oc_freeobj,
@@ -531,6 +536,7 @@ void
 smp_init_oc(struct objcore *oc, struct smp_seg *sg, unsigned objidx)
 {
 
-	oc->priv = sg;
-	oc->priv2 = objidx;
+	AZ(objidx & NEED_FIXUP);
+	oc->stobj->priv = sg;
+	oc->stobj->priv2 = objidx;
 }

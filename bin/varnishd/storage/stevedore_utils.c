@@ -44,6 +44,7 @@
 #  include <sys/vfs.h>
 #endif
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +55,7 @@
 
 #include "storage/storage.h"
 #include "vnum.h"
+#include "vfil.h"
 
 #ifndef O_LARGEFILE
 #define O_LARGEFILE	0
@@ -90,10 +92,13 @@ STV_GetFile(const char *fn, int *fdp, const char **fnp, const char *ctx)
 	*fdp = -1;
 
 	/* try to create a new file of this name */
+	VJ_master(JAIL_MASTER_STORAGE);
 	fd = open(fn, O_RDWR | O_CREAT | O_EXCL | O_LARGEFILE, 0600);
 	if (fd >= 0) {
+		VJ_storage_file(fd);
 		*fdp = fd;
 		*fnp = fn;
+		VJ_master(JAIL_MASTER_LOW);
 		return (retval);
 	}
 
@@ -129,45 +134,15 @@ STV_GetFile(const char *fn, int *fdp, const char **fnp, const char *ctx)
 		    ctx, fn);
 
 	*fdp = fd;
+	VJ_storage_file(fd);
+	VJ_master(JAIL_MASTER_LOW);
 	return (retval);
 }
 
 /*--------------------------------------------------------------------
- * Figure out how much space is in a filesystem
- */
-
-static uintmax_t
-stv_fsspace(int fd, unsigned *bs)
-{
-	uintmax_t bsize, bavail;
-#if defined(HAVE_SYS_STATVFS_H)
-	struct statvfs fsst;
-
-	AZ(fstatvfs(fd, &fsst));
-	bsize = fsst.f_frsize;
-	bavail = fsst.f_bavail;
-#elif defined(HAVE_SYS_MOUNT_H) || defined(HAVE_SYS_VFS_H)
-	struct statfs fsst;
-
-	AZ(fstatfs(sc->fd, &fsst));
-	bsize = fsst.f_bsize;
-	bavail = fsst.f_bavail;
-#else
-#error no struct statfs / struct statvfs
-#endif
-
-	/* We use units of the larger of filesystem blocksize and pagesize */
-	if (*bs < bsize)
-		*bs = bsize;
-	XXXAZ(*bs % bsize);
-	return (bsize * bavail);
-}
-
-
-/*--------------------------------------------------------------------
  * Decide file size.
  *
- * If the sizespecification is empty and the file exists with non-zero
+ * If the size specification is empty and the file exists with non-zero
  * size, use that, otherwise, interpret the specification.
  *
  * Handle off_t sizes and pointer width limitations.
@@ -183,12 +158,16 @@ STV_FileSize(int fd, const char *size, unsigned *granularity, const char *ctx)
 	off_t o;
 	struct stat st;
 
+	AN(granularity);
+	AN(ctx);
+
 	AZ(fstat(fd, &st));
 	xxxassert(S_ISREG(st.st_mode));
 
-	bs = *granularity;
-	fssize = stv_fsspace(fd, &bs);
-	XXXAZ(bs % *granularity);
+	AZ(VFIL_fsinfo(fd, &bs, &fssize, NULL));
+	/* Increase granularity if it is lower than the filesystem block size */
+	if (*granularity < bs)
+		*granularity = bs;
 
 	if ((size == NULL || *size == '\0') && st.st_size != 0) {
 		/*
@@ -196,9 +175,12 @@ STV_FileSize(int fd, const char *size, unsigned *granularity, const char *ctx)
 		 * use its existing size.
 		 */
 		l = st.st_size;
+	} else if (size == NULL || *size == '\0') {
+		ARGV_ERR("(%s) no size specified\n",
+		    ctx);
 	} else {
 		AN(size);
-		q = VNUM_2bytes(size, &l, fssize);
+		q = VNUM_2bytes(size, &l, 0);
 
 		if (q != NULL)
 			ARGV_ERR("(%s) size \"%s\": %s\n", ctx, size, q);
@@ -206,6 +188,10 @@ STV_FileSize(int fd, const char *size, unsigned *granularity, const char *ctx)
 		if (l < 1024*1024)
 			ARGV_ERR("(%s) size \"%s\": too small, "
 			    "did you forget to specify M or G?\n", ctx, size);
+
+		if (l > fssize)
+			ARGV_ERR("(%s) size \"%s\": larger than file system\n",
+			    ctx, size);
 	}
 
 	/*
@@ -223,11 +209,6 @@ STV_FileSize(int fd, const char *size, unsigned *granularity, const char *ctx)
 	if (i)
 		fprintf(stderr, "WARNING: (%s) file size reduced"
 		    " to %ju due to system \"off_t\" limitations\n", ctx, l);
-	else if (l - st.st_size > fssize) {
-		l = fssize * 80 / 100;
-		fprintf(stderr, "WARNING: (%s) file size reduced"
-		    " to %ju (80%% of available disk space)\n", ctx, l);
-	}
 
 	if (sizeof(void *) == 4 && l > INT32_MAX) { /*lint !e506 !e774 !e845 */
 		fprintf(stderr,
@@ -237,9 +218,8 @@ STV_FileSize(int fd, const char *size, unsigned *granularity, const char *ctx)
 		l = INT32_MAX;
 	}
 
-	/* round down to multiple of filesystem blocksize or pagesize */
-	l -= (l % bs);
+	/* Round down */
+	l -= (l % *granularity);
 
-	*granularity = bs;
 	return(l);
 }

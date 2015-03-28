@@ -38,47 +38,23 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/types.h>
+#ifdef HAVE_SYS_MOUNT_H
+#  include <sys/param.h>
+#  include <sys/mount.h>
+#endif
+#ifdef HAVE_SYS_STATVFS_H
+#  include <sys/statvfs.h>
+#endif
+#ifdef HAVE_SYS_VFS_H
+#  include <sys/vfs.h>
+#endif
 
 #include "vas.h"
 #include "vdef.h"
 #include "vfil.h"
-
-int
-VFIL_tmpfile(char *template)
-{
-	char *b, *e, *p;
-	int fd;
-	char ran;
-
-	for (b = template; *b != '#'; ++b)
-		/* nothing */ ;
-	if (*b == '\0') {
-		errno = EINVAL;
-		return (-1);
-	}
-	for (e = b; *e == '#'; ++e)
-		/* nothing */ ;
-
-	for (;;) {
-		for (p = b; p < e; ++p) {
-			ran = random() % 63;
-			if (ran < 10)
-				*p = '0' + ran;
-			else if (ran < 36)
-				*p = 'A' + ran - 10;
-			else if (ran < 62)
-				*p = 'a' + ran - 36;
-			else
-				*p = '_';
-		}
-		fd = open(template, O_RDWR|O_CREAT|O_EXCL, 0600);
-		if (fd >= 0)
-			return (fd);
-		if (errno != EEXIST)
-			return (-1);
-	}
-	/* not reached */
-}
 
 char *
 VFIL_readfd(int fd, ssize_t *sz)
@@ -92,8 +68,11 @@ VFIL_readfd(int fd, ssize_t *sz)
 		return (NULL);
 	f = malloc(st.st_size + 1);
 	assert(f != NULL);
-	i = read(fd, f, st.st_size);
-	assert(i == st.st_size);
+	i = read(fd, f, st.st_size + 1);
+	if (i != st.st_size) {
+		free(f);
+		return (NULL);
+	}
 	f[i] = '\0';
 	if (sz != NULL)
 		*sz = st.st_size;
@@ -135,4 +114,95 @@ VFIL_nonblocking(int fd)
 	i = fcntl(fd, F_SETFL, i);
 	assert(i != -1);
 	return (i);
+}
+
+/*
+ * Get file system information from an fd
+ * Returns block size, total size and space available in the passed pointers
+ * Returns 0 on success, or -1 on failure with errno set
+ */
+int
+VFIL_fsinfo(int fd, unsigned *pbs, uintmax_t *psize, uintmax_t *pspace)
+{
+	unsigned bs;
+	uintmax_t size, space;
+#if defined(HAVE_SYS_STATVFS_H)
+	struct statvfs fsst;
+
+	if (fstatvfs(fd, &fsst))
+		return (-1);
+	bs = fsst.f_frsize;
+	size = fsst.f_blocks * fsst.f_frsize;
+	space = fsst.f_bavail * fsst.f_frsize;
+#elif defined(HAVE_SYS_MOUNT_H) || defined(HAVE_SYS_VFS_H)
+	struct statfs fsst;
+
+	if (fstatfs(fd, &fsst))
+		return (-1);
+	bs = fsst.f_bsize;
+	size = fsst.f_blocks * fsst.f_bsize;
+	space = fsst.f_bavail * fsst.f_bsize;
+#else
+#error no struct statfs / struct statvfs
+#endif
+
+	if (pbs)
+		*pbs = bs;
+	if (psize)
+		*psize = size;
+	if (pspace)
+		*pspace = space;
+	return (0);
+}
+
+/* Make sure that the file system can accomodate the file of the given
+ * size. Will use fallocate if available. If fallocate is not available
+ * and insist is true, it will write size zero bytes.
+ *
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+int
+VFIL_allocate(int fd, off_t size, int insist)
+{
+	struct stat st;
+	uintmax_t fsspace;
+	size_t l;
+	ssize_t l2;
+	char buf[64 * 1024];
+
+	if (ftruncate(fd, size))
+		return (-1);
+	if (fstat(fd, &st))
+		return (-1);
+	if (VFIL_fsinfo(fd, NULL, NULL, &fsspace))
+		return (-1);
+	if ((st.st_blocks * 512) + fsspace < size) {
+		/* Sum of currently allocated blocks and available space
+		   is less than requested size */
+		errno = ENOSPC;
+		return (-1);
+	}
+#ifdef HAVE_FALLOCATE
+	if (!fallocate(fd, 0, 0, size))
+		return (0);
+	if (errno == ENOSPC)
+		return (-1);
+#endif
+	if (!insist)
+		return (0);
+
+	/* Write size zero bytes to make sure the entire file is allocated
+	   in the file system */
+	memset(buf, 0, sizeof buf);
+	assert(lseek(fd, 0, SEEK_SET) == 0);
+	for (l = 0; l < size; l += l2) {
+		l2 = sizeof buf;
+		if (l + l2 > size)
+			l2 = size - l;
+		l2 = write(fd, buf, l2);
+		if (l2 < 0)
+			return (-1);
+	}
+	assert(lseek(fd, 0, SEEK_SET) == 0);
+	return (0);
 }

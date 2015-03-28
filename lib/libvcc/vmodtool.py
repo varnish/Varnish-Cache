@@ -49,6 +49,7 @@ ctypes = {
 	'BACKEND':	"VCL_BACKEND",
 	'BLOB':		"VCL_BLOB",
 	'BOOL':		"VCL_BOOL",
+	'BYTES':	"VCL_BYTES",
 	'DURATION':	"VCL_DURATION",
 	'ENUM':		"VCL_ENUM",
 	'HEADER':	"VCL_HEADER",
@@ -57,6 +58,8 @@ ctypes = {
 	'IP':		"VCL_IP",
 	'PRIV_CALL':	"struct vmod_priv *",
 	'PRIV_VCL':	"struct vmod_priv *",
+	'PRIV_TASK':	"struct vmod_priv *",
+	'PRIV_TOP':	"struct vmod_priv *",
 	'REAL':		"VCL_REAL",
 	'STRING':	"VCL_STRING",
 	'STRING_LIST':	"const char *, ...",
@@ -100,10 +103,19 @@ def lwrap(s, w=72):
 		l.append(p + s)
 	return l
 
+def quote(s):
+	t = ""
+	for i in s:
+		if i == '"':
+			t += '\\"'
+		else:
+			t += i
+	return t
+
 #######################################################################
 
 def is_c_name(s):
-	return None != re.match("^[a-z][a-z0-9_]*$", s)
+	return None != re.match("^[a-zA-Z][a-zA-Z0-9_]*$", s)
 
 
 class ParseError(Exception):
@@ -297,7 +309,9 @@ class Vmod(object):
 		self.doc_str.append(l)
 
 	def doc_dump(self, fo, suf):
+		fo.write(".. role:: ref(emphasis)\n\n")
 		i = "vmod_" + self.nam
+		fo.write(".. _" + i + "(" + self.sec + "):\n\n")
 		fo.write("=" * len(i) + "\n")
 		fo.write(i + "\n")
 		fo.write("=" * len(i) + "\n")
@@ -357,7 +371,7 @@ class Func(object):
 		s = ctypes[self.retval] + " vmod_" + self.cnam + "("
 		p = ""
 		if not fini:
-			s += "const struct vrt_ctx *"
+			s += "VRT_CTX"
 			p = ", "
 		if self.pfx != None:
 			s += p + self.pfx
@@ -365,8 +379,6 @@ class Func(object):
 		for a in self.al:
 			s += p + ctypes[a.typ]
 			p = ", "
-			if a.nam != None:
-				s += " " + a.nam
 		s += ");"
 		return s
 
@@ -376,7 +388,7 @@ class Func(object):
 		s += " td_" + modname + "_" + self.cnam + "("
 		p = ""
 		if not fini:
-			s += "const struct vrt_ctx *"
+			s += "VRT_CTX"
 			p = ", "
 		if self.pfx != None:
 			s += p + self.pfx
@@ -555,16 +567,23 @@ class Arg(object):
 		self.nam = nam
 		self.typ = typ
 		self.det = det
+		self.val = None
 
 	def __repr__(self):
 		return "<ARG %s %s %s>" % (self.nam, self.typ, str(self.det))
 
 	def c_strspec(self):
 		if self.det == None:
-			return self.typ + "\\0"
+			s = self.typ + "\\0"
 		else:
-			return self.det
-		return "??"
+			s = self.det
+		if self.nam != None:
+			s += '"\n\t\t    "\\1' + self.nam + '\\0'
+		if self.val != None:
+			# The space before the value is important to
+			# terminate the \2 escape sequence
+			s += '"\n\t\t\t"\\2 ' + quote(self.val) + "\\0"
+		return s
 
 #######################################################################
 #
@@ -591,6 +610,44 @@ def parse_enum2(tl):
 			    "Expected \"}\" or \",\" not \"%s\"" % t.str)
 	s += "\\0"
 	return Arg("ENUM", det=s)
+
+def parse_arg(tl, al):
+	t = tl.get_token()
+	assert t != None
+
+	if t.str == ")":
+		return t
+
+	if t.str == "ENUM":
+		al.append(parse_enum2(tl))
+	elif t.str in ctypes:
+		al.append(Arg(t.str))
+	else:
+		raise Exception("ARG? %s", t.str)
+
+	t = tl.get_token()
+	if t.str == "," or t.str == ")":
+		return t
+
+	if not is_c_name(t.str):
+		raise ParseError(
+		    'Expected ")", "," or argument name, not "%s"' % t.str)
+
+	al[-1].nam = t.str
+	t = tl.get_token()
+
+	if t.str == "," or t.str == ")":
+		return t
+
+	if t.str != "=":
+		raise ParseError(
+		    'Expected ")", "," or "=", not "%s"' % t.str)
+
+	t = tl.get_token()
+	al[-1].val = t.str
+
+	t = tl.get_token()
+	return t
 
 #######################################################################
 #
@@ -629,33 +686,13 @@ def parse_func(tl, rt_type=None, pobj=None):
 	if t.str != "(":
 		raise ParseError("Expected \"(\" got \"%s\"", t.str)
 
-	t = None
 	while True:
-		if t == None:
-			t = tl.get_token()
-		assert t != None
+		t = parse_arg(tl, al)
+		if t.str == ")":
+			break
+		if t.str != ",":
+			raise ParseError("End Of Input looking for ')' or ','")
 
-		if t.str == "ENUM":
-			al.append(parse_enum2(tl))
-		elif t.str in ctypes:
-			al.append(Arg(t.str))
-		elif t.str == ")":
-			break
-		else:
-			raise Exception("ARG? %s", t.str)
-		t = tl.get_token()
-		if is_c_name(t.str):
-			al[-1].nam = t.str
-			t = None
-		elif t.str == ",":
-			t = None
-		elif t.str == ")":
-			break
-		else:
-			raise ParseError(
-			    "Expected \")\" or \",\" not \"%s\"" % t.str)
-	if t.str != ")":
-		raise ParseError("End Of Input looking for ')'")
 	f = Func(fname, rt_type, al)
 
 	return f
@@ -698,7 +735,7 @@ class FileSection(object):
 			return
 		l = re.sub("[ \t]*#.*$", "", l)
 		l = re.sub("[ \t]*\n", "", l)
-		l = re.sub("([(){},])", r' \1 ', l)
+		l = re.sub("([(){},=])", r' \1 ', l)
 		if l == "":
 			return
 		for j in l.split():
@@ -860,7 +897,6 @@ def runmain(inputvcc, outputname="vcc_if"):
 	write_c_file_warning(fc)
 	write_c_file_warning(fh)
 
-	fh.write('struct vrt_ctx;\n')
 	fh.write('struct VCL_conf;\n')
 	fh.write('struct vmod_priv;\n')
 	fh.write("\n")

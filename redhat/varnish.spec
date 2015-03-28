@@ -9,7 +9,7 @@ Version: 4.0.1
 Release: 1%{?v_rc}%{?dist}
 License: BSD
 Group: System Environment/Daemons
-URL: http://www.varnish-cache.org/
+URL: https://www.varnish-cache.org/
 #Source0: http://repo.varnish-cache.org/source/%{name}-%{version}.tar.gz
 Source0: %{name}-%{version}%{?vd_rc}.tar.gz
 #Source0: %{name}-trunk.tar.gz
@@ -51,8 +51,14 @@ Requires: gcc
 
 %description
 This is Varnish Cache, a high-performance HTTP accelerator.
+
+Varnish Cache stores web pages in memory so web servers don't have to
+create the same web page over and over again. Varnish serves pages
+much faster than any application server; giving the website a
+significant speed up.
+
 Documentation wiki and additional information about Varnish is
-available on the following web site: http://www.varnish-cache.org/
+available on the following web site: https://www.varnish-cache.org/
 
 %package libs
 Summary: Libraries for %{name}
@@ -102,7 +108,9 @@ Documentation files for %name
 	export PCRE_LIBS="`pcre-config --libs`"
 %endif
 
-export CFLAGS="$CFLAGS -Wp,-D_FORTIFY_SOURCE=0"
+%if 0%{?rhel} == 6
+export CFLAGS="$CFLAGS -O2 -g -Wp,-D_FORTIFY_SOURCE=0"
+%endif
 
 # Remove "--disable static" if you want to build static libraries
 # jemalloc is not compatible with Red Hat's ppc64 RHEL kernel :-(

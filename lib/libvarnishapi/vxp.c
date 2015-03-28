@@ -34,11 +34,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 
-#include "vsb.h"
+#include "vdef.h"
 #include "vas.h"
 #include "miniobj.h"
+
+#include "vqueue.h"
+#include "vre.h"
+#include "vsb.h"
 
 #include "vxp.h"
 

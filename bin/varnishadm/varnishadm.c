@@ -34,18 +34,23 @@
 
 #include <stdio.h>
 
-#ifdef HAVE_EDIT_READLINE_READLINE_H
+#if defined(HAVE_EDIT_READLINE_READLINE_H)
 #  include <edit/readline/readline.h>
-#elif HAVE_READLINE_READLINE_H
+#elif defined(HAVE_LIBEDIT)
+#  include <editline/readline.h>
+#elif defined (HAVE_READLINE_READLINE_H)
 #  include <readline/readline.h>
 #  ifdef HAVE_READLINE_HISTORY_H
 #    include <readline/history.h>
+#  else
+#    error missing history.h - this should have got caught in configure
 #  endif
 #else
-#  include <editline/readline.h>
+#  error missing readline.h - this should have got caught in configure
 #endif
 
 #include <errno.h>
+#include <math.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdint.h>
@@ -57,7 +62,8 @@
 #include "vapi/vsm.h"
 #include "vas.h"
 #include "vcli.h"
-#include "vss.h"
+#include "vnum.h"
+#include "vtcp.h"
 
 #define RL_EXIT(status) \
 	do { \
@@ -95,10 +101,11 @@ cli_sock(const char *T_arg, const char *S_arg)
 	unsigned status;
 	char *answer = NULL;
 	char buf[CLI_AUTH_RESPONSE_LEN + 1];
+	const char *err;
 
-	sock = VSS_open(T_arg, timeout);
+	sock = VTCP_open(T_arg, NULL, timeout, &err);
 	if (sock < 0) {
-		fprintf(stderr, "Connection failed (%s)\n", T_arg);
+		fprintf(stderr, "Connection failed (%s): %s\n", T_arg, err);
 		return (-1);
 	}
 
@@ -460,7 +467,9 @@ main(int argc, char * const *argv)
 			T_arg = optarg;
 			break;
 		case 't':
-			timeout = strtod(optarg, NULL);
+			timeout = VNUM(optarg);
+			if (isnan(timeout))
+				usage();
 			break;
 		default:
 			usage();

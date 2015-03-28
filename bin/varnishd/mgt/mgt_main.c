@@ -31,13 +31,11 @@
 
 #include "config.h"
 
-#include <sys/stat.h>
 #include <sys/utsname.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
-#include <grp.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +69,8 @@ struct vsb		*vident;
 struct VSC_C_mgt	static_VSC_C_mgt;
 struct VSC_C_mgt	*VSC_C_mgt;
 
+static struct vpf_fh *pfh = NULL;
+
 /*--------------------------------------------------------------------*/
 
 static void
@@ -78,6 +78,8 @@ mgt_sltm(const char *tag, const char *sdesc, const char *ldesc)
 {
 	int i;
 
+	assert(sdesc != NULL && ldesc != NULL);
+	assert(*sdesc != '\0' || *ldesc != '\0');
 	printf("\n%s\n", tag);
 	i = strlen(tag);
 	printf("%*.*s\n\n", i, i, "------------------------------------");
@@ -85,9 +87,6 @@ mgt_sltm(const char *tag, const char *sdesc, const char *ldesc)
 		printf("%s\n", ldesc);
 	else if (*sdesc != '\0')
 		printf("%s\n", sdesc);
-	else
-		printf("%s\n", "(description not yet written)");
-
 }
 
 /*lint -e{506} constant value boolean */
@@ -149,13 +148,18 @@ usage(void)
 	fprintf(stderr, FMT, "-d", "debug");
 	fprintf(stderr, FMT, "-f file", "VCL script");
 	fprintf(stderr, FMT, "-F", "Run in foreground");
-	fprintf(stderr, FMT, "-g group", "Privilege separation group id");
 	fprintf(stderr, FMT, "-h kind[,hashoptions]", "Hash specification");
 	fprintf(stderr, FMT, "", "  -h critbit [default]");
 	fprintf(stderr, FMT, "", "  -h simple_list");
 	fprintf(stderr, FMT, "", "  -h classic");
 	fprintf(stderr, FMT, "", "  -h classic,<buckets>");
 	fprintf(stderr, FMT, "-i identity", "Identity of varnish instance");
+	fprintf(stderr, FMT, "-j jail[,jailoptions]", "Jail specification");
+#ifdef HAVE_SETPPRIV
+	fprintf(stderr, FMT, "", "  -j solaris");
+#endif
+	fprintf(stderr, FMT, "", "  -j unix[,user=<user>][,ccgroup=<group>]");
+	fprintf(stderr, FMT, "", "  -j none");
 	fprintf(stderr, FMT, "-l shl,free,fill", "Size of shared memory file");
 	fprintf(stderr, FMT, "", "  shl: space for SHL records [80m]");
 	fprintf(stderr, FMT, "", "  free: space for other allocations [1m]");
@@ -171,18 +175,16 @@ usage(void)
 #ifdef HAVE_LIBUMEM
 	fprintf(stderr, FMT, "", "  -s umem");
 #endif
-	fprintf(stderr, FMT, "", "  -s file  [default: use /tmp]");
 	fprintf(stderr, FMT, "", "  -s file,<dir_or_file>");
 	fprintf(stderr, FMT, "", "  -s file,<dir_or_file>,<size>");
-	fprintf(stderr, FMT, "", "  -s persist{experimenta}");
 	fprintf(stderr, FMT, "",
 	    "  -s file,<dir_or_file>,<size>,<granularity>");
+	fprintf(stderr, FMT, "", "  -s persist{experimental}");
 	fprintf(stderr, FMT, "-S secret-file",
 	    "Secret file for CLI authentication");
 	fprintf(stderr, FMT, "-T address:port",
 	    "Telnet listen address and port");
 	fprintf(stderr, FMT, "-t", "Default TTL");
-	fprintf(stderr, FMT, "-u user", "Privilege separation user id");
 	fprintf(stderr, FMT, "-V", "version");
 #undef FMT
 	exit(1);
@@ -199,7 +201,7 @@ cli_check(const struct cli *cli)
 	}
 	AZ(VSB_finish(cli->sb));
 	fprintf(stderr, "Error:\n%s\n", VSB_data(cli->sb));
-	exit (2);
+	exit(2);
 }
 
 /*--------------------------------------------------------------------
@@ -215,6 +217,7 @@ cli_check(const struct cli *cli)
 
 struct symbols {
 	uintptr_t		a;
+	uintptr_t		l;
 	char			*n;
 	VTAILQ_ENTRY(symbols)	list;
 };
@@ -230,14 +233,12 @@ Symbol_Lookup(struct vsb *vsb, void *ptr)
 	pp = (uintptr_t)ptr;
 	s0 = NULL;
 	VTAILQ_FOREACH(s, &symbols, list) {
-		if (s->a > pp)
+		if (s->a > pp || s->a + s->l < pp)
 			continue;
-		if (s0 == NULL || s->a > s0->a)
+		if (s0 == NULL || s->l < s0->l)
 			s0 = s;
 	}
 	if (s0 == NULL)
-		return (-1);
-	if (!strcmp(s0->n, "_end"))
 		return (-1);
 	VSB_printf(vsb, "%p: %s+0x%jx", ptr, s0->n, (uintmax_t)pp - s0->a);
 	return (0);
@@ -246,43 +247,28 @@ Symbol_Lookup(struct vsb *vsb, void *ptr)
 static void
 Symbol_hack(const char *a0)
 {
-	char buf[BUFSIZ], *p, *e;
+	char buf[BUFSIZ];
 	FILE *fi;
-	uintptr_t a;
 	struct symbols *s;
+	uintmax_t aa, ll;
+	char type[10];
+	char name[100];
+	int i;
 
-	bprintf(buf, "nm -an %s 2>/dev/null", a0);
+	bprintf(buf, "nm -t x -n -P %s 2>/dev/null", a0);
 	fi = popen(buf, "r");
 	if (fi == NULL)
 		return;
 	while (fgets(buf, sizeof buf, fi)) {
-		if (buf[0] == ' ')
+		i = sscanf(buf, "%99s\t%9s\t%jx\t%jx\n", name, type, &aa, &ll);
+		if (i != 4)
 			continue;
-		p = NULL;
-		a = strtoul(buf, &p, 16);
-		if (p == NULL)
-			continue;
-		if (a == 0)
-			continue;
-		if (*p++ != ' ')
-			continue;
-		if (*p == '-')
-			continue;
-		p++;
-		if (*p++ != ' ')
-			continue;
-		if (*p <= ' ')
-			continue;
-		e = strchr(p, '\0');
-		AN(e);
-		while (e > p && isspace(e[-1]))
-			e--;
-		*e = '\0';
-		s = malloc(sizeof *s + strlen(p) + 1);
+		s = malloc(sizeof *s + strlen(name) + 1);
 		AN(s);
-		s->a = a;
+		s->a = aa;
+		s->l = ll;
 		s->n = (void*)(s + 1);
-		strcpy(s->n, p);
+		strcpy(s->n, name);
 		VTAILQ_INSERT_TAIL(&symbols, s, list);
 	}
 	(void)pclose(fi);
@@ -307,6 +293,8 @@ cli_stdin_close(void *priv)
 	if (d_flag) {
 		mgt_stop_child();
 		mgt_cli_close_all();
+		if (pfh != NULL)
+			(void)VPF_Remove(pfh);
 		exit(0);
 	}
 }
@@ -351,12 +339,6 @@ init_params(struct cli *cli)
 
 	MCF_TcpParams();
 
-	/* If we have nobody/nogroup, use them as defaults */
-	if (getpwnam("nobody") != NULL)
-		MCF_SetDefault("user", "nobody");
-	if (getgrnam("nogroup") != NULL)
-		MCF_SetDefault("group", "nogroup");
-
 	if (sizeof(void *) < 8) {
 		/*
 		 * Adjust default parameters for 32 bit systems to conserve
@@ -387,7 +369,7 @@ init_params(struct cli *cli)
 int
 main(int argc, char * const *argv)
 {
-	int o, fd;
+	int o;
 	unsigned C_flag = 0;
 	unsigned F_flag = 0;
 	const char *b_arg = NULL;
@@ -403,10 +385,10 @@ main(int argc, char * const *argv)
 	const char *T_arg = "localhost:0";
 	char *p, *vcl = NULL;
 	struct cli cli[1];
-	struct vpf_fh *pfh = NULL;
 	char *dirname;
 	char **av;
 	unsigned clilim;
+	int jailed = 0;
 
 	/* Set up the mgt counters */
 	memset(&static_VSC_C_mgt, 0, sizeof static_VSC_C_mgt);
@@ -433,43 +415,50 @@ main(int argc, char * const *argv)
 	/* for ASSERT_MGT() */
 	mgt_pid = getpid();
 
-
-	/*
-	 * Run in UTC timezone, on the off-chance that this operating
-	 * system does not have a timegm() function, and translates
-	 * timestamps on the local timescale.
-	 * See lib/libvarnish/time.c
-	 */
-	AZ(setenv("TZ", "UTC", 1));
-	tzset();
 	assert(VTIM_parse("Sun, 06 Nov 1994 08:49:37 GMT") == 784111777);
 	assert(VTIM_parse("Sunday, 06-Nov-94 08:49:37 GMT") == 784111777);
 	assert(VTIM_parse("Sun Nov  6 08:49:37 1994") == 784111777);
 
-	/*
-	 * Check that our SHA256 works
-	 */
+	/* Check that our SHA256 works */
 	SHA256_Test();
 
-	memset(cli, 0, sizeof cli);
-	cli[0].magic = CLI_MAGIC;
+	/* Create a cli for convenience in otherwise CLI functions */
+	INIT_OBJ(cli, CLI_MAGIC);
 	cli[0].sb = VSB_new_auto();
 	XXXAN(cli[0].sb);
 	cli[0].result = CLIS_OK;
 	clilim = 32768;
 	cli[0].limit = &clilim;
 
+	/* Various initializations */
 	VTAILQ_INIT(&heritage.socks);
+	mgt_evb = vev_new_base();
+	AN(mgt_evb);
 
 	init_params(cli);
 	cli_check(cli);
 
 	while ((o = getopt(argc, argv,
-	    "a:b:Cdf:Fg:h:i:l:M:n:P:p:r:S:s:T:t:u:Vx:")) != -1)
+	    "a:b:Cdf:Fh:i:j:l:M:n:P:p:r:S:s:T:t:Vx:")) != -1) {
+		/*
+		 * -j must be the first argument if specified, because
+		 * it (may) affect subsequent argument processing.
+		 */
+		if (!jailed) {
+			jailed++;
+			if (o == 'j') {
+				VJ_Init(optarg);
+				continue;
+			}
+			VJ_Init(NULL);
+		} else {
+			if (o == 'j')
+				ARGV_ERR("\t-j must be the first argument\n");
+		}
+
 		switch (o) {
 		case 'a':
-			MCF_ParamSet(cli, "listen_address", optarg);
-			cli_check(cli);
+			MAC_Arg(optarg);
 			break;
 		case 'b':
 			b_arg = optarg;
@@ -485,9 +474,6 @@ main(int argc, char * const *argv)
 			break;
 		case 'F':
 			F_flag = 1 - F_flag;
-			break;
-		case 'g':
-			MCF_ParamSet(cli, "group", optarg);
 			break;
 		case 'h':
 			h_arg = optarg;
@@ -544,13 +530,7 @@ main(int argc, char * const *argv)
 			S_arg = optarg;
 			break;
 		case 'T':
-			if (*optarg != '\0')
-				T_arg = optarg;
-			else
-				T_arg = NULL;
-			break;
-		case 'u':
-			MCF_ParamSet(cli, "user", optarg);
+			T_arg = optarg;
 			break;
 		case 'V':
 			/* XXX: we should print the ident here */
@@ -559,25 +539,28 @@ main(int argc, char * const *argv)
 		case 'x':
 			if (!strcmp(optarg, "dumprstparam")) {
 				MCF_DumpRstParam();
-				exit (0);
+				exit(0);
 			}
 			if (!strcmp(optarg, "dumprstvsl")) {
 				mgt_DumpRstVsl();
-				exit (0);
+				exit(0);
 			}
 			usage();
 			break;
 		default:
 			usage();
 		}
+	}
 
 	argc -= optind;
 	argv += optind;
-
-	mgt_vcc_init();
-
 	if (argc != 0)
 		ARGV_ERR("Too many arguments (%s...)\n", argv[0]);
+
+	if (M_arg != NULL && *M_arg == '\0')
+		M_arg = NULL;
+	if (T_arg != NULL && *T_arg == '\0')
+		T_arg = NULL;
 
 	/* XXX: we can have multiple CLI actions above, is this enough ? */
 	if (cli[0].result != CLIS_OK) {
@@ -597,10 +580,10 @@ main(int argc, char * const *argv)
 		ARGV_ERR("At least one of -d, -b, -f, -M or -T "
 		    "must be specified\n");
 
-	if (S_arg != NULL && *S_arg == '\0')
+	if (S_arg != NULL && *S_arg == '\0') {
 		fprintf(stderr,
 		    "Warning: Empty -S argument, no CLI authentication.\n");
-	else if (S_arg != NULL) {
+	} else if (S_arg != NULL) {
 		o = open(S_arg, O_RDONLY, 0);
 		if (o < 0)
 			ARGV_ERR("Cannot open -S file (%s): %s\n",
@@ -618,49 +601,47 @@ main(int argc, char * const *argv)
 	if (VIN_N_Arg(n_arg, &heritage.name, &dirname, NULL) != 0)
 		ARGV_ERR("Invalid instance (-n) name: %s\n", strerror(errno));
 
-	if (i_arg != NULL &&
-	    snprintf(heritage.identity, sizeof heritage.identity, "%s", i_arg)
-	    > sizeof heritage.identity)
-		ARGV_ERR("Invalid identity (-i) name: %s\n",
-		    strerror(ENAMETOOLONG));
+	if (i_arg != NULL) {
+		if (strlen(i_arg) + 1 > sizeof heritage.identity)
+			ARGV_ERR("Identity (-i) name too long.\n");
+		strncpy(heritage.identity, i_arg, sizeof heritage.identity);
+	}
 
 	if (n_arg != NULL)
 		openlog(n_arg, LOG_PID, LOG_LOCAL0);	/* XXX: i_arg ? */
 	else
 		openlog("varnishd", LOG_PID, LOG_LOCAL0);
 
-	if (mkdir(dirname, 0755) < 0 && errno != EEXIST)
-		ARGV_ERR("Cannot create working directory '%s': %s\n",
-		    dirname, strerror(errno));
-
-	if (chdir(dirname) < 0)
-		ARGV_ERR("Cannot change to working directory '%s': %s\n",
-		    dirname, strerror(errno));
-
-	fd = open("_.testfile", O_RDWR|O_CREAT|O_EXCL, 0600);
-	if (fd < 0)
-		ARGV_ERR("Error: Cannot create test-file in %s (%s)\n"
-		    "Check permissions (or delete old directory)\n",
-		    dirname, strerror(errno));
-	AZ(close(fd));
-	AZ(unlink("_.testfile"));
+	VJ_make_workdir(dirname);
 
 	/* XXX: should this be relative to the -n arg ? */
 	if (P_arg && (pfh = VPF_Open(P_arg, 0644, NULL)) == NULL)
 		ARGV_ERR("Could not open pid/lock (-P) file (%s): %s\n",
 		    P_arg, strerror(errno));
 
-	if (b_arg != NULL || f_arg != NULL)
-		if (mgt_vcc_default(b_arg, f_arg, vcl, C_flag))
-			exit (2);
+	mgt_vcc_init();
+	mgt_vcl_init();
 
-	if (C_flag)
-		exit (0);
+	if (b_arg != NULL || f_arg != NULL) {
+		mgt_vcc_default(cli, b_arg, vcl, C_flag);
+		if (C_flag) {
+			AZ(VSB_finish(cli->sb));
+			fprintf(stderr, "%s\n", VSB_data(cli->sb));
+			exit(0);
+		}
+		cli_check(cli);
+		free(vcl);
+	} else if (C_flag)
+		ARGV_ERR("-C only good with -b or -f\n");
 
 	if (!d_flag) {
-		if (MGT_open_sockets())
-			ARGV_ERR("Failed to open (any) accept sockets.\n");
-		MGT_close_sockets();
+		if (b_arg == NULL && f_arg == NULL) {
+			fprintf(stderr,
+			    "Warning: Neither -b nor -f given,"
+			    " won't start a worker child.\n"
+			    "         Master process started,"
+			    " use varnishadm to control it.\n");
+		}
 	}
 
 	/* If no -s argument specified, process default -s argument */
@@ -675,6 +656,10 @@ main(int argc, char * const *argv)
 	mgt_SHM_Init();
 
 	AZ(VSB_finish(vident));
+
+	if (S_arg == NULL)
+		S_arg = make_secret(dirname);
+	AN(S_arg);
 
 	if (!d_flag && !F_flag)
 		AZ(varnish_daemon(1, 0));
@@ -691,15 +676,8 @@ main(int argc, char * const *argv)
 
 	mgt_pid = getpid();	/* daemon() changed this */
 
-	mgt_evb = vev_new_base();
-	XXXAN(mgt_evb);
-
 	if (d_flag)
 		mgt_cli_setup(0, 1, 1, "debug", cli_stdin_close, NULL);
-
-	if (S_arg == NULL)
-		S_arg = make_secret(dirname);
-	AN(S_arg);
 
 	if (*S_arg != '\0')
 		mgt_cli_secret(S_arg);

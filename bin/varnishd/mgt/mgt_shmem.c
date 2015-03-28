@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -45,8 +46,9 @@
 #include "common/params.h"
 
 #include "flopen.h"
-#include "vapi/vsm_int.h"
+#include "vsm_priv.h"
 #include "vmb.h"
+#include "vfil.h"
 
 #ifndef MAP_HASSEMAPHORE
 #define MAP_HASSEMAPHORE 0 /* XXX Linux */
@@ -100,7 +102,7 @@ vsm_n_check(void)
 	struct stat st;
 	pid_t pid;
 	struct VSM_head vsmh;
-	int retval = 2;
+	int retval = 1;
 
 	fd = open(VSM_FILENAME, O_RDWR, 0644);
 	if (fd < 0)
@@ -147,8 +149,6 @@ static int
 vsm_zerofile(const char *fn, ssize_t size)
 {
 	int fd;
-	ssize_t i, u;
-	char buf[64*1024];
 	int flags;
 
 	fd = flopen(fn, O_RDWR | O_CREAT | O_EXCL | O_NONBLOCK, 0644);
@@ -161,18 +161,11 @@ vsm_zerofile(const char *fn, ssize_t size)
 	assert(flags != -1);
 	flags &= ~O_NONBLOCK;
 	AZ(fcntl(fd, F_SETFL, flags));
-
-	memset(buf, 0, sizeof buf);
-	for (u = 0; u < size; ) {
-		i = write(fd, buf, sizeof buf);
-		if (i <= 0) {
-			fprintf(stderr, "Write error %s: %s\n",
-			    fn, strerror(errno));
-			return (-1);
-		}
-		u += i;
+	if (VFIL_allocate(fd, (off_t)size, 1)) {
+		fprintf(stderr, "File allocation error %s: %s\n",
+		    fn, strerror(errno));
+		return (-1);
 	}
-	AZ(ftruncate(fd, (off_t)size));
 	return (fd);
 }
 
@@ -217,7 +210,7 @@ mgt_SHM_Create(void)
 
 	if (p == MAP_FAILED) {
 		fprintf(stderr, "Mmap error %s: %s\n", fnbuf, strerror(errno));
-		exit (-1);
+		exit(1);
 	}
 
 	mgt_vsm_p = p;
@@ -246,17 +239,28 @@ mgt_SHM_Create(void)
 	AN(VSC_C_mgt);
 	*VSC_C_mgt = static_VSC_C_mgt;
 
-	if (rename(fnbuf, VSM_FILENAME)) {
-		fprintf(stderr, "Rename failed %s -> %s: %s\n",
-		    fnbuf, VSM_FILENAME, strerror(errno));
-		(void)unlink(fnbuf);
-		exit (-1);
-	}
-
 #ifdef __OpenBSD__
 	/* Commit changes, for OS's without coherent VM/buf */
 	AZ(msync(p, getpagesize(), MS_SYNC));
 #endif
+}
+
+/*--------------------------------------------------------------------
+ * Commit the VSM
+ */
+
+void
+mgt_SHM_Commit(void)
+{
+	char fnbuf[64];
+
+	bprintf(fnbuf, "%s.%jd", VSM_FILENAME, (intmax_t)getpid());
+	if (rename(fnbuf, VSM_FILENAME)) {
+		fprintf(stderr, "Rename failed %s -> %s: %s\n",
+		    fnbuf, VSM_FILENAME, strerror(errno));
+		(void)unlink(fnbuf);
+		exit(1);
+	}
 }
 
 /*--------------------------------------------------------------------
@@ -325,7 +329,7 @@ mgt_SHM_Init(void)
 	/* Collision check with already running varnishd */
 	i = vsm_n_check();
 	if (i)
-		exit(i);
+		exit(2);
 
 	/* Create our static VSM instance */
 	static_vsm = VSM_common_new(static_vsm_buf, sizeof static_vsm_buf);

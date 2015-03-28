@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -29,21 +29,14 @@
  * This source file has the various trickery surrounding the accept/listen
  * sockets.
  *
- * The actual acceptance is done from cache_pool.c, by calling
- * into VCA_Accept() in this file.
- *
- * Once the session is allocated we move into it with a call to
- * VCA_SetupSess().
- *
- * If we fail to allocate a session we call VCA_FailSess() to clean up
- * and initiate pacing.
  */
 
 #include "config.h"
 
-#include <math.h>
-#include <stdlib.h>
 #include <sys/types.h>
+
+#include <errno.h>
+#include <stdlib.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
@@ -57,9 +50,29 @@
 #include "vtim.h"
 
 static pthread_t	VCA_thread;
-static int hack_ready;
 static double vca_pace = 0.0;
 static struct lock pace_mtx;
+static unsigned pool_accepting;
+
+struct wrk_accept {
+	unsigned		magic;
+#define WRK_ACCEPT_MAGIC	0x8c4b4d59
+
+	/* Accept stuff */
+	struct sockaddr_storage	acceptaddr;
+	socklen_t		acceptaddrlen;
+	int			acceptsock;
+	struct listen_sock	*acceptlsock;
+	struct sesspool		*sesspool;
+};
+
+struct poolsock {
+	unsigned			magic;
+#define POOLSOCK_MAGIC			0x1b0a2d38
+	struct listen_sock		*lsock;
+	struct pool_task		task;
+	struct sesspool			*sesspool;
+};
 
 /*--------------------------------------------------------------------
  * TCP options we want to control
@@ -270,100 +283,192 @@ vca_pace_good(void)
 }
 
 /*--------------------------------------------------------------------
- * Accept on a listen socket, and handle error returns.
+ * The pool-task for a newly accepted session
  *
- * Called from a worker thread from a pool
+ * Called from assigned worker thread
  */
 
-int
-VCA_Accept(struct listen_sock *ls, struct wrk_accept *wa)
+static void __match_proto__(task_func_t)
+vca_make_session(struct worker *wrk, void *arg)
 {
-	int i;
+	struct sesspool *pp;
+	struct sess *sp;
+	struct wrk_accept *wa;
+	struct sockaddr_storage ss;
+	struct suckaddr *sa;
+	socklen_t sl;
+	char laddr[VTCP_ADDRBUFSIZE];
+	char lport[VTCP_PORTBUFSIZE];
+	char raddr[VTCP_ADDRBUFSIZE];
+	char rport[VTCP_PORTBUFSIZE];
 
-	CHECK_OBJ_NOTNULL(ls, LISTEN_SOCK_MAGIC);
-	vca_pace_check();
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CAST_OBJ_NOTNULL(wa, arg, WRK_ACCEPT_MAGIC);
+	pp = wa->sesspool;
 
-	while(!hack_ready)
-		(void)usleep(100*1000);
-
-	wa->acceptaddrlen = sizeof wa->acceptaddr;
-	do {
-		i = accept(ls->sock, (void*)&wa->acceptaddr,
-			   &wa->acceptaddrlen);
-	} while (i < 0 && errno == EAGAIN);
-
-	if (i < 0) {
-		switch (errno) {
-		case ECONNABORTED:
-			break;
-		case EMFILE:
-			VSL(SLT_Debug, ls->sock, "Too many open files");
-			vca_pace_bad();
-			break;
-		default:
-			VSL(SLT_Debug, ls->sock, "Accept failed: %s",
-			    strerror(errno));
-			vca_pace_bad();
-			break;
-		}
+	/* Turn accepted socket into a session */
+	AN(wrk->aws->r);
+	sp = SES_New(pp);
+	if (sp == NULL) {
+		/*
+		 * We consider this a DoS situation and silently close the
+		 * connection with minimum effort and fuzz, rather than try
+		 * to send an intelligent message back.
+		 */
+		AZ(close(wa->acceptsock));
+		wrk->stats->sess_drop++;
+		vca_pace_bad();
+		WS_Release(wrk->aws, 0);
+		return;
 	}
-	wa->acceptlsock = ls;
-	wa->acceptsock = i;
-	return (i);
-}
-
-/*--------------------------------------------------------------------
- * Fail a session
- *
- * This happens if we accept the socket, but cannot get a session
- * structure.
- *
- * We consider this a DoS situation (false positive:  Extremely popular
- * busy objects) and silently close the connection with minimum effort
- * and fuzz, rather than try to send an intelligent message back.
- */
-
-void
-VCA_FailSess(struct worker *wrk)
-{
-	struct wrk_accept *wa;
-
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	CAST_OBJ_NOTNULL(wa, (void*)wrk->aws->f, WRK_ACCEPT_MAGIC);
-	AZ(close(wa->acceptsock));
-	wrk->stats.sess_drop++;
-	vca_pace_bad();
-	WS_Release(wrk->aws, 0);
-}
-
-/*--------------------------------------------------------------------
- * We have allocated a session, move our info into it.
- */
-
-const char *
-VCA_SetupSess(struct worker *wrk, struct sess *sp)
-{
-	struct wrk_accept *wa;
-	const char *retval;
-
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
-	CAST_OBJ_NOTNULL(wa, (void*)wrk->aws->f, WRK_ACCEPT_MAGIC);
+	wrk->stats->s_sess++;
+
+	sp->t_open = VTIM_real();
+	sp->t_idle = sp->t_open;
+	sp->vxid = VXID_Get(wrk, VSL_CLIENTMARKER);
+
 	sp->fd = wa->acceptsock;
 	wa->acceptsock = -1;
-	retval = wa->acceptlsock->name;
+	sp->sess_step = wa->acceptlsock->first_step;
+
 	assert(wa->acceptaddrlen <= vsa_suckaddr_len);
-	AN(VSA_Build(sess_remote_addr(sp), &wa->acceptaddr, wa->acceptaddrlen));
-	vca_pace_good();
-	wrk->stats.sess_conn++;
+	SES_Reserve_remote_addr(sp, &sa);
+	AN(VSA_Build(sa, &wa->acceptaddr, wa->acceptaddrlen));
+	sp->sattr[SA_CLIENT_ADDR] = sp->sattr[SA_REMOTE_ADDR];
+
+	VTCP_name(sa, raddr, sizeof raddr, rport, sizeof rport);
+	SES_Set_String_Attr(sp, SA_CLIENT_IP, raddr);
+	SES_Set_String_Attr(sp, SA_CLIENT_PORT, rport);
+
+	sl = sizeof ss;
+	AZ(getsockname(sp->fd, (void*)&ss, &sl));
+	SES_Reserve_local_addr(sp, &sa);
+	AN(VSA_Build(sa, &ss, sl));
+	sp->sattr[SA_SERVER_ADDR] = sp->sattr[SA_LOCAL_ADDR];
+
+	VTCP_name(sa, laddr, sizeof laddr, lport, sizeof lport);
+
+	VSL(SLT_Begin, sp->vxid, "sess 0 %s", wa->acceptlsock->proto_name);
+	VSL(SLT_SessOpen, sp->vxid, "%s %s %s %s %s %.6f %d",
+	    raddr, rport, wa->acceptlsock->name, laddr, lport,
+	    sp->t_open, sp->fd);
+
 	WS_Release(wrk->aws, 0);
+
+	vca_pace_good();
+	wrk->stats->sess_conn++;
 
 	if (need_test) {
 		vca_tcp_opt_test(sp->fd);
 		need_test = 0;
 	}
 	vca_tcp_opt_set(sp->fd, 0);
-	return (retval);
+
+	/* SES_Proto_Sess() must be sceduled with reserved WS */
+	assert(8 == WS_Reserve(sp->ws, 8));
+	wrk->task.func = SES_Proto_Sess;
+	wrk->task.priv = sp;
+}
+
+/*--------------------------------------------------------------------
+ * This function accepts on a single socket for a single session pool.
+ *
+ * As long as we can stick the accepted connection to another thread
+ * we do so, otherwise we put the socket back on the "BACK" pool
+ * and handle the new connection ourselves.
+ */
+
+static void __match_proto__(task_func_t)
+vca_accept_task(struct worker *wrk, void *arg)
+{
+	struct wrk_accept wa;
+	struct poolsock *ps;
+	struct listen_sock *ls;
+	int i;
+
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CAST_OBJ_NOTNULL(ps, arg, POOLSOCK_MAGIC);
+	ls = ps->lsock;
+	CHECK_OBJ_NOTNULL(ls, LISTEN_SOCK_MAGIC);
+
+	while (!pool_accepting)
+		VTIM_sleep(.1);
+
+	while (1) {
+		INIT_OBJ(&wa, WRK_ACCEPT_MAGIC);
+		wa.sesspool = ps->sesspool;
+		wa.acceptlsock = ls;
+
+		vca_pace_check();
+
+		wa.acceptaddrlen = sizeof wa.acceptaddr;
+		do {
+			i = accept(ls->sock, (void*)&wa.acceptaddr,
+				   &wa.acceptaddrlen);
+		} while (i < 0 && errno == EAGAIN);
+
+		if (i < 0) {
+			switch (errno) {
+			case ECONNABORTED:
+				break;
+			case EMFILE:
+				VSL(SLT_Debug, ls->sock, "Too many open files");
+				vca_pace_bad();
+				break;
+			default:
+				VSL(SLT_Debug, ls->sock, "Accept failed: %s",
+				    strerror(errno));
+				vca_pace_bad();
+				break;
+			}
+			wrk->stats->sess_fail++;
+			(void)Pool_TrySumstat(wrk);
+			continue;
+		}
+
+		wa.acceptsock = i;
+
+		if (!Pool_Task_Arg(wrk, vca_make_session, &wa, sizeof wa)) {
+			/*
+			 * We couldn't get another thread, so we will handle
+			 * the request in this worker thread, but first we
+			 * must reschedule the listening task so it will be
+			 * taken up by another thread again.
+			 */
+			AZ(Pool_Task(wrk->pool, &ps->task, POOL_QUEUE_BACK));
+			return;
+		}
+
+		/*
+		 * We were able to hand off, so release this threads VCL
+		 * reference (if any) so we don't hold on to discarded VCLs.
+		 */
+		if (wrk->vcl != NULL)
+			VCL_Rel(&wrk->vcl);
+	}
+}
+
+/*--------------------------------------------------------------------
+ * Called when a worker and attached session pool is created, to
+ * allocate the tasks which will listen to sockets for that pool.
+ */
+
+void
+VCA_New_SessPool(struct pool *pp, struct sesspool *sp)
+{
+	struct listen_sock *ls;
+	struct poolsock *ps;
+
+	VTAILQ_FOREACH(ls, &heritage.socks, list) {
+		ALLOC_OBJ(ps, POOLSOCK_MAGIC);
+		AN(ps);
+		ps->lsock = ls;
+		ps->task.func = vca_accept_task;
+		ps->task.priv = ps;
+		ps->sesspool = sp;
+		AZ(Pool_Task(pp, &ps->task, POOL_QUEUE_BACK));
+	}
 }
 
 /*--------------------------------------------------------------------*/
@@ -381,8 +486,7 @@ vca_acct(void *arg)
 	(void)vca_tcp_opt_init();
 
 	VTAILQ_FOREACH(ls, &heritage.socks, list) {
-		if (ls->sock < 0)
-			continue;
+		assert (ls->sock > 0);		// We know where stdin is
 		AZ(listen(ls->sock, cache_param->listen_depth));
 		vca_tcp_opt_set(ls->sock, 1);
 		if (cache_param->accept_filter) {
@@ -394,25 +498,21 @@ vca_acct(void *arg)
 		}
 	}
 
-	hack_ready = 1;
-
 	need_test = 1;
+	pool_accepting = 1;
+
 	t0 = VTIM_real();
 	while (1) {
 		(void)sleep(1);
 		if (vca_tcp_opt_init()) {
-			VTAILQ_FOREACH(ls, &heritage.socks, list) {
-				if (ls->sock < 0)
-					continue;
+			VTAILQ_FOREACH(ls, &heritage.socks, list)
 				vca_tcp_opt_set(ls->sock, 1);
-			}
 		}
 		now = VTIM_real();
 		VSC_C_main->uptime = (uint64_t)(now - t0);
 	}
 	NEEDLESS_RETURN(NULL);
 }
-
 
 /*--------------------------------------------------------------------*/
 
@@ -445,12 +545,10 @@ ccf_listen_address(struct cli *cli, const char * const *av, void *priv)
 	 * a race where varnishtest::client would attempt to connect(2)
 	 * before listen(2) has been called.
 	 */
-	while(!hack_ready)
-		(void)usleep(100*1000);
+	while(!pool_accepting)
+		VTIM_sleep(.1);
 
 	VTAILQ_FOREACH(ls, &heritage.socks, list) {
-		if (ls->sock < 0)
-			continue;
 		VTCP_myname(ls->sock, h, sizeof h, p, sizeof p);
 		VCLI_Out(cli, "%s %s\n", h, p);
 	}
@@ -460,9 +558,8 @@ ccf_listen_address(struct cli *cli, const char * const *av, void *priv)
 
 static struct cli_proto vca_cmds[] = {
 	{ CLI_SERVER_START,	"i", ccf_start },
-	{ "debug.listen_address",
-	    "debug.listen_address",
-	    "Report the actual listen address\n", 0, 0,
+	{ "debug.listen_address", "debug.listen_address",
+	    "\tReport the actual listen address.", 0, 0,
 	    "d", ccf_listen_address, NULL },
 	{ NULL }
 };
@@ -482,8 +579,6 @@ VCA_Shutdown(void)
 	int i;
 
 	VTAILQ_FOREACH(ls, &heritage.socks, list) {
-		if (ls->sock < 0)
-			continue;
 		i = ls->sock;
 		ls->sock = -1;
 		(void)close(i);

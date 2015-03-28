@@ -39,7 +39,6 @@
 
 #include "config.h"
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -83,7 +82,7 @@ free_frfile(void *ptr)
 }
 
 VCL_STRING __match_proto__(td_std_fileread)
-vmod_fileread(const struct vrt_ctx *ctx, struct vmod_priv *priv,
+vmod_fileread(VRT_CTX, struct vmod_priv *priv,
     VCL_STRING file_name)
 {
 	struct frfile *frf = NULL;

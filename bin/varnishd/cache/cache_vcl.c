@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -34,6 +34,7 @@
 #include "config.h"
 
 #include <dlfcn.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "cache.h"
@@ -47,9 +48,10 @@ struct vcls {
 	unsigned		magic;
 #define VVCLS_MAGIC		0x214188f2
 	VTAILQ_ENTRY(vcls)	list;
-	char			*name;
 	void			*dlh;
 	struct VCL_conf		conf[1];
+	char			state[8];
+	int			warm;
 };
 
 /*
@@ -58,7 +60,6 @@ struct vcls {
  */
 static VTAILQ_HEAD(, vcls)	vcl_head =
     VTAILQ_HEAD_INITIALIZER(vcl_head);
-
 
 static struct lock		vcl_mtx;
 static struct vcls		*vcl_active; /* protected by vcl_mtx */
@@ -162,14 +163,35 @@ vcl_find(const char *name)
 	VTAILQ_FOREACH(vcl, &vcl_head, list) {
 		if (vcl->conf->discard)
 			continue;
-		if (!strcmp(vcl->name, name))
+		if (!strcmp(vcl->conf->loaded_name, name))
 			return (vcl);
 	}
 	return (NULL);
 }
 
+static void
+vcl_set_state(struct vcls *vcl, const char *state)
+{
+	struct vrt_ctx ctx;
+	int warm;
+	unsigned hand = 0;
+
+	assert(state[0] == '0' || state[0] == '1');
+	warm = state[0] == '1' ? 1 : 0;
+	bprintf(vcl->state, "%s", state + 1);
+	if (warm == vcl->warm)
+		return;
+
+	vcl->warm = warm;
+
+	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
+	ctx.handling = &hand;
+	(void)vcl->conf->event_vcl(&ctx,
+	    vcl->warm ? VCL_EVENT_WARM : VCL_EVENT_COLD);
+}
+
 static int
-VCL_Load(const char *fn, const char *name, struct cli *cli)
+VCL_Load(struct cli *cli, const char *name, const char *fn, const char *state)
 {
 	struct vcls *vcl;
 	struct VCL_conf const *cnf;
@@ -178,9 +200,6 @@ VCL_Load(const char *fn, const char *name, struct cli *cli)
 
 	ASSERT_CLI();
 
-	memset(&ctx, 0, sizeof ctx);
-	ctx.magic = VRT_CTX_MAGIC;
-
 	vcl = vcl_find(name);
 	if (vcl != NULL) {
 		VCLI_Out(cli, "Config '%s' already loaded", name);
@@ -188,7 +207,7 @@ VCL_Load(const char *fn, const char *name, struct cli *cli)
 	}
 
 	ALLOC_OBJ(vcl, VVCLS_MAGIC);
-	XXXAN(vcl);
+	AN(vcl);
 
 	vcl->dlh = dlopen(fn, RTLD_NOW | RTLD_LOCAL);
 
@@ -205,6 +224,8 @@ VCL_Load(const char *fn, const char *name, struct cli *cli)
 		return (1);
 	}
 	memcpy(vcl->conf, cnf, sizeof *cnf);
+	vcl->conf->loaded_name = strdup(name);
+	XXXAN(vcl->conf->loaded_name);
 
 	if (vcl->conf->magic != VCL_CONF_MAGIC) {
 		VCLI_Out(cli, "Wrong VCL_CONF_MAGIC\n");
@@ -212,19 +233,34 @@ VCL_Load(const char *fn, const char *name, struct cli *cli)
 		FREE_OBJ(vcl);
 		return (1);
 	}
-	if (vcl->conf->init_vcl(cli)) {
+
+	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
+	ctx.method = VCL_MET_INIT;
+	ctx.handling = &hand;
+	ctx.cli = cli;
+	ctx.vcl = vcl->conf;
+
+	if (vcl->conf->event_vcl(&ctx, VCL_EVENT_LOAD)) {
 		VCLI_Out(cli, "VCL \"%s\" Failed to initialize", name);
+		AZ(vcl->conf->event_vcl(&ctx, VCL_EVENT_DISCARD));
 		(void)dlclose(vcl->dlh);
 		FREE_OBJ(vcl);
 		return (1);
 	}
-	REPLACE(vcl->name, name);
+	(void)vcl->conf->init_func(&ctx);
+	if (hand == VCL_RET_FAIL) {
+		VCLI_Out(cli, "VCL \"%s\" vcl_init{} failed", name);
+		ctx.method = VCL_MET_FINI;
+		(void)vcl->conf->fini_func(&ctx);
+		AZ(vcl->conf->event_vcl(&ctx, VCL_EVENT_DISCARD));
+		(void)dlclose(vcl->dlh);
+		FREE_OBJ(vcl);
+		return (1);
+	}
+	vcl_set_state(vcl, state);
+	assert(hand == VCL_RET_OK);
 	VCLI_Out(cli, "Loaded \"%s\" as \"%s\"", fn , name);
 	VTAILQ_INSERT_TAIL(&vcl_head, vcl, list);
-	ctx.method = VCL_MET_INIT;
-	ctx.handling = &hand;
-	(void)vcl->conf->init_func(&ctx);
-	assert(hand == VCL_RET_OK);
 	Lck_Lock(&vcl_mtx);
 	if (vcl_active == NULL)
 		vcl_active = vcl;
@@ -245,8 +281,7 @@ VCL_Nuke(struct vcls *vcl)
 	struct vrt_ctx ctx;
 	unsigned hand = 0;
 
-	memset(&ctx, 0, sizeof ctx);
-	ctx.magic = VRT_CTX_MAGIC;
+	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
 	ASSERT_CLI();
 	assert(vcl != vcl_active);
 	assert(vcl->conf->discard);
@@ -254,10 +289,11 @@ VCL_Nuke(struct vcls *vcl)
 	VTAILQ_REMOVE(&vcl_head, vcl, list);
 	ctx.method = VCL_MET_FINI;
 	ctx.handling = &hand;
+	ctx.vcl = vcl->conf;
 	(void)vcl->conf->fini_func(&ctx);
 	assert(hand == VCL_RET_OK);
-	vcl->conf->fini_vcl(NULL);
-	free(vcl->name);
+	AZ(vcl->conf->event_vcl(&ctx, VCL_EVENT_DISCARD));
+	free(vcl->conf->loaded_name);
 	(void)dlclose(vcl->dlh);
 	FREE_OBJ(vcl);
 	VSC_C_main->n_vcl--;
@@ -279,7 +315,7 @@ VCL_Poll(void)
 
 /*--------------------------------------------------------------------*/
 
-static void
+static void __match_proto__(cli_func_t)
 ccf_config_list(struct cli *cli, const char * const *av, void *priv)
 {
 	struct vcls *vcl;
@@ -295,103 +331,113 @@ ccf_config_list(struct cli *cli, const char * const *av, void *priv)
 			flg = "discarded";
 		} else
 			flg = "available";
-		VCLI_Out(cli, "%-10s %6u %s\n",
+		VCLI_Out(cli, "%-10s %4s/%s  %6u %s\n",
 		    flg,
+		    vcl->state, vcl->warm ? "warm" : "cold",
 		    vcl->conf->busy,
-		    vcl->name);
+		    vcl->conf->loaded_name);
 	}
 }
 
-static void
+static void __match_proto__(cli_func_t)
 ccf_config_load(struct cli *cli, const char * const *av, void *priv)
 {
 
-	(void)av;
-	(void)priv;
+	AZ(priv);
 	ASSERT_CLI();
-	if (VCL_Load(av[3], av[2], cli))
+	if (VCL_Load(cli, av[2], av[3], av[4]))
 		VCLI_SetResult(cli, CLIS_PARAM);
 	return;
 }
 
-static void
+static void __match_proto__(cli_func_t)
+ccf_config_state(struct cli *cli, const char * const *av, void *priv)
+{
+	struct vcls *vcl;
+
+	(void)cli;
+	AZ(priv);
+	ASSERT_CLI();
+	AN(av[2]);
+	AN(av[3]);
+	vcl = vcl_find(av[2]);
+	AN(vcl);			// MGT ensures this
+	vcl_set_state(vcl, av[3]);
+}
+
+static void __match_proto__(cli_func_t)
 ccf_config_discard(struct cli *cli, const char * const *av, void *priv)
 {
 	struct vcls *vcl;
-	int i;
 
 	ASSERT_CLI();
+	(void)cli;
 	AZ(priv);
-	(void)priv;
 	vcl = vcl_find(av[2]);
-	if (vcl == NULL) {
-		VCLI_SetResult(cli, CLIS_PARAM);
-		VCLI_Out(cli, "VCL '%s' unknown", av[2]);
-		return;
-	}
+	AN(vcl);			// MGT ensures this
 	Lck_Lock(&vcl_mtx);
-	if (vcl == vcl_active) {
-		Lck_Unlock(&vcl_mtx);
-		VCLI_SetResult(cli, CLIS_PARAM);
-		VCLI_Out(cli, "VCL %s is the active VCL", av[2]);
-		return;
-	}
+	assert (vcl != vcl_active);	// MGT ensures this
 	VSC_C_main->n_vcl_discard++;
 	VSC_C_main->n_vcl_avail--;
 	vcl->conf->discard = 1;
 	Lck_Unlock(&vcl_mtx);
 
-	/* Tickle this VCL's backends to give up health polling */
-	for(i = 1; i < vcl->conf->ndirector; i++)
-		VBE_DiscardHealth(vcl->conf->director[i]);
-
 	if (vcl->conf->busy == 0)
 		VCL_Nuke(vcl);
 }
 
-static void
+static void __match_proto__(cli_func_t)
 ccf_config_use(struct cli *cli, const char * const *av, void *priv)
 {
 	struct vcls *vcl;
-	int i;
+	struct vrt_ctx ctx;
+	unsigned hand = 0;
 
-	(void)av;
-	(void)priv;
+	ASSERT_CLI();
+	AZ(priv);
 	vcl = vcl_find(av[2]);
-	if (vcl == NULL) {
-		VCLI_Out(cli, "No VCL named '%s'", av[2]);
-		VCLI_SetResult(cli, CLIS_PARAM);
+	AN(vcl);			// MGT ensures this
+	AN(vcl->warm);			// MGT ensures this
+	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
+	ctx.handling = &hand;
+	ctx.cli = cli;
+	if (vcl->conf->event_vcl(&ctx, VCL_EVENT_USE)) {
+		VCLI_Out(cli, "VCL \"%s\" Failed to activate", av[2]);
+		VCLI_SetResult(cli, CLIS_CANT);
 		return;
 	}
+
 	Lck_Lock(&vcl_mtx);
 	vcl_active = vcl;
 	Lck_Unlock(&vcl_mtx);
-
-	/* Tickle this VCL's backends to take over health polling */
-	for(i = 1; i < vcl->conf->ndirector; i++)
-		VBE_UseHealth(vcl->conf->director[i]);
 }
 
-static void
+static void __match_proto__(cli_func_t)
 ccf_config_show(struct cli *cli, const char * const *av, void *priv)
 {
 	struct vcls *vcl;
 	int verbose = 0;
 	int i;
 
-	(void)priv;
-	if (!strcmp(av[2], "-v")) {
-		verbose = 1;
-		vcl = vcl_find(av[3]);
-	} else if (av[3] != NULL) {
+	ASSERT_CLI();
+	AZ(priv);
+	if (!strcmp(av[2], "-v") && av[3] == NULL) {
+		VCLI_Out(cli, "Too few parameters");
+		VCLI_SetResult(cli, CLIS_TOOFEW);
+		return;
+	} else if (strcmp(av[2], "-v") && av[3] != NULL) {
 		VCLI_Out(cli, "Unknown options '%s'", av[2]);
 		VCLI_SetResult(cli, CLIS_PARAM);
 		return;
+	} else if (av[3] != NULL) {
+		verbose = 1;
+		vcl = vcl_find(av[3]);
 	} else
 		vcl = vcl_find(av[2]);
 
 	if (vcl == NULL) {
-		VCLI_Out(cli, "No VCL named '%s'", av[2]);
+		VCLI_Out(cli, "No VCL named '%s'",
+		    av[3] == NULL ? av[2] : av[3]);
 		VCLI_SetResult(cli, CLIS_PARAM);
 		return;
 	}
@@ -422,8 +468,7 @@ vcl_call_method(struct worker *wrk, struct req *req, struct busyobj *bo,
 	struct vrt_ctx ctx;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	memset(&ctx, 0, sizeof ctx);
-	ctx.magic = VRT_CTX_MAGIC;
+	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
 	if (req != NULL) {
 		CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 		CHECK_OBJ_NOTNULL(req->sp, SESS_MAGIC);
@@ -432,9 +477,7 @@ vcl_call_method(struct worker *wrk, struct req *req, struct busyobj *bo,
 		ctx.http_req = req->http;
 		ctx.http_resp = req->resp;
 		ctx.req = req;
-		if (method == VCL_MET_HIT)
-			ctx.http_obj =
-			    ObjGetObj(req->objcore, &wrk->stats)->http;
+		ctx.now = req->t_prev;
 	}
 	if (bo != NULL) {
 		CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
@@ -443,7 +486,9 @@ vcl_call_method(struct worker *wrk, struct req *req, struct busyobj *bo,
 		ctx.http_bereq = bo->bereq;
 		ctx.http_beresp = bo->beresp;
 		ctx.bo = bo;
+		ctx.now = bo->t_prev;
 	}
+	assert(ctx.now != 0);
 	ctx.ws = ws;
 	ctx.vsl = vsl;
 	ctx.method = method;
@@ -484,11 +529,12 @@ VCL_##func##_method(struct VCL_conf *vcl, struct worker *wrk,		\
 /*--------------------------------------------------------------------*/
 
 static struct cli_proto vcl_cmds[] = {
-	{ CLI_VCL_LOAD,         "i", ccf_config_load },
-	{ CLI_VCL_LIST,         "i", ccf_config_list },
-	{ CLI_VCL_DISCARD,      "i", ccf_config_discard },
-	{ CLI_VCL_USE,          "i", ccf_config_use },
-	{ CLI_VCL_SHOW,		"i", ccf_config_show },
+	{ CLI_VCL_LOAD,		"i", ccf_config_load },
+	{ CLI_VCL_LIST,		"i", ccf_config_list },
+	{ CLI_VCL_STATE,	"i", ccf_config_state },
+	{ CLI_VCL_DISCARD,	"i", ccf_config_discard },
+	{ CLI_VCL_USE,		"i", ccf_config_use },
+	{ CLI_VCL_SHOW,		"", ccf_config_show },
 	{ NULL }
 };
 

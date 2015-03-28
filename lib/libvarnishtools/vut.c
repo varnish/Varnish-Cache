@@ -41,6 +41,7 @@
 #include <signal.h>
 
 #include "compat/daemon.h"
+#include "vdef.h"
 #include "vpf.h"
 #include "vapi/vsm.h"
 #include "vapi/vsl.h"
@@ -83,6 +84,24 @@ vut_sigusr1(int sig)
 	VUT.sigusr1 = 1;
 }
 
+static int __match_proto__(VSLQ_dispatch_f)
+vut_dispatch(struct VSL_data *vsl, struct VSL_transaction * const trans[],
+    void *priv)
+{
+	int i;
+
+	(void)priv;
+	if (VUT.k_arg == 0)
+		return (-1);	/* End of file */
+	AN(VUT.dispatch_f);
+	i = VUT.dispatch_f(vsl, trans, VUT.dispatch_priv);
+	if (VUT.k_arg > 0)
+		VUT.k_arg--;
+	if (i >= 0 && VUT.k_arg == 0)
+		return (-1);	/* End of file */
+	return (i);
+}
+
 void
 VUT_Error(int status, const char *fmt, ...)
 {
@@ -114,6 +133,7 @@ int
 VUT_Arg(int opt, const char *arg)
 {
 	int i;
+	char *p;
 
 	switch (opt) {
 	case 'd':
@@ -127,6 +147,12 @@ VUT_Arg(int opt, const char *arg)
 	case 'g':
 		/* Grouping */
 		return (VUT_g_Arg(arg));
+	case 'k':
+		/* Log transaction limit */
+		VUT.k_arg = (int)strtol(arg, &p, 10);
+		if (*p != '\0' || VUT.k_arg <= 0)
+			VUT_Error(1, "-k: Invalid number '%s'", arg);
+		return (1);
 	case 'n':
 		/* Varnish instance */
 		if (VUT.vsm == NULL)
@@ -159,7 +185,7 @@ VUT_Arg(int opt, const char *arg)
 	case 'V':
 		/* Print version number and exit */
 		VCS_Message(VUT.progname);
-		exit(1);
+		exit(0);
 	default:
 		AN(VUT.vsl);
 		i = VSL_Arg(VUT.vsl, opt, arg);
@@ -178,6 +204,7 @@ VUT_Init(const char *progname)
 	AZ(VUT.vsl);
 	VUT.vsl = VSL_New();
 	AN(VUT.vsl);
+	VUT.k_arg = -1;
 }
 
 void
@@ -281,8 +308,7 @@ VUT_Main(void)
 			/* Flush and report any incomplete records */
 			VUT.sigusr1 = 0;
 			if (VUT.vslq != NULL)
-				VSLQ_Flush(VUT.vslq, VUT.dispatch_f,
-				    VUT.dispatch_priv);
+				VSLQ_Flush(VUT.vslq, vut_dispatch, NULL);
 		}
 
 		if (VUT.vslq == NULL) {
@@ -307,7 +333,7 @@ VUT_Main(void)
 			VUT_Error(0, "Log reacquired");
 		}
 
-		i = VSLQ_Dispatch(VUT.vslq, VUT.dispatch_f, VUT.dispatch_priv);
+		i = VSLQ_Dispatch(VUT.vslq, vut_dispatch, NULL);
 		if (i == 1)
 			/* Call again */
 			continue;
@@ -330,7 +356,7 @@ VUT_Main(void)
 
 		/* XXX: Make continuation optional */
 
-		VSLQ_Flush(VUT.vslq, VUT.dispatch_f, VUT.dispatch_priv);
+		VSLQ_Flush(VUT.vslq, vut_dispatch, NULL);
 		VSLQ_Delete(&VUT.vslq);
 		AZ(VUT.vslq);
 

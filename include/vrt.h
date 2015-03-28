@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -37,9 +37,12 @@
  * Whenever something is added, increment MINOR version
  * Whenever something is deleted or changed in a way which is not
  * binary/load-time compatible, increment MAJOR version
+ *
+ * changes to consider with next VRT_MAJOR_VERSION bump:
+ * - cache_vrt.c: -> ssize_t VRT_CacheReqBody(VRT_CTX, size_t)
  */
 
-#define VRT_MAJOR_VERSION	1U
+#define VRT_MAJOR_VERSION	2U
 
 #define VRT_MINOR_VERSION	2U
 
@@ -62,7 +65,7 @@ struct suckaddr;
  * (alphabetic order)
  */
 
-typedef struct director *		VCL_BACKEND;
+typedef const struct director *		VCL_BACKEND;
 typedef const struct vmod_priv *	VCL_BLOB;
 typedef unsigned			VCL_BOOL;
 typedef double				VCL_BYTES;
@@ -89,20 +92,23 @@ struct vrt_ctx {
 	unsigned			method;
 	unsigned			*handling;
 
+	struct cli			*cli;	// Only in ...init()
 	struct vsl_log			*vsl;
 	struct VCL_conf			*vcl;
 	struct ws			*ws;
 
 	struct req			*req;
 	struct http			*http_req;
-	struct http			*http_obj;
 	struct http			*http_resp;
 
 	struct busyobj			*bo;
 	struct http			*http_bereq;
 	struct http			*http_beresp;
 
+	double				now;
 };
+
+#define VRT_CTX		const struct vrt_ctx *ctx
 
 /***********************************************************************/
 
@@ -137,20 +143,24 @@ extern const void * const vrt_magic_string_end;
 extern const void * const vrt_magic_string_unset;
 
 struct vrt_backend_probe {
-	const char	*url;
-	const char	*request;
-	double		timeout;
-	double		interval;
-	unsigned	exp_status;
-	unsigned	window;
-	unsigned	threshold;
-	unsigned	initial;
+	unsigned			magic;
+#define VRT_BACKEND_PROBE_MAGIC		0x84998490
+	const char			*url;
+	const char			*request;
+	double				timeout;
+	double				interval;
+	unsigned			exp_status;
+	unsigned			window;
+	unsigned			threshold;
+	unsigned			initial;
 };
 
 /*
  * A backend is a host+port somewhere on the network
  */
 struct vrt_backend {
+	unsigned			magic;
+#define VRT_BACKEND_MAGIC		0x4799ce6b
 	const char			*vcl_name;
 	const char			*ipv4_addr;
 	const char			*ipv6_addr;
@@ -166,38 +176,6 @@ struct vrt_backend {
 	double				between_bytes_timeout;
 	unsigned			max_connections;
 	const struct vrt_backend_probe	*probe;
-};
-
-/*
- * A director with an unpredictable reply
- */
-
-struct vrt_dir_random_entry {
-	int					host;
-	double					weight;
-};
-
-struct vrt_dir_random {
-	const char				*name;
-	unsigned				retries;
-	unsigned				nmember;
-	const struct vrt_dir_random_entry	*members;
-};
-
-/*
- * A director with dns-based selection
- */
-
-struct vrt_dir_dns_entry {
-	int					host;
-};
-
-struct vrt_dir_dns {
-	const char				*name;
-	const char				*suffix;
-	const double				ttl;
-	unsigned				nmember;
-	const struct vrt_dir_dns_entry		*members;
 };
 
 /*
@@ -217,53 +195,56 @@ struct vrt_ref {
 /* ACL related */
 #define VRT_ACL_MAXADDR		16	/* max(IPv4, IPv6) */
 
-void VRT_acl_log(const struct vrt_ctx *, const char *msg);
+void VRT_acl_log(VRT_CTX, const char *msg);
 
 /* req related */
 
-int VRT_CacheReqBody(const struct vrt_ctx *, long long maxsize);
+int VRT_CacheReqBody(VRT_CTX, long long maxsize);
 
 /* Regexp related */
 void VRT_re_init(void **, const char *);
 void VRT_re_fini(void *);
-int VRT_re_match(const struct vrt_ctx *, const char *, void *re);
-const char *VRT_regsub(const struct vrt_ctx *, int all, const char *,
-    void *, const char *);
+int VRT_re_match(VRT_CTX, const char *, void *re);
+const char *VRT_regsub(VRT_CTX, int all, const char *, void *, const char *);
 
-void VRT_ban_string(const struct vrt_ctx *, const char *);
-void VRT_purge(const struct vrt_ctx *, double ttl, double grace, double keep);
+void VRT_ban_string(VRT_CTX, const char *);
+void VRT_purge(VRT_CTX, double ttl, double grace, double keep);
 
-void VRT_count(const struct vrt_ctx *, unsigned);
+void VRT_count(VRT_CTX, unsigned);
 int VRT_rewrite(const char *, const char *);
-void VRT_error(const struct vrt_ctx *, unsigned, const char *);
+void VRT_error(VRT_CTX, unsigned, const char *);
 int VRT_switch_config(const char *);
 
-char *VRT_GetHdr(const struct vrt_ctx *, const struct gethdr_s *);
-void VRT_SetHdr(const struct vrt_ctx *, const struct gethdr_s *,
-    const char *, ...);
-void VRT_handling(const struct vrt_ctx *, unsigned hand);
+struct http *VRT_selecthttp(VRT_CTX, enum gethdr_e);
+const char *VRT_GetHdr(VRT_CTX, const struct gethdr_s *);
+void VRT_SetHdr(VRT_CTX, const struct gethdr_s *, const char *, ...);
+void VRT_handling(VRT_CTX, unsigned hand);
 
-void VRT_hashdata(const struct vrt_ctx *, const char *str, ...);
+void VRT_hashdata(VRT_CTX, const char *str, ...);
 
 /* Simple stuff */
 int VRT_strcmp(const char *s1, const char *s2);
 void VRT_memmove(void *dst, const void *src, unsigned len);
 
-void VRT_Rollback(const struct vrt_ctx *, const struct http *);
+void VRT_Rollback(VRT_CTX, const struct http *);
 
 /* Synthetic pages */
-void VRT_synth_page(const struct vrt_ctx *, const char *, ...);
+void VRT_synth_page(VRT_CTX, const char *, ...);
 
 /* Backend related */
-void VRT_init_dir(struct cli *, struct director **, int idx, const void *priv);
-void VRT_fini_dir(struct cli *, struct director *);
+void VRT_init_vbe(VRT_CTX, struct director **, const struct vrt_backend *);
+#ifdef VCL_RET_MAX
+void VRT_event_vbe(VRT_CTX, enum vcl_event_e, const struct director *,
+    const struct vrt_backend *);
+#endif
+void VRT_fini_vbe(VRT_CTX, struct director **, const struct vrt_backend *);
 
 /* Suckaddr related */
 int VRT_VSA_GetPtr(const struct suckaddr *sua, const unsigned char ** dst);
 
 /* VMOD/Modules related */
 int VRT_Vmod_Init(void **hdl, void *ptr, int len, const char *nm,
-    const char *path, const char *file_id, struct cli *cli);
+    const char *path, const char *file_id, VRT_CTX);
 void VRT_Vmod_Fini(void **hdl);
 
 struct vmod_priv;
@@ -277,16 +258,18 @@ struct vmod_priv {
 typedef int vmod_init_f(struct vmod_priv *,  const struct VCL_conf *);
 
 void VRT_priv_fini(const struct vmod_priv *p);
+struct vmod_priv *VRT_priv_task(VRT_CTX, void *vmod_id);
+struct vmod_priv *VRT_priv_top(VRT_CTX, void *vmod_id);
 
 /* Stevedore related functions */
 int VRT_Stv(const char *nm);
 
 /* Convert things to string */
 
-char *VRT_IP_string(const struct vrt_ctx *, VCL_IP);
-char *VRT_INT_string(const struct vrt_ctx *, VCL_INT);
-char *VRT_REAL_string(const struct vrt_ctx *, VCL_REAL);
-char *VRT_TIME_string(const struct vrt_ctx *, VCL_TIME);
+char *VRT_IP_string(VRT_CTX, VCL_IP);
+char *VRT_INT_string(VRT_CTX, VCL_INT);
+char *VRT_REAL_string(VRT_CTX, VCL_REAL);
+char *VRT_TIME_string(VRT_CTX, VCL_TIME);
 const char *VRT_BOOL_string(VCL_BOOL);
 const char *VRT_BACKEND_string(VCL_BACKEND);
-const char *VRT_CollectString(const struct vrt_ctx *, const char *p, ...);
+const char *VRT_CollectString(VRT_CTX, const char *p, ...);

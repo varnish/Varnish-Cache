@@ -175,7 +175,7 @@ mcf_wrap(struct cli *cli, const char *text)
 			if (r == NULL) {
 				fprintf(stderr,
 				    "LINE with just one TAB: <%s>\n", text);
-				exit(2);
+				exit(4);
 			}
 			if (r - q > tw)
 				tw = r - q;
@@ -337,7 +337,7 @@ MCF_ParamSet(struct cli *cli, const char *param, const char *val)
 		*heritage.param = mgt_param;
 
 	if (cli->result != CLIS_OK) {
-		VCLI_Out(cli, "\n(attempting to set param %s to %s)",
+		VCLI_Out(cli, "\n(attempting to set param '%s' to '%s')",
 		    pp->name, val);
 	} else if (child_pid >= 0 && pp->flags & MUST_RESTART) {
 		VCLI_Out(cli,
@@ -385,11 +385,11 @@ MCF_AddParams(struct parspec *ps)
 		if (isspace(s[-1])) {
 			fprintf(stderr,
 			    "Param->descr has trailing space: %s\n", pp->name);
-			exit(2);
+			exit(4);
 		}
 		if (mcf_findpar(pp->name) != NULL) {
 			fprintf(stderr, "Duplicate param: %s\n", pp->name);
-			exit(2);
+			exit(4);
 		}
 		if (strlen(pp->name) + 1 > margin2)
 			margin2 = strlen(pp->name) + 1;
@@ -416,12 +416,12 @@ mcf_wash_param(struct cli *cli, const struct parspec *pp, const char **val,
 
 	AN(*val);
 	VSB_clear(vsb);
-	VSB_printf(vsb, "FAILED to set %s for param %s = %s\n",
+	VSB_printf(vsb, "FAILED to set %s for param %s: %s\n",
 	    name, pp->name, *val);
 	err = pp->func(vsb, pp, *val);
 	AZ(VSB_finish(vsb));
 	if (err) {
-		VCLI_Out(cli, "%s", VSB_data(vsb));
+		VCLI_Out(cli, "%s\n", VSB_data(vsb));
 		VCLI_SetResult(cli, CLIS_CANT);
 		return;
 	}
@@ -452,11 +452,11 @@ MCF_InitParams(struct cli *cli)
 		pp = parspecs[i];
 
 		if (pp->min != NULL)
-			mcf_wash_param(cli, pp, &pp->min, "Minimum", vsb);
+			mcf_wash_param(cli, pp, &pp->min, "minimum", vsb);
 		if (pp->max != NULL)
-			mcf_wash_param(cli, pp, &pp->max, "Maximum", vsb);
+			mcf_wash_param(cli, pp, &pp->max, "maximum", vsb);
 		AN(pp->def);
-		mcf_wash_param(cli, pp, &pp->def, "Default", vsb);
+		mcf_wash_param(cli, pp, &pp->def, "default", vsb);
 	}
 	VSB_delete(vsb);
 }

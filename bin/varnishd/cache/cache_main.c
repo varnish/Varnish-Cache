@@ -37,8 +37,8 @@
 
 #include "vcli_priv.h"
 #include "vrnd.h"
-
 #include "waiter/waiter.h"
+
 #include "hash/hash_slinger.h"
 
 
@@ -175,9 +175,9 @@ cli_debug_srandom(struct cli *cli, const char * const *av, void *priv)
 
 static struct cli_proto debug_cmds[] = {
 	{ "debug.xid", "debug.xid",
-		"\tExamine or set XID\n", 0, 1, "d", cli_debug_xid },
+		"\tExamine or set XID.", 0, 1, "d", cli_debug_xid },
 	{ "debug.srandom", "debug.srandom",
-		"\tSeed the random(3) function\n", 0, 1, "d",
+		"\tSeed the random(3) function.", 0, 1, "d",
 		cli_debug_srandom },
 	{ NULL }
 };
@@ -209,21 +209,20 @@ child_main(void)
 
 	Lck_New(&vxid_lock, lck_vxid);
 
-	WAIT_Init();
-	PAN_Init();
 	CLI_Init();
+	PAN_Init();
 	VFP_Init();
+
+	Wait_Init();
 
 	VCL_Init();
 
 	HTTP_Init();
 
-	VDI_Init();
 	VBO_Init();
 	VBE_InitCfg();
-	VBP_Init();
 	Pool_Init();
-	Pipe_Init();
+	V1P_Init();
 
 	EXP_Init();
 	HSH_Init(heritage.hash);
@@ -245,8 +244,6 @@ child_main(void)
 	/* Wait for persistent storage to load if asked to */
 	if (FEATURE(FEATURE_WAIT_SILO))
 		SMP_Ready();
-
-	Pool_Accept();
 
 	CLI_Run();
 

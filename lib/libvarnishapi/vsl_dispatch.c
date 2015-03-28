@@ -28,20 +28,24 @@
  *
  */
 
-#include <errno.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
+#include "vdef.h"
 #include "vas.h"
 #include "miniobj.h"
+
 #include "vqueue.h"
-#include "vtree.h"
+#include "vre.h"
 #include "vtim.h"
+#include "vtree.h"
 
 #include "vapi/vsl.h"
+
 #include "vsl_api.h"
 
 #define VTX_CACHE 10

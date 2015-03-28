@@ -1,4 +1,6 @@
-.. _ref-varnishhist:
+.. role:: ref(emphasis)
+
+.. _varnishhist(1):
 
 ===========
 varnishhist
@@ -7,6 +9,8 @@ varnishhist
 -------------------------
 Varnish request histogram
 -------------------------
+
+:Manual section: 1
 
 SYNOPSIS
 ========
@@ -31,11 +35,11 @@ The following options are available:
 SEE ALSO
 ========
 
-* varnishd(1)
-* varnishlog(1)
-* varnishncsa(1)
-* varnishstat(1)
-* varnishtop(1)
+* :ref:`varnishd(1)`
+* :ref:`varnishlog(1)`
+* :ref:`varnishncsa(1)`
+* :ref:`varnishstat(1)`
+* :ref:`varnishtop(1)`
 
 HISTORY
 =======

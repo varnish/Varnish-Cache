@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2014 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -38,10 +38,10 @@
 
 #include "config.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 
 #include "cache.h"
+#include "cache_filter.h"
 #include "vend.h"
 
 #include "vgz.h"
@@ -55,7 +55,6 @@ struct vgz {
 	int			last_i;
 	enum vgz_flag		flag;
 
-	/* Wrw stuff */
 	char			*m_buf;
 	ssize_t			m_sz;
 	ssize_t			m_len;
@@ -79,7 +78,7 @@ vgz_alloc_vgz(struct vsl_log *vsl, const char *id)
 	return (vg);
 }
 
-struct vgz *
+static struct vgz *
 VGZ_NewUngzip(struct vsl_log *vsl, const char *id)
 {
 	struct vgz *vg;
@@ -192,8 +191,8 @@ VGZ_ObufFull(const struct vgz *vg)
 
 /*--------------------------------------------------------------------*/
 
-enum vgzret_e
-VGZ_Gunzip(struct vgz *vg, const void **pptr, size_t *plen)
+static enum vgzret_e
+VGZ_Gunzip(struct vgz *vg, const void **pptr, ssize_t *plen)
 {
 	int i;
 	ssize_t l;
@@ -226,7 +225,7 @@ VGZ_Gunzip(struct vgz *vg, const void **pptr, size_t *plen)
 /*--------------------------------------------------------------------*/
 
 enum vgzret_e
-VGZ_Gzip(struct vgz *vg, const void **pptr, size_t *plen, enum vgz_flag flags)
+VGZ_Gzip(struct vgz *vg, const void **pptr, ssize_t *plen, enum vgz_flag flags)
 {
 	int i;
 	int zflg;
@@ -265,57 +264,69 @@ VGZ_Gzip(struct vgz *vg, const void **pptr, size_t *plen, enum vgz_flag flags)
 }
 
 /*--------------------------------------------------------------------
- */
-
-int
-VGZ_WrwInit(struct vgz *vg)
-{
-
-	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
-
-	if (vgz_getmbuf(vg))
-		return (-1);
-
-	VGZ_Obuf(vg, vg->m_buf, vg->m_sz);
-	return (0);
-}
-
-/*--------------------------------------------------------------------
  * VDP for gunzip'ing
  */
 
 int __match_proto__(vdp_bytes)
-VDP_gunzip(struct req *req, enum vdp_action act, const void *ptr, ssize_t len)
+VDP_gunzip(struct req *req, enum vdp_action act, void **priv,
+    const void *ptr, ssize_t len)
 {
 	enum vgzret_e vr;
-	size_t dl;
+	ssize_t dl;
 	const void *dp;
 	struct worker *wrk;
 	struct vgz *vg;
+	char *p;
+	uint64_t u;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	wrk = req->wrk;
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	vg = req->vgz;
-	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
+
+	if (act == VDP_INIT) {
+		vg = VGZ_NewUngzip(req->vsl, "U D -");
+		AN(vg);
+		if (vgz_getmbuf(vg)) {
+			(void)VGZ_Destroy(&vg);
+			return (-1);
+		}
+		VGZ_Obuf(vg, vg->m_buf, vg->m_sz);
+		*priv = vg;
+
+		http_Unset(req->resp, H_Content_Length);
+		p = ObjGetattr(req->wrk, req->objcore, OA_GZIPBITS, &dl);
+		if (p != NULL && dl == 32) {
+			u = vbe64dec(p + 24);
+			/* XXX: Zero is suspect: OA_GZIPBITS wasn't set */
+			if (u != 0)
+				http_PrintfHeader(req->resp,
+				    "Content-Length: %ju", (uintmax_t)u);
+		}
+		http_Unset(req->resp, H_Content_Encoding);
+		return (0);
+	}
+
+	CAST_OBJ_NOTNULL(vg, *priv, VGZ_MAGIC);
 	AN(vg->m_buf);
 
-	if (len == 0) {
-		AN(act > VDP_NULL);
-		return (VDP_bytes(req, act, vg->m_buf, vg->m_len));
+	if (act == VDP_FINI) {
+		/* NB: Gunzip'ing may or may not have completed successfully. */
+		AZ(len);
+		(void)VGZ_Destroy(&vg);
+		*priv = NULL;
+		return (0);
 	}
+
+	if (len == 0)
+		return (0);
 
 	VGZ_Ibuf(vg, ptr, len);
 	do {
-		if (vg->m_len == vg->m_sz)
-			vr = VGZ_STUCK;
-		else {
-			vr = VGZ_Gunzip(vg, &dp, &dl);
-			vg->m_len += dl;
-		}
+		vr = VGZ_Gunzip(vg, &dp, &dl);
+		vg->m_len += dl;
 		if (vr < VGZ_OK)
 			return (-1);
-		if (vg->m_len == vg->m_sz || vr == VGZ_STUCK) {
+		if (vg->m_len == vg->m_sz || vr != VGZ_OK) {
 			if (VDP_bytes(req, VDP_FLUSH, vg->m_buf, vg->m_len))
 				return (-1);
 			vg->m_len = 0;
@@ -326,81 +337,23 @@ VDP_gunzip(struct req *req, enum vdp_action act, const void *ptr, ssize_t len)
 	return (0);
 }
 
-/*--------------------------------------------------------------------
- * Gunzip ibuf into outb, if it runs full, emit it with WRW.
- * Leave flushing to caller, more data may be coming.
- */
-
-enum vgzret_e
-VGZ_WrwGunzip(struct req *req, struct vgz *vg, const void *ibuf,
-    ssize_t ibufl)
-{
-	enum vgzret_e vr;
-	size_t dl;
-	const void *dp;
-	struct worker *wrk;
-
-	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	wrk = req->wrk;
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
-	AN(vg->m_buf);
-	VGZ_Ibuf(vg, ibuf, ibufl);
-	if (ibufl == 0)
-		return (VGZ_OK);
-	do {
-		if (vg->m_len == vg->m_sz)
-			vr = VGZ_STUCK;
-		else {
-			vr = VGZ_Gunzip(vg, &dp, &dl);
-			vg->m_len += dl;
-		}
-		if (vr < VGZ_OK)
-			return (vr);
-		if (vg->m_len == vg->m_sz || vr == VGZ_STUCK) {
-			(void)VDP_bytes(req, VDP_FLUSH, vg->m_buf, vg->m_len);
-			vg->m_len = 0;
-			VGZ_Obuf(vg, vg->m_buf, vg->m_sz);
-		}
-	} while (!VGZ_IbufEmpty(vg));
-	if (vr == VGZ_STUCK)
-		vr = VGZ_OK;
-	return (vr);
-}
-
 /*--------------------------------------------------------------------*/
 
 void
-VGZ_WrwFlush(struct req *req, struct vgz *vg)
-{
-	struct worker *wrk;
-
-	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	wrk = req->wrk;
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
-
-	if (vg->m_len ==  0)
-		return;
-
-	(void)VDP_bytes(req, VDP_FLUSH, vg->m_buf, vg->m_len);
-	vg->m_len = 0;
-	VGZ_Obuf(vg, vg->m_buf, vg->m_sz);
-}
-
-/*--------------------------------------------------------------------*/
-
-void
-VGZ_UpdateObj(const struct vfp_ctx *vc, const struct vgz *vg)
+VGZ_UpdateObj(const struct vfp_ctx *vc, const struct vgz *vg, int input)
 {
 	char *p;
 
 	CHECK_OBJ_NOTNULL(vg, VGZ_MAGIC);
-	p = ObjSetattr(vc, OA_GZIPBITS, 24);
+	p = ObjSetattr(vc->wrk, vc->oc, OA_GZIPBITS, 32, NULL);
 	AN(p);
 	vbe64enc(p, vg->vz.start_bit);
 	vbe64enc(p + 8, vg->vz.last_bit);
 	vbe64enc(p + 16, vg->vz.stop_bit);
+	if (input)
+		vbe64enc(p + 24, vg->vz.total_in);
+	else
+		vbe64enc(p + 24, vg->vz.total_out);
 }
 
 /*--------------------------------------------------------------------
@@ -469,11 +422,11 @@ vfp_gzip_init(struct vfp_ctx *vc, struct vfp_entry *vfe)
 	if (vfe->vfp->priv2 == VFP_GZIP) {
 		if (http_GetHdr(vc->http, H_Content_Encoding, NULL))
 			return (VFP_NULL);
-		vg = VGZ_NewGzip(vc->vsl, vfe->vfp->priv1);
+		vg = VGZ_NewGzip(vc->wrk->vsl, vfe->vfp->priv1);
 	} else {
 		if (!http_HdrIs(vc->http, H_Content_Encoding, "gzip"))
 			return (VFP_NULL);
-		vg = VGZ_NewUngzip(vc->vsl, vfe->vfp->priv1);
+		vg = VGZ_NewUngzip(vc->wrk->vsl, vfe->vfp->priv1);
 	}
 	if (vg == NULL)
 		return (VFP_ERROR);
@@ -492,6 +445,9 @@ vfp_gzip_init(struct vfp_ctx *vc, struct vfp_entry *vfe)
 	if (vfe->vfp->priv2 == VFP_GZIP)
 		http_SetHeader(vc->http, "Content-Encoding: gzip");
 
+	if (vfe->vfp->priv2 == VFP_GZIP || vfe->vfp->priv2 == VFP_TESTGUNZIP)
+		RFC2616_Vary_AE(vc->http);
+
 	return (VFP_OK);
 }
 
@@ -509,7 +465,7 @@ vfp_gunzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 	struct vgz *vg;
 	enum vgzret_e vr = VGZ_ERROR;
 	const void *dp;
-	size_t dl;
+	ssize_t dl;
 	enum vfp_status vp = VFP_OK;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
@@ -563,11 +519,10 @@ vfp_gzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 	struct vgz *vg;
 	enum vgzret_e vr = VGZ_ERROR;
 	const void *dp;
-	size_t dl;
+	ssize_t dl;
 	enum vfp_status vp = VFP_ERROR;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(vc->bo, BUSYOBJ_MAGIC);
 	CHECK_OBJ_NOTNULL(vfe, VFP_ENTRY_MAGIC);
 	CAST_OBJ_NOTNULL(vg, vfe->priv1, VGZ_MAGIC);
 	AN(p);
@@ -600,7 +555,7 @@ vfp_gzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 
 	if (vr != VGZ_END)
 		return (VFP_Error(vc, "Gzip failed"));
-	VGZ_UpdateObj(vc, vg);
+	VGZ_UpdateObj(vc, vg, 1);
 	return (VFP_END);
 }
 
@@ -618,11 +573,10 @@ vfp_testgunzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 	struct vgz *vg;
 	enum vgzret_e vr = VGZ_ERROR;
 	const void *dp;
-	size_t dl;
+	ssize_t dl;
 	enum vfp_status vp;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(vc->bo, BUSYOBJ_MAGIC);
 	CHECK_OBJ_NOTNULL(vfe, VFP_ENTRY_MAGIC);
 	CAST_OBJ_NOTNULL(vg, vfe->priv1, VGZ_MAGIC);
 	AN(p);
@@ -646,7 +600,7 @@ vfp_testgunzip_pull(struct vfp_ctx *vc, struct vfp_entry *vfe, void *p,
 	if (vp == VFP_END) {
 		if (vr != VGZ_END)
 			return (VFP_Error(vc, "tGunzip failed"));
-		VGZ_UpdateObj(vc, vg);
+		VGZ_UpdateObj(vc, vg, 0);
 	}
 	return (vp);
 }

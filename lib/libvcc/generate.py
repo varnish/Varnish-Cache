@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #-
 # Copyright (c) 2006 Verdens Gang AS
-# Copyright (c) 2006-2014 Varnish Software AS
+# Copyright (c) 2006-2015 Varnish Software AS
 # All rights reserved.
 #
 # Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -140,7 +140,7 @@ returns =(
 
 	('init',
 		"",
-		('ok',)
+		('ok', 'fail')
 	),
 	('fini',
 		"",
@@ -157,6 +157,15 @@ returns =(
 # 'both' means all methods tagged "B" or "C"
 
 sp_variables = [
+	('remote.ip',
+		'IP',
+		( 'client',),
+		( ), """
+		The IP address of the other end of the TCP connection.
+		This can either be the clients IP, or the outgoing IP
+		of a proxy server.
+		"""
+	),
 	('client.ip',
 		'IP',
 		( 'client',),
@@ -172,6 +181,13 @@ sp_variables = [
 		in the client director.
 		"""
 	),
+	('local.ip',
+		'IP',
+		( 'client',),
+		( ), """
+		The IP address of the local end of the TCP connection.
+		"""
+	),
 	('server.ip',
 		'IP',
 		( 'client',),
@@ -182,14 +198,14 @@ sp_variables = [
 	),
 	('server.hostname',
 		'STRING',
-		( 'client',),
+		( 'all',),
 		( ), """
 		The host name of the server.
 		"""
 	),
 	('server.identity',
 		'STRING',
-		( 'client',),
+		( 'all',),
 		( ), """
 		The identity of the server, as set by the -i
 		parameter.  If the -i parameter is not passed to varnishd,
@@ -319,12 +335,14 @@ sp_variables = [
 		'INT',
 		( 'backend',),
 		( ), """
+		A count of how many times this request has been retried.
 		"""
 	),
 	('bereq.backend',
 		'BACKEND',
 		( 'pipe', 'backend', ),
 		( 'pipe', 'backend', ), """
+		This is the backend or director we attempt to fetch from.
 		"""
 	),
 	('bereq.method',
@@ -358,7 +376,10 @@ sp_variables = [
 	('bereq.uncacheable',
 		'BOOL',
 		( 'backend', ),
-		( 'backend', ), """
+		( ), """
+		Indicates whether this request is uncacheable due
+		to a pass in the client side or a hit on an existing
+		uncacheable object (aka hit-for-pass).
 		"""
 	),
 	('bereq.connect_timeout',
@@ -456,10 +477,26 @@ sp_variables = [
 		cache.  Defaults to false.
 		"""
 	),
+	('beresp.was_304',
+		'BOOL',
+		( 'backend_response', 'backend_error'),
+		( ), """
+		Boolean. If this is a successful 304 response to a
+		backend conditional request refreshing an existing
+		cache object.
+		"""
+	),
 	('beresp.uncacheable',
 		'BOOL',
 		( 'backend_response', 'backend_error'),
 		( 'backend_response', 'backend_error'), """
+		Inherited from bereq.uncacheable, see there.
+
+		Setting this variable makes the object uncacheable, which may
+		get stored as a hit-for-pass object in the cache.
+
+		Clearing the variable has no effect and will log the warning
+		"Ignoring attempt to reset beresp.uncacheable".
 		"""
 	),
 	('beresp.ttl',
@@ -467,7 +504,13 @@ sp_variables = [
 		( 'backend_response', 'backend_error'),
 		( 'backend_response', 'backend_error'), """
 		The object's remaining time to live, in seconds.
-		beresp.ttl is writable.
+		"""
+	),
+	('beresp.age',
+		'DURATION',
+		( 'backend_response', 'backend_error'),
+		( ), """
+		The age of the object.
 		"""
 	),
 	('beresp.grace',
@@ -481,6 +524,22 @@ sp_variables = [
 		'DURATION',
 		( 'backend_response', 'backend_error'),
 		( 'backend_response', 'backend_error'), """
+		Set to a period to enable conditional backend requests.
+
+		The keep time is cache lifetime in addition to the ttl.
+
+		Objects with ttl expired but with keep time left may be used
+		to issue conditional (If-Modified-Since / If-None-Match)
+		requests to the backend to refresh them.
+		"""
+	),
+	('beresp.backend',
+		'BACKEND',
+		( 'backend_response', 'backend_error'),
+		( ), """
+		This is the backend we fetched from.  If bereq.backend
+		was set to a director, this will be the backend selected
+		by the director.
 		"""
 	),
 	('beresp.backend.name',
@@ -530,12 +589,8 @@ sp_variables = [
 		'INT',
 		( 'hit', 'deliver',),
 		( ), """
-		The count of cache-hits on this hash-key since it was
-		last instantiated.  This counts cache-hits across all
-		Vary:-ants on this hash-key.
-		The counter will only be reset to zero if/when all objects
-		with this hash-key have disappeared from cache.
-		NB: obj.hits == 0 does *not* indicate a cache miss.
+		The count of cache-hits on this object. A value of 0 indicates a
+		cache miss.
 		"""
 	),
 	('obj.http.',
@@ -552,23 +607,32 @@ sp_variables = [
 		The object's remaining time to live, in seconds.
 		"""
 	),
+	('obj.age',
+		'DURATION',
+		( 'hit', ),
+		( ), """
+		The age of the object.
+		"""
+	),
 	('obj.grace',
 		'DURATION',
 		( 'hit', ),
 		( ), """
-		The object's grace period in seconds.
+		The object's remaining grace period in seconds.
 		"""
 	),
 	('obj.keep',
 		'DURATION',
 		( 'hit', ),
 		( ), """
+		The object's remaining keep period in seconds.
 		"""
 	),
 	('obj.uncacheable',
 		'BOOL',
-		( 'hit', ),
+		( 'deliver', ),
 		( ), """
+		Whether the object is uncacheable (pass or hit-for-pass).
 		"""
 	),
 	('resp',
@@ -899,15 +963,25 @@ file_header(fo)
 
 fo.write("""
 struct vrt_ctx;
+#define VRT_CTX const struct vrt_ctx *ctx
 struct req;
 struct busyobj;
 struct ws;
 struct cli;
 struct worker;
 
-typedef int vcl_init_f(struct cli *);
-typedef void vcl_fini_f(struct cli *);
-typedef int vcl_func_f(const struct vrt_ctx *ctx);
+enum vcl_event_e {
+	VCL_EVENT_LOAD,
+	VCL_EVENT_WARM,
+	VCL_EVENT_USE,
+	VCL_EVENT_COLD,
+	VCL_EVENT_DISCARD,
+};
+
+typedef int vcl_event_f(VRT_CTX, enum vcl_event_e);
+typedef int vcl_init_f(VRT_CTX);
+typedef void vcl_fini_f(VRT_CTX);
+typedef int vcl_func_f(VRT_CTX);
 """)
 
 def tbl40(a, b):
@@ -941,6 +1015,8 @@ struct VCL_conf {
 	unsigned	magic;
 #define VCL_CONF_MAGIC	0x7406c509	/* from /dev/random */
 
+	char		*loaded_name;
+
 	struct director	**director;
 	unsigned	ndirector;
 	struct vrt_ref	*ref;
@@ -952,8 +1028,7 @@ struct VCL_conf {
 	const char	**srcname;
 	const char	**srcbody;
 
-	vcl_init_f	*init_vcl;
-	vcl_fini_f	*fini_vcl;
+	vcl_event_f	*event_vcl;
 """)
 
 for i in returns:
@@ -1041,7 +1116,7 @@ def one_var(nm, spec):
 		fo.write('\t    "VRT_r_%s(ctx)",\n' % cnam)
 		if nm == i[0]:
 			fh.write("VCL_" + typ +
-			    " VRT_r_%s(const struct vrt_ctx *);\n" % cnam )
+			    " VRT_r_%s(VRT_CTX);\n" % cnam )
 	restrict(fo, spec[2])
 
 	if len(spec[3]) == 0:
@@ -1054,7 +1129,7 @@ def one_var(nm, spec):
 		fo.write('\t    "VRT_l_%s(ctx, ",\n' % cnam)
 		if nm == i[0]:
 			fh.write(
-			    "void VRT_l_%s(const struct vrt_ctx *, " % cnam)
+			    "void VRT_l_%s(VRT_CTX, " % cnam)
 			if typ != "STRING":
 				fh.write("VCL_" + typ + ");\n")
 			else:
@@ -1105,6 +1180,7 @@ vcl_output_lang_h(struct vsb *sb)
 {
 """)
 
+emit_file(fo, buildroot, "include/vdef.h")
 emit_file(fo, buildroot, "include/vcl.h")
 emit_file(fo, srcroot, "include/vrt.h")
 emit_file(fo, buildroot, "include/vrt_obj.h")

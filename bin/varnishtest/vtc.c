@@ -32,6 +32,7 @@
 #include <sys/wait.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -39,10 +40,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pwd.h>
+#include <grp.h>
 
 #include "vtc.h"
 
 #include "vav.h"
+#include "vnum.h"
 #include "vtim.h"
 
 #define		MAX_TOKENS		200
@@ -419,6 +423,48 @@ cmd_shell(CMD_ARGS)
 }
 
 /**********************************************************************
+ * Shell command execution
+ */
+
+static void
+cmd_err_shell(CMD_ARGS)
+{
+	(void)priv;
+	(void)cmd;
+	struct vsb *vsb;
+	FILE *fp;
+	int r, c;
+
+	if (av == NULL)
+		return;
+	AN(av[1]);
+	AN(av[2]);
+	AZ(av[3]);
+	vsb = VSB_new_auto();
+	AN(vsb);
+	vtc_dump(vl, 4, "cmd", av[2], -1);
+	fp = popen(av[2], "r");
+	if (fp == NULL)
+		vtc_log(vl, 0, "popen fails: %s", strerror(errno));
+	do {
+		c = getc(fp);
+		if (c != EOF)
+			VSB_putc(vsb, c);
+	} while (c != EOF);
+	r = pclose(fp);
+	vtc_log(vl, 4, "Status = %d", r);
+	AZ(VSB_finish(vsb));
+	vtc_dump(vl, 4, "stdout", VSB_data(vsb), VSB_len(vsb));
+	if (strstr(VSB_data(vsb), av[1]) == NULL)
+		vtc_log(vl, 0,
+		    "Did not find expected string: (\"%s\")", av[1]);
+	else
+		vtc_log(vl, 4,
+		    "Found expected string: (\"%s\")", av[1]);
+	VSB_delete(vsb);
+}
+
+/**********************************************************************
  * Dump command arguments
  */
 
@@ -433,7 +479,7 @@ cmd_delay(CMD_ARGS)
 		return;
 	AN(av[1]);
 	AZ(av[2]);
-	f = strtod(av[1], NULL);
+	f = VNUM(av[1]);
 	vtc_log(vl, 3, "delaying %g second(s)", f);
 	VTIM_sleep(f);
 }
@@ -514,6 +560,17 @@ cmd_feature(CMD_ARGS)
 		if (!strcmp(av[i], "topbuild") && iflg)
 			continue;
 
+		if (!strcmp(av[i], "root") && !geteuid())
+			continue;
+
+		if (!strcmp(av[i], "user_varnish") &&
+		    getpwnam("varnish") != NULL)
+			continue;
+
+		if (!strcmp(av[i], "group_varnish") &&
+		    getgrnam("varnish") != NULL)
+			continue;
+
 		vtc_log(vl, 1, "SKIPPING test, missing feature: %s", av[i]);
 		vtc_stop = 1;
 		return;
@@ -531,6 +588,7 @@ static const struct cmds cmds[] = {
 	{ "delay",	cmd_delay },
 	{ "varnishtest",cmd_varnishtest },
 	{ "shell",	cmd_shell },
+	{ "err_shell",	cmd_err_shell },
 	{ "sema",	cmd_sema },
 	{ "random",	cmd_random },
 	{ "feature",	cmd_feature },

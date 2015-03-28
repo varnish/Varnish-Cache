@@ -35,22 +35,14 @@
 
 #include "config.h"
 
-#include <math.h>
+#include <errno.h>
 #include <stdlib.h>
 
 #include "cache.h"
-#include "common/heritage.h"
 
 #include "vtim.h"
 
 VTAILQ_HEAD(taskhead, pool_task);
-
-struct poolsock {
-	unsigned			magic;
-#define POOLSOCK_MAGIC			0x1b0a2d38
-	struct listen_sock		*lsock;
-	struct pool_task		task;
-};
 
 /* Number of work requests queued in excess of worker threads available */
 
@@ -78,7 +70,6 @@ struct pool {
 
 static struct lock		pool_mtx;
 static pthread_t		thr_pool_herder;
-static unsigned			pool_accepting = 0;
 
 static struct lock		wstat_mtx;
 
@@ -93,7 +84,7 @@ pool_sumstat(const struct dstat *src)
 	Lck_AssertHeld(&wstat_mtx);
 #define L0(n)
 #define L1(n) (VSC_C_main->n += src->n)
-#define VSC_F(n, t, l, f, v, d, e) L##l(n);
+#define VSC_F(n,t,l,s,f,v,d,e)	L##l(n);
 #include "tbl/vsc_f_main.h"
 #undef VSC_F
 #undef L0
@@ -101,23 +92,23 @@ pool_sumstat(const struct dstat *src)
 }
 
 void
-Pool_Sumstat(struct worker *w)
+Pool_Sumstat(struct worker *wrk)
 {
 
 	Lck_Lock(&wstat_mtx);
-	pool_sumstat(&w->stats);
+	pool_sumstat(wrk->stats);
 	Lck_Unlock(&wstat_mtx);
-	memset(&w->stats, 0, sizeof w->stats);
+	memset(wrk->stats, 0, sizeof *wrk->stats);
 }
 
-static int
-Pool_TrySumstat(struct worker *w)
+int
+Pool_TrySumstat(struct worker *wrk)
 {
 	if (Lck_Trylock(&wstat_mtx))
 		return (0);
-	pool_sumstat(&w->stats);
+	pool_sumstat(wrk->stats);
 	Lck_Unlock(&wstat_mtx);
-	memset(&w->stats, 0, sizeof w->stats);
+	memset(wrk->stats, 0, sizeof *wrk->stats);
 	return (1);
 }
 
@@ -132,7 +123,7 @@ pool_addstat(struct dstat *dst, struct dstat *src)
 	dst->summs++;
 #define L0(n)
 #define L1(n) (dst->n += src->n)
-#define VSC_F(n, t, l, f, v, d, e) L##l(n);
+#define VSC_F(n,t,l,s,f,v,d,e)	L##l(n);
 #include "tbl/vsc_f_main.h"
 #undef VSC_F
 #undef L0
@@ -179,81 +170,45 @@ pool_getidleworker(struct pool *pp)
 }
 
 /*--------------------------------------------------------------------
- * Nobody is accepting on this socket, so we do.
- *
- * As long as we can stick the accepted connection to another thread
- * we do so, otherwise we put the socket back on the "BACK" queue
- * and handle the new connection ourselves.
- *
- * We store data about the accept in reserved workspace on the reserved
- * worker workspace.  SES_pool_accept_task() knows about this.
+ * Special scheduling:  If no thread can be found, the current thread
+ * will be prepared for rescheduling instead.
+ * The selected threads workspace is reserved and the argument put there.
+ * Return one if another thread was scheduled, otherwise zero.
  */
 
-static void
-pool_accept(struct worker *wrk, void *arg)
+int
+Pool_Task_Arg(struct worker *wrk, task_func_t *func,
+    const void *arg, size_t arg_len)
 {
-	struct worker *wrk2;
-	struct wrk_accept *wa, *wa2;
 	struct pool *pp;
-	struct poolsock *ps;
+	struct worker *wrk2;
+	int retval;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	AN(arg);
+	AN(arg_len);
 	pp = wrk->pool;
 	CHECK_OBJ_NOTNULL(pp, POOL_MAGIC);
-	CAST_OBJ_NOTNULL(ps, arg, POOLSOCK_MAGIC);
 
-	CHECK_OBJ_NOTNULL(ps->lsock, LISTEN_SOCK_MAGIC);
-	assert(sizeof *wa == WS_Reserve(wrk->aws, sizeof *wa));
-	wa = (void*)wrk->aws->f;
-
-	/* Delay until we are ready (flag is set when all
-	 * initialization has finished) */
-	while (!pool_accepting)
-		VTIM_sleep(.1);
-
-	while (1) {
-		memset(wa, 0, sizeof *wa);
-		wa->magic = WRK_ACCEPT_MAGIC;
-
-		if (ps->lsock->sock < 0) {
-			/* Socket Shutdown */
-			FREE_OBJ(ps);
-			WS_Release(wrk->aws, 0);
-			return;
-		}
-		if (VCA_Accept(ps->lsock, wa) < 0) {
-			wrk->stats.sess_fail++;
-			/* We're going to pace in vca anyway... */
-			(void)Pool_TrySumstat(wrk);
-			continue;
-		}
-
-		Lck_Lock(&pp->mtx);
-		wrk2 = pool_getidleworker(pp);
-		if (wrk2 == NULL) {
-			/* No idle threads, do it ourselves */
-			Lck_Unlock(&pp->mtx);
-			AZ(Pool_Task(pp, &ps->task, POOL_QUEUE_BACK));
-			SES_pool_accept_task(wrk, pp->sesspool);
-			return;
-		}
+	Lck_Lock(&pp->mtx);
+	wrk2 = pool_getidleworker(pp);
+	if (wrk2 != NULL) {
 		VTAILQ_REMOVE(&pp->idle_queue, &wrk2->task, list);
-		AZ(wrk2->task.func);
-		assert(sizeof *wa2 == WS_Reserve(wrk2->aws, sizeof *wa2));
-		wa2 = (void*)wrk2->aws->f;
-		memcpy(wa2, wa, sizeof *wa);
-		wrk2->task.func = SES_pool_accept_task;
-		wrk2->task.priv = pp->sesspool;
-		Lck_Unlock(&pp->mtx);
-		AZ(pthread_cond_signal(&wrk2->cond));
-
-		/*
-		 * We were able to hand off, so release this threads VCL
-		 * reference (if any) so we don't hold on to discarded VCLs.
-		 */
-		if (wrk->vcl != NULL)
-			VCL_Rel(&wrk->vcl);
+		retval = 1;
+	} else {
+		wrk2 = wrk;
+		retval = 0;
 	}
+	Lck_Unlock(&pp->mtx);
+	AZ(wrk2->task.func);
+
+	assert(arg_len == WS_Reserve(wrk2->aws, arg_len));
+	memcpy(wrk2->aws->f, arg, arg_len);
+	wrk2->task.func = func;
+	wrk2->task.priv = wrk2->aws->f;
+	if (retval)
+		AZ(pthread_cond_signal(&wrk2->cond));
+	return (retval);
 }
 
 /*--------------------------------------------------------------------
@@ -316,7 +271,7 @@ Pool_Task(struct pool *pp, struct pool_task *task, enum pool_how how)
  * Empty function used as a pointer value for the thread exit condition.
  */
 
-static void
+static void __match_proto__(task_func_t)
 pool_kiss_of_death(struct worker *wrk, void *priv)
 {
 	(void)wrk;
@@ -327,14 +282,13 @@ pool_kiss_of_death(struct worker *wrk, void *priv)
  * Special function to summ stats
  */
 
-static void __match_proto__(pool_func_t)
+static void __match_proto__(task_func_t)
 pool_stat_summ(struct worker *wrk, void *priv)
 {
 	struct dstat *src;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(wrk->pool, POOL_MAGIC);
-	VSL(SLT_Debug, 0, "STATSUMM");
 	AN(priv);
 	src = priv;
 	Lck_Lock(&wstat_mtx);
@@ -349,14 +303,13 @@ pool_stat_summ(struct worker *wrk, void *priv)
  */
 
 void
-Pool_Work_Thread(void *priv, struct worker *wrk)
+Pool_Work_Thread(struct pool *pp, struct worker *wrk)
 {
-	struct pool *pp;
 	struct pool_task *tp;
-	struct pool_task tps;
+	struct pool_task tpx, tps;
 	int i;
 
-	CAST_OBJ_NOTNULL(pp, priv, POOL_MAGIC);
+	CHECK_OBJ_NOTNULL(pp, POOL_MAGIC);
 	wrk->pool = pp;
 	while (1) {
 		Lck_Lock(&pp->mtx);
@@ -364,6 +317,7 @@ Pool_Work_Thread(void *priv, struct worker *wrk)
 		CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 
 		WS_Reset(wrk->aws, NULL);
+		AZ(wrk->vsl);
 
 		tp = VTAILQ_FIRST(&pp->front_queue);
 		if (tp != NULL) {
@@ -375,12 +329,12 @@ Pool_Work_Thread(void *priv, struct worker *wrk)
 				VTAILQ_REMOVE(&pp->back_queue, tp, list);
 		}
 
-		if ((tp == NULL && wrk->stats.summs > 0) ||
-		    (wrk->stats.summs >= cache_param->wthread_stats_rate))
-			pool_addstat(pp->a_stat, &wrk->stats);
+		if ((tp == NULL && wrk->stats->summs > 0) ||
+		    (wrk->stats->summs >= cache_param->wthread_stats_rate))
+			pool_addstat(pp->a_stat, wrk->stats);
 
 		if (tp != NULL) {
-			wrk->stats.summs++;
+			wrk->stats->summs++;
 		} else if (pp->b_stat != NULL && pp->a_stat->summs) {
 			/* Nothing to do, push pool stats into global pool */
 			tps.func = pool_stat_summ;
@@ -401,30 +355,72 @@ Pool_Work_Thread(void *priv, struct worker *wrk)
 				if (i == ETIMEDOUT)
 					VCL_Rel(&wrk->vcl);
 			} while (wrk->task.func == NULL);
-			tp = &wrk->task;
-			wrk->stats.summs++;
+			tpx = wrk->task;
+			tp = &tpx;
+			wrk->stats->summs++;
 		}
 		Lck_Unlock(&pp->mtx);
 
 		if (tp->func == pool_kiss_of_death)
 			break;
 
-		assert(wrk->pool == pp);
-		tp->func(wrk, tp->priv);
+		do {
+			memset(&wrk->task, 0, sizeof wrk->task);
+			assert(wrk->pool == pp);
+			tp->func(wrk, tp->priv);
+			tpx = wrk->task;
+			tp = &tpx;
+		} while (tp->func != NULL);
+
+		/* cleanup for next task */
+		wrk->seen_methods = 0;
 	}
 	wrk->pool = NULL;
 }
 
 /*--------------------------------------------------------------------
- * Create another thread.
+ * Create another worker thread.
  */
 
+struct pool_info {
+	unsigned		magic;
+#define POOL_INFO_MAGIC		0x4e4442d3
+	size_t			stacksize;
+	struct pool		*qp;
+};
+
+static void *
+pool_thread(void *priv)
+{
+	struct pool_info *pi;
+
+	CAST_OBJ_NOTNULL(pi, priv, POOL_INFO_MAGIC);
+	WRK_Thread(pi->qp, pi->stacksize, cache_param->workspace_thread);
+	FREE_OBJ(pi);
+	return (NULL);
+}
+
 static void
-pool_breed(struct pool *qp, const pthread_attr_t *tp_attr)
+pool_breed(struct pool *qp)
 {
 	pthread_t tp;
+	pthread_attr_t tp_attr;
+	struct pool_info *pi;
 
-	if (pthread_create(&tp, tp_attr, WRK_thread, qp)) {
+	AZ(pthread_attr_init(&tp_attr));
+	AZ(pthread_attr_setdetachstate(&tp_attr, PTHREAD_CREATE_DETACHED));
+
+	/* Set the stacksize for worker threads we create */
+	if (cache_param->wthread_stacksize != UINT_MAX)
+		AZ(pthread_attr_setstacksize(&tp_attr,
+		    cache_param->wthread_stacksize));
+
+	ALLOC_OBJ(pi, POOL_INFO_MAGIC);
+	AN(pi);
+	AZ(pthread_attr_getstacksize(&tp_attr, &pi->stacksize));
+	pi->qp = qp;
+
+	if (pthread_create(&tp, &tp_attr, pool_thread, pi)) {
 		VSL(SLT_Debug, 0, "Create worker thread failed %d %s",
 		    errno, strerror(errno));
 		Lck_Lock(&pool_mtx);
@@ -432,7 +428,6 @@ pool_breed(struct pool *qp, const pthread_attr_t *tp_attr)
 		Lck_Unlock(&pool_mtx);
 		VTIM_sleep(cache_param->wthread_fail_delay);
 	} else {
-		AZ(pthread_detach(tp));
 		qp->dry = 0;
 		qp->nthr++;
 		Lck_Lock(&pool_mtx);
@@ -441,6 +436,8 @@ pool_breed(struct pool *qp, const pthread_attr_t *tp_attr)
 		Lck_Unlock(&pool_mtx);
 		VTIM_sleep(cache_param->wthread_add_delay);
 	}
+
+	AZ(pthread_attr_destroy(&tp_attr));
 }
 
 /*--------------------------------------------------------------------
@@ -463,29 +460,19 @@ pool_herder(void *priv)
 {
 	struct pool *pp;
 	struct pool_task *pt;
-	pthread_attr_t tp_attr;
 	double t_idle;
 	struct worker *wrk;
 
 	CAST_OBJ_NOTNULL(pp, priv, POOL_MAGIC);
-	AZ(pthread_attr_init(&tp_attr));
 
 	while (1) {
-		/* Set the stacksize for worker threads we create */
-		if (cache_param->wthread_stacksize != UINT_MAX)
-			AZ(pthread_attr_setstacksize(&tp_attr,
-			    cache_param->wthread_stacksize));
-		else {
-			AZ(pthread_attr_destroy(&tp_attr));
-			AZ(pthread_attr_init(&tp_attr));
-		}
-
 		/* Make more threads if needed and allowed */
 		if (pp->nthr < cache_param->wthread_min ||
 		    (pp->dry && pp->nthr < cache_param->wthread_max)) {
-			pool_breed(pp, &tp_attr);
+			pool_breed(pp);
 			continue;
 		}
+		assert(pp->nthr >= cache_param->wthread_min);
 
 		if (pp->nthr > cache_param->wthread_min) {
 
@@ -548,8 +535,6 @@ static struct pool *
 pool_mkpool(unsigned pool_no)
 {
 	struct pool *pp;
-	struct listen_sock *ls;
-	struct poolsock *ps;
 
 	ALLOC_OBJ(pp, POOL_MAGIC);
 	if (pp == NULL)
@@ -563,21 +548,14 @@ pool_mkpool(unsigned pool_no)
 	VTAILQ_INIT(&pp->idle_queue);
 	VTAILQ_INIT(&pp->front_queue);
 	VTAILQ_INIT(&pp->back_queue);
-	pp->sesspool = SES_NewPool(pp, pool_no);
-	AN(pp->sesspool);
 	AZ(pthread_cond_init(&pp->herder_cond, NULL));
 	AZ(pthread_create(&pp->herder_thr, NULL, pool_herder, pp));
 
-	VTAILQ_FOREACH(ls, &heritage.socks, list) {
-		if (ls->sock < 0)
-			continue;
-		ALLOC_OBJ(ps, POOLSOCK_MAGIC);
-		XXXAN(ps);
-		ps->lsock = ls;
-		ps->task.func = pool_accept;
-		ps->task.priv = ps;
-		AZ(Pool_Task(pp, &ps->task, POOL_QUEUE_BACK));
-	}
+	while (VTAILQ_EMPTY(&pp->idle_queue))
+		(void)usleep(10000);
+
+	pp->sesspool = SES_NewPool(pp, pool_no);
+	AN(pp->sesspool);
 
 	return (pp);
 }
@@ -622,14 +600,6 @@ pool_poolherder(void *priv)
 }
 
 /*--------------------------------------------------------------------*/
-
-void
-Pool_Accept(void)
-{
-
-	ASSERT_CLI();
-	pool_accepting = 1;
-}
 
 void
 Pool_Init(void)

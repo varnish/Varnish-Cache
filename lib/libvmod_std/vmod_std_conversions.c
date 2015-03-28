@@ -39,14 +39,16 @@
 
 #include "cache/cache.h"
 
+#include "vnum.h"
 #include "vrt.h"
 #include "vsa.h"
+#include "vtim.h"
 #include "vcc_if.h"
 
 VCL_DURATION __match_proto__(td_std_duration)
-vmod_duration(const struct vrt_ctx *ctx, VCL_STRING p, VCL_DURATION d)
+vmod_duration(VRT_CTX, VCL_STRING p, VCL_DURATION d)
 {
-	char *e;
+	const char *e;
 	double r;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -62,12 +64,9 @@ vmod_duration(const struct vrt_ctx *ctx, VCL_STRING p, VCL_DURATION d)
 
 	e = NULL;
 
-	r = strtod(p, &e);
+	r = VNUMpfx(p, &e);
 
-	if (!isfinite(r))
-		return (d);
-
-	if (e == NULL)
+	if (isnan(r) || e == NULL)
 		return (d);
 
 	while(isspace(*e))
@@ -101,7 +100,7 @@ vmod_duration(const struct vrt_ctx *ctx, VCL_STRING p, VCL_DURATION d)
 }
 
 VCL_INT __match_proto__(td_std_integer)
-vmod_integer(const struct vrt_ctx *ctx, VCL_STRING p, VCL_INT i)
+vmod_integer(VRT_CTX, VCL_STRING p, VCL_INT i)
 {
 	char *e;
 	long r;
@@ -128,7 +127,7 @@ vmod_integer(const struct vrt_ctx *ctx, VCL_STRING p, VCL_INT i)
 }
 
 VCL_IP
-vmod_ip(const struct vrt_ctx *ctx, VCL_STRING s, VCL_IP d)
+vmod_ip(VRT_CTX, VCL_STRING s, VCL_IP d)
 {
 	struct addrinfo hints, *res0 = NULL;
 	const struct addrinfo *res;
@@ -167,9 +166,8 @@ vmod_ip(const struct vrt_ctx *ctx, VCL_STRING s, VCL_IP d)
 }
 
 VCL_REAL __match_proto__(td_std_real)
-vmod_real(const struct vrt_ctx *ctx, VCL_STRING p, VCL_REAL d)
+vmod_real(VRT_CTX, VCL_STRING p, VCL_REAL d)
 {
-	char *e;
 	double r;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -177,27 +175,16 @@ vmod_real(const struct vrt_ctx *ctx, VCL_STRING p, VCL_REAL d)
 	if (p == NULL)
 		return (d);
 
-	while (isspace(*p))
-		p++;
+	r = VNUM(p);
 
-	if (*p != '+' && *p != '-' && !isdigit(*p))
-		return (d);
-
-	e = NULL;
-
-	r = strtod(p, &e);
-
-	if (!isfinite(r))
-		return (d);
-
-	if (e == NULL || *e != '\0')
+	if (isnan(r))
 		return (d);
 
 	return (r);
 }
 
 VCL_TIME __match_proto__(td_std_real2time)
-vmod_real2time(const struct vrt_ctx *ctx, VCL_REAL r)
+vmod_real2time(VRT_CTX, VCL_REAL r)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 
@@ -205,7 +192,7 @@ vmod_real2time(const struct vrt_ctx *ctx, VCL_REAL r)
 }
 
 VCL_INT __match_proto__(td_std_time2integer)
-vmod_time2integer(const struct vrt_ctx *ctx, VCL_TIME t)
+vmod_time2integer(VRT_CTX, VCL_TIME t)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 
@@ -213,9 +200,24 @@ vmod_time2integer(const struct vrt_ctx *ctx, VCL_TIME t)
 }
 
 VCL_REAL __match_proto__(td_std_time2real)
-vmod_time2real(const struct vrt_ctx *ctx, VCL_TIME t)
+vmod_time2real(VRT_CTX, VCL_TIME t)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 
 	return (t);
+}
+
+VCL_TIME __match_proto__(td_std_time)
+vmod_time(VRT_CTX, VCL_STRING p, VCL_TIME d)
+{
+	double r;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (p == NULL)
+		return (d);
+	r = VTIM_parse(p);
+	if (r)
+		return (r);
+	return (vmod_real(ctx, p, d));
 }

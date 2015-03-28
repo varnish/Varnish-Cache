@@ -81,8 +81,8 @@ SLTM(SessOpen, 0, "Client connection opened",
  * XXX: in the middle of a macro invocation :-(
  * XXX: If we could, these three lines would have described the
  * XXX: 'reason' field below.
-#define SESS_CLOSE(nm, desc) "    " #nm "\n\t" desc "\n\n"
-#include <tbl/sess_close.h>
+#define SESS_CLOSE(nm, s, err, desc) "    " #nm "\n\t" desc "\n\n"
+#include "tbl/sess_close.h"
 #undef SESS_CLOSE
 */
 
@@ -101,12 +101,14 @@ SLTM(SessClose, 0, "Client connection closed",
 SLTM(BackendOpen, 0, "Backend connection opened",
 	"Logged when a new backend connection is opened.\n\n"
 	"The format is::\n\n"
-	"\t%d %s %s %s\n"
-	"\t|  |  |  |\n"
-	"\t|  |  |  +- Remote port\n"
-	"\t|  |  +---- Remote address\n"
-	"\t|  +------- Backend display name\n"
-	"\t+---------- Connection file descriptor\n"
+	"\t%d %s %s %s %s %s\n"
+	"\t|  |  |  |  |  |\n"
+	"\t|  |  |  |  |  +- Local port\n"
+	"\t|  |  |  |  +---- Local address\n"
+	"\t|  |  |  +------- Remote port\n"
+	"\t|  |  +---------- Remote address\n"
+	"\t|  +------------- Backend display name\n"
+	"\t+---------------- Connection file descriptor\n"
 	"\n"
 )
 
@@ -197,12 +199,12 @@ SLTM(TTL, 0, "TTL set on object",
 	"A TTL record is emitted whenever the ttl, grace or keep"
 	" values for an object is set.\n\n"
 	"The format is::\n\n"
-	"\t%s %d %d %d %d %d [ %d %u %u ]\n"
-	"\t|  |  |  |  |  |    |  |  |\n"
-	"\t|  |  |  |  |  |    |  |  +- Max-Age from Cache-Control header\n"
-	"\t|  |  |  |  |  |    |  +---- Expires header\n"
-	"\t|  |  |  |  |  |    +------- Date header\n"
-	"\t|  |  |  |  |  +------------ Age (incl Age: header value)\n"
+	"\t%s %d %d %d %d [ %d %d %u %u ]\n"
+	"\t|  |  |  |  |    |  |  |  |\n"
+	"\t|  |  |  |  |    |  |  |  +- Max-Age from Cache-Control header\n"
+	"\t|  |  |  |  |    |  |  +---- Expires header\n"
+	"\t|  |  |  |  |    |  +------- Date header\n"
+	"\t|  |  |  |  |    +---------- Age (incl Age: header value)\n"
 	"\t|  |  |  |  +--------------- Reference time for TTL\n"
 	"\t|  |  |  +------------------ Keep\n"
 	"\t|  |  +--------------------- Grace\n"
@@ -211,12 +213,8 @@ SLTM(TTL, 0, "TTL set on object",
 	"\n"
 	"The last four fields are only present in \"RFC\" headers.\n\n"
 	"Examples::\n\n"
-	"\tRFC 19 -1 -1 1312966109 4 0 0 23\n"
-	"\tVCL 10 -1 -1 1312966109 4\n"
-	"\tVCL 7 -1 -1 1312966111 6\n"
-	"\tVCL 7 120 -1 1312966111 6\n"
-	"\tVCL 7 120 3600 1312966111 6\n"
-	"\tVCL 12 120 3600 1312966113 8\n"
+	"\tRFC 60 10 -1 1312966109 1312966109 1312966109 0 60\n"
+	"\tVCL 120 10 0 1312966111\n"
 	"\n"
 )
 
@@ -336,7 +334,7 @@ SLTM(ESI_xmlerror, 0, "ESI parser error or warning message",
 	" The log record describes the problem encountered."
 )
 
-SLTM(Hash, 0, "Value added to hash",
+SLTM(Hash, SLT_F_BINARY, "Value added to hash",
 	"This value was added to the object lookup hash.\n\n"
 	NODEF_NOTICE
 )
@@ -448,9 +446,10 @@ SLTM(Timestamp, 0, "Timing information",
 )
 
 SLTM(ReqAcct, 0, "Request handling byte counts",
-	"Contains byte counts for the request handling. This record is not"
-	" logged for ESI sub-requests, but the sub-requests' response"
-	" body count is added to the main request.\n\n"
+	"Contains byte counts for the request handling.\n"
+	"ESI sub-request counts are also added to their parent request.\n"
+	"The body bytes count does not include transmission "
+	"(ie: chunked encoding) overhead.\n"
 	"The format is::\n\n"
 	"\t%d %d %d %d %d %d\n"
 	"\t|  |  |  |  |  |\n"
@@ -460,16 +459,6 @@ SLTM(ReqAcct, 0, "Request handling byte counts",
 	"\t|  |  +---------- Total bytes received\n"
 	"\t|  +------------- Body bytes received\n"
 	"\t+---------------- Header bytes received\n"
-	"\n"
-)
-
-SLTM(ESI_BodyBytes, 0, "ESI body fragment byte counter",
-	"Contains the body byte count for this ESI body fragment."
-	" This number does not include any transfer encoding overhead.\n\n"
-	"The format is::\n\n"
-	"\t%d\n"
-	"\t|\n"
-	"\t+- Body bytes\n"
 	"\n"
 )
 
@@ -497,6 +486,18 @@ SLTM(BereqAcct, 0, "Backend request accounting",
 	"\t|  +------------- Body bytes transmitted\n"
 	"\t+---------------- Header bytes transmitted\n"
 	"\n"
+)
+
+SLTM(VfpAcct, 0, "Fetch filter accounting",
+	"Contains name of VFP and statistics.\n\n"
+	"The format is::\n\n"
+	"\t%s %d %d\n"
+	"\t|  |  |\n"
+	"\t|  |  +- Total bytes produced\n"
+	"\t|  +---- Number of calls made\n"
+	"\t+------- Name of filter\n"
+	"\n"
+	NODEF_NOTICE
 )
 
 #undef NODEF_NOTICE

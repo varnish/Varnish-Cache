@@ -30,14 +30,17 @@
  */
 
 struct vsm_sc;
+struct suckaddr;
 
 struct listen_sock {
 	unsigned			magic;
 #define LISTEN_SOCK_MAGIC		0x999e4b57
 	VTAILQ_ENTRY(listen_sock)	list;
 	int				sock;
-	char				*name;
-	struct vss_addr			*addr;
+	const char			*name;
+	const struct suckaddr		*addr;
+	enum sess_step			first_step;
+	const char			*proto_name;
 };
 
 VTAILQ_HEAD(listen_sock_head, listen_sock);

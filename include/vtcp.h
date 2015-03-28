@@ -35,27 +35,10 @@ struct suckaddr;
 #define VTCP_ADDRBUFSIZE		64
 #define VTCP_PORTBUFSIZE		16
 
-static inline int
-VTCP_Check(int a)
-{
-	if (a == 0)
-		return (1);
-	if (errno == ECONNRESET || errno == ENOTCONN)
-		return (1);
-#if (defined (__SVR4) && defined (__sun)) || defined (__NetBSD__)
-	/*
-	 * Solaris returns EINVAL if the other end unexepectedly reset the
-	 * connection.
-	 * This is a bug in Solaris and documented behaviour on NetBSD.
-	 */
-	if (errno == EINVAL || errno == ETIMEDOUT)
-		return (1);
-#endif
-	return (0);
-}
-
+int VTCP_Check(int a);
 #define VTCP_Assert(a) assert(VTCP_Check(a))
 
+struct suckaddr *VTCP_my_suckaddr(int sock);
 void VTCP_myname(int sock, char *abuf, unsigned alen,
     char *pbuf, unsigned plen);
 void VTCP_hisname(int sock, char *abuf, unsigned alen,
@@ -66,10 +49,17 @@ int VTCP_nonblocking(int sock);
 int VTCP_linger(int sock, int linger);
 int VTCP_check_hup(int sock);
 
-#ifdef SOL_SOCKET
+// #ifdef SOL_SOCKET
 void VTCP_name(const struct suckaddr *addr, char *abuf, unsigned alen,
     char *pbuf, unsigned plen);
-int VTCP_connect(int s, const struct suckaddr *name, int msec);
+int VTCP_connected(int s);
+int VTCP_connect(const struct suckaddr *name, int msec);
+int VTCP_open(const char *addr, const char *def_port, double timeout,
+    const char **err);
 void VTCP_close(int *s);
+int VTCP_bind(const struct suckaddr *addr, const char **errp);
+int VTCP_listen(const struct suckaddr *addr, int depth, const char **errp);
+int VTCP_listen_on(const char *addr, const char *def_port, int depth,
+    const char **errp);
 void VTCP_set_read_timeout(int s, double seconds);
-#endif
+// #endif

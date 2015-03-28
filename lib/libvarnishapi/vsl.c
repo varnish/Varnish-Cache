@@ -41,17 +41,19 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "miniobj.h"
-#include "vas.h"
 #include "vdef.h"
+#include "vas.h"
+#include "miniobj.h"
+
+#include "vbm.h"
+#include "vmb.h"
+#include "vqueue.h"
+#include "vre.h"
+#include "vsb.h"
 
 #include "vapi/vsm.h"
 #include "vapi/vsl.h"
-#include "vapi/vsm_int.h"
-#include "vbm.h"
-#include "vmb.h"
-#include "vre.h"
-#include "vsb.h"
+
 #include "vsl_api.h"
 #include "vsm_api.h"
 
@@ -408,7 +410,6 @@ VSL_WriteOpen(struct VSL_data *vsl, const char *name, int append, int unbuf)
 {
 	const char head[] = VSL_FILE_ID;
 	FILE* f;
-
 	f = fopen(name, append ? "a" : "w");
 	if (f == NULL) {
 		vsl_diag(vsl, "%s", strerror(errno));
@@ -416,8 +417,13 @@ VSL_WriteOpen(struct VSL_data *vsl, const char *name, int append, int unbuf)
 	}
 	if (unbuf)
 		setbuf(f, NULL);
-	if (0 == ftell(f))
-		fwrite(head, 1, sizeof head, f);
+	if (0 == ftell(f)) {
+		if (fwrite(head, 1, sizeof head, f) != sizeof head) {
+			vsl_diag(vsl, "%s", strerror(errno));
+			fclose(f);
+			return (NULL);
+		}
+	}
 	return (f);
 }
 

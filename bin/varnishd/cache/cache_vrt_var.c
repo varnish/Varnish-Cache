@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -30,18 +30,13 @@
  */
 #include "config.h"
 
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-
 #include "cache.h"
 #include "common/heritage.h"
 #include "hash/hash_slinger.h"
 
-#include "cache_backend.h"
+#include "cache_director.h"
 #include "vrt.h"
 #include "vrt_obj.h"
-#include "vsa.h"
 
 static char vrt_hostname[255] = "";
 
@@ -68,7 +63,7 @@ vrt_do_string(const struct http *hp, int fld,
 
 #define VRT_HDR_L(obj, hdr, fld)					\
 void									\
-VRT_l_##obj##_##hdr(const struct vrt_ctx *ctx, const char *p, ...)	\
+VRT_l_##obj##_##hdr(VRT_CTX, const char *p, ...)	\
 {									\
 	va_list ap;							\
 									\
@@ -80,7 +75,7 @@ VRT_l_##obj##_##hdr(const struct vrt_ctx *ctx, const char *p, ...)	\
 
 #define VRT_HDR_R(obj, hdr, fld)					\
 const char *								\
-VRT_r_##obj##_##hdr(const struct vrt_ctx *ctx)				\
+VRT_r_##obj##_##hdr(VRT_CTX)				\
 {									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
 	CHECK_OBJ_NOTNULL(ctx->http_##obj, HTTP_MAGIC);			\
@@ -93,7 +88,7 @@ VRT_r_##obj##_##hdr(const struct vrt_ctx *ctx)				\
 
 #define VRT_STATUS_L(obj)						\
 void									\
-VRT_l_##obj##_status(const struct vrt_ctx *ctx, long num)		\
+VRT_l_##obj##_status(VRT_CTX, long num)		\
 {									\
 									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
@@ -112,7 +107,7 @@ VRT_l_##obj##_status(const struct vrt_ctx *ctx, long num)		\
 
 #define VRT_STATUS_R(obj)						\
 long									\
-VRT_r_##obj##_status(const struct vrt_ctx *ctx)				\
+VRT_r_##obj##_status(VRT_CTX)				\
 {									\
 									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
@@ -123,10 +118,6 @@ VRT_r_##obj##_status(const struct vrt_ctx *ctx)				\
 VRT_HDR_LR(req,    method,	HTTP_HDR_METHOD)
 VRT_HDR_LR(req,    url,		HTTP_HDR_URL)
 VRT_HDR_LR(req,    proto,	HTTP_HDR_PROTO)
-
-VRT_HDR_R(obj,    proto,	HTTP_HDR_PROTO)
-VRT_HDR_R(obj,    reason,	HTTP_HDR_REASON)
-VRT_STATUS_R(obj)
 
 VRT_HDR_LR(resp,   proto,	HTTP_HDR_PROTO)
 VRT_HDR_LR(resp,   reason,	HTTP_HDR_REASON)
@@ -142,13 +133,47 @@ VRT_STATUS_L(beresp)
 VRT_STATUS_R(beresp)
 
 /*--------------------------------------------------------------------
+ * Pulling things out of the packed object->http
+ */
+
+long
+VRT_r_obj_status(VRT_CTX)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req->objcore, OBJCORE_MAGIC);
+
+	return (HTTP_GetStatusPack(ctx->req->wrk, ctx->req->objcore));
+}
+
+const char *
+VRT_r_obj_proto(VRT_CTX)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req->objcore, OBJCORE_MAGIC);
+
+	return (HTTP_GetHdrPack(ctx->req->wrk, ctx->req->objcore, ":proto"));
+}
+
+const char *
+VRT_r_obj_reason(VRT_CTX)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->req->objcore, OBJCORE_MAGIC);
+
+	return (HTTP_GetHdrPack(ctx->req->wrk, ctx->req->objcore, ":reason"));
+}
+
+/*--------------------------------------------------------------------
  * bool-fields (.do_*)
  */
 
 #define VBERESPW0(field)
 #define VBERESPW1(field)						\
 void									\
-VRT_l_beresp_##field(const struct vrt_ctx *ctx, unsigned a)		\
+VRT_l_beresp_##field(VRT_CTX, unsigned a)		\
 {									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);			\
@@ -158,7 +183,7 @@ VRT_l_beresp_##field(const struct vrt_ctx *ctx, unsigned a)		\
 #define VBERESPR0(field)
 #define VBERESPR1(field)						\
 unsigned								\
-VRT_r_beresp_##field(const struct vrt_ctx *ctx)				\
+VRT_r_beresp_##field(VRT_CTX)				\
 {									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);			\
@@ -167,28 +192,14 @@ VRT_r_beresp_##field(const struct vrt_ctx *ctx)				\
 
 #define BO_FLAG(l, r, w, d) \
 	VBERESPR##r(l) \
-	VBERESPW##r(l)
+	VBERESPW##w(l)
 #include "tbl/bo_flags.h"
 #undef BO_FLAG
 
 /*--------------------------------------------------------------------*/
 
-void
-VRT_l_bereq_uncacheable(const struct vrt_ctx *ctx, unsigned a)
-{
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
-
-	if (ctx->bo->do_pass && !a) {
-		VSLb(ctx->vsl, SLT_VCL_Error,
-		    "Ignoring attempt to reset bereq.uncacheable");
-	} else if (a) {
-		ctx->bo->do_pass = 1;
-	}
-}
-
 unsigned
-VRT_r_bereq_uncacheable(const struct vrt_ctx *ctx)
+VRT_r_bereq_uncacheable(VRT_CTX)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
@@ -196,7 +207,7 @@ VRT_r_bereq_uncacheable(const struct vrt_ctx *ctx)
 }
 
 void
-VRT_l_beresp_uncacheable(const struct vrt_ctx *ctx, unsigned a)
+VRT_l_beresp_uncacheable(VRT_CTX, unsigned a)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
@@ -210,7 +221,7 @@ VRT_l_beresp_uncacheable(const struct vrt_ctx *ctx, unsigned a)
 }
 
 unsigned
-VRT_r_beresp_uncacheable(const struct vrt_ctx *ctx)
+VRT_r_beresp_uncacheable(VRT_CTX)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
@@ -220,19 +231,18 @@ VRT_r_beresp_uncacheable(const struct vrt_ctx *ctx)
 /*--------------------------------------------------------------------*/
 
 const char *
-VRT_r_client_identity(const struct vrt_ctx *ctx)
+VRT_r_client_identity(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
 	if (ctx->req->client_identity != NULL)
 		return (ctx->req->client_identity);
-	else
-		return (ctx->req->sp->client_addr_str);
+	return(SES_Get_String_Attr(ctx->req->sp, SA_CLIENT_IP));
 }
 
 void
-VRT_l_client_identity(const struct vrt_ctx *ctx, const char *str, ...)
+VRT_l_client_identity(VRT_CTX, const char *str, ...)
 {
 	va_list ap;
 	const char *b;
@@ -254,7 +264,7 @@ VRT_l_client_identity(const struct vrt_ctx *ctx, const char *str, ...)
 
 #define BEREQ_TIMEOUT(which)					\
 void								\
-VRT_l_bereq_##which(const struct vrt_ctx *ctx, double num)	\
+VRT_l_bereq_##which(VRT_CTX, double num)	\
 {								\
 								\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
@@ -263,7 +273,7 @@ VRT_l_bereq_##which(const struct vrt_ctx *ctx, double num)	\
 }								\
 								\
 double								\
-VRT_r_bereq_##which(const struct vrt_ctx *ctx)			\
+VRT_r_bereq_##which(VRT_CTX)			\
 {								\
 								\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
@@ -278,37 +288,35 @@ BEREQ_TIMEOUT(between_bytes_timeout)
 /*--------------------------------------------------------------------*/
 
 const char *
-VRT_r_beresp_backend_name(const struct vrt_ctx *ctx)
+VRT_r_beresp_backend_name(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
-	if (ctx->bo->vbc != NULL) {
-		CHECK_OBJ_NOTNULL(ctx->bo->vbc, VBC_MAGIC);
-		return (ctx->bo->vbc->backend->vcl_name);
-	}
-	if (ctx->bo->director != NULL)
-		return (ctx->bo->director->vcl_name);
+	if (ctx->bo->director_resp != NULL)
+		return (ctx->bo->director_resp->vcl_name);
 	return (NULL);
 }
 
+/*--------------------------------------------------------------------
+ * Backends do not in general have a IP number (any more) and this
+ * variable is really not about the backend, but the backend connection.
+ * XXX: we may need a more general beresp.backend.{details|ident}
+ */
+
 VCL_IP
-VRT_r_beresp_backend_ip(const struct vrt_ctx *ctx)
+VRT_r_beresp_backend_ip(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
-	if (ctx->bo->vbc != NULL) {
-		CHECK_OBJ_NOTNULL(ctx->bo->vbc, VBC_MAGIC);
-		return(ctx->bo->vbc->addr);
-	} else
-		return (NULL);
+	return (VDI_GetIP(ctx->bo->wrk, ctx->bo));
 }
 
 /*--------------------------------------------------------------------*/
 
 const char *
-VRT_r_beresp_storage_hint(const struct vrt_ctx *ctx)
+VRT_r_beresp_storage_hint(VRT_CTX)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
@@ -319,7 +327,7 @@ VRT_r_beresp_storage_hint(const struct vrt_ctx *ctx)
 }
 
 void
-VRT_l_beresp_storage_hint(const struct vrt_ctx *ctx, const char *str, ...)
+VRT_l_beresp_storage_hint(VRT_CTX, const char *str, ...)
 {
 	va_list ap;
 	const char *b;
@@ -342,7 +350,7 @@ VRT_l_beresp_storage_hint(const struct vrt_ctx *ctx, const char *str, ...)
 #define REQ_VAR_L(nm, elem, type,extra)					\
 									\
 void									\
-VRT_l_req_##nm(const struct vrt_ctx *ctx, type arg)			\
+VRT_l_req_##nm(VRT_CTX, type arg)			\
 {									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
 	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);				\
@@ -353,42 +361,51 @@ VRT_l_req_##nm(const struct vrt_ctx *ctx, type arg)			\
 #define REQ_VAR_R(nm, elem, type)					\
 									\
 type									\
-VRT_r_req_##nm(const struct vrt_ctx *ctx)				\
+VRT_r_req_##nm(VRT_CTX)				\
 {									\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
 	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);				\
 	return(ctx->req->elem);						\
 }
 
-REQ_VAR_L(backend_hint, director_hint, struct director *,)
-REQ_VAR_R(backend_hint, director_hint, struct director *)
+REQ_VAR_L(backend_hint, director_hint, const struct director *,)
+REQ_VAR_R(backend_hint, director_hint, const struct director *)
 REQ_VAR_L(ttl, d_ttl, double, if (!(arg>0.0)) arg = 0;)
 REQ_VAR_R(ttl, d_ttl, double)
 
 /*--------------------------------------------------------------------*/
 
 void
-VRT_l_bereq_backend(const struct vrt_ctx *ctx, struct director *be)
+VRT_l_bereq_backend(VRT_CTX, const struct director *be)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
-	ctx->bo->director = be;
+	ctx->bo->director_req = be;
 }
 
-struct director *
-VRT_r_bereq_backend(const struct vrt_ctx *ctx)
+const struct director *
+VRT_r_bereq_backend(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
-	return (ctx->bo->director);
+	return (ctx->bo->director_req);
+}
+
+const struct director *
+VRT_r_beresp_backend(VRT_CTX)
+{
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
+	return (ctx->bo->director_resp);
 }
 
 /*--------------------------------------------------------------------*/
 
 void
-VRT_l_req_esi(const struct vrt_ctx *ctx, unsigned process_esi)
+VRT_l_req_esi(VRT_CTX, unsigned process_esi)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -402,7 +419,7 @@ VRT_l_req_esi(const struct vrt_ctx *ctx, unsigned process_esi)
 }
 
 unsigned
-VRT_r_req_esi(const struct vrt_ctx *ctx)
+VRT_r_req_esi(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -411,7 +428,7 @@ VRT_r_req_esi(const struct vrt_ctx *ctx)
 }
 
 long
-VRT_r_req_esi_level(const struct vrt_ctx *ctx)
+VRT_r_req_esi_level(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -422,7 +439,7 @@ VRT_r_req_esi_level(const struct vrt_ctx *ctx)
 /*--------------------------------------------------------------------*/
 
 unsigned
-VRT_r_req_can_gzip(const struct vrt_ctx *ctx)
+VRT_r_req_can_gzip(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -433,7 +450,7 @@ VRT_r_req_can_gzip(const struct vrt_ctx *ctx)
 /*--------------------------------------------------------------------*/
 
 long
-VRT_r_req_restarts(const struct vrt_ctx *ctx)
+VRT_r_req_restarts(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -442,7 +459,7 @@ VRT_r_req_restarts(const struct vrt_ctx *ctx)
 }
 
 long
-VRT_r_bereq_retries(const struct vrt_ctx *ctx)
+VRT_r_bereq_retries(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -451,17 +468,23 @@ VRT_r_bereq_retries(const struct vrt_ctx *ctx)
 }
 
 /*--------------------------------------------------------------------
- * NB: TTL is relative to when object was created, whereas grace and
- * keep are relative to ttl.
+ * In exp.*:
+ *	t_origin is absolute
+ *	ttl is relative to t_origin
+ *	grace&keep are relative to ttl
+ * In VCL:
+ *	ttl is relative to now
+ *	grace&keep are relative to ttl
  */
 
-#define VRT_DO_EXP_L(which, sexp, fld)				\
+#define VRT_DO_EXP_L(which, sexp, fld, offset)			\
 								\
 void								\
-VRT_l_##which##_##fld(const struct vrt_ctx *ctx, double a)	\
+VRT_l_##which##_##fld(VRT_CTX, double a)	\
 {								\
 								\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
+	a += (offset);						\
 	if (a < 0.0)						\
 		a = 0.0;					\
 	sexp.fld = a;						\
@@ -472,33 +495,54 @@ VRT_l_##which##_##fld(const struct vrt_ctx *ctx, double a)	\
 #define VRT_DO_EXP_R(which, sexp, fld, offset)			\
 								\
 double								\
-VRT_r_##which##_##fld(const struct vrt_ctx *ctx)		\
+VRT_r_##which##_##fld(VRT_CTX)		\
 {								\
+	double d;						\
 								\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
-	if (sexp.fld > 0.0)					\
-		return(sexp.fld - offset);			\
-	return(0.0);						\
+	d = sexp.fld;						\
+	if (d <= 0.0)						\
+		d = 0.0;					\
+	d -= (offset);						\
+	return(d);						\
 }
 
 VRT_DO_EXP_R(obj, ctx->req->objcore->exp, ttl,
-   (ctx->req->t_req - ctx->req->objcore->exp.t_origin))
+    ctx->now - ctx->req->objcore->exp.t_origin)
 VRT_DO_EXP_R(obj, ctx->req->objcore->exp, grace, 0)
 VRT_DO_EXP_R(obj, ctx->req->objcore->exp, keep, 0)
 
-VRT_DO_EXP_L(beresp, ctx->bo->fetch_objcore->exp, ttl)
-VRT_DO_EXP_R(beresp, ctx->bo->fetch_objcore->exp, ttl, 0)
-VRT_DO_EXP_L(beresp, ctx->bo->fetch_objcore->exp, grace)
+VRT_DO_EXP_L(beresp, ctx->bo->fetch_objcore->exp, ttl,
+    ctx->now - ctx->bo->fetch_objcore->exp.t_origin)
+VRT_DO_EXP_R(beresp, ctx->bo->fetch_objcore->exp, ttl,
+    ctx->now - ctx->bo->fetch_objcore->exp.t_origin)
+VRT_DO_EXP_L(beresp, ctx->bo->fetch_objcore->exp, grace, 0)
 VRT_DO_EXP_R(beresp, ctx->bo->fetch_objcore->exp, grace, 0)
-VRT_DO_EXP_L(beresp, ctx->bo->fetch_objcore->exp, keep)
+VRT_DO_EXP_L(beresp, ctx->bo->fetch_objcore->exp, keep, 0)
 VRT_DO_EXP_R(beresp, ctx->bo->fetch_objcore->exp, keep, 0)
+
+/*--------------------------------------------------------------------
+ */
+
+#define VRT_DO_AGE_R(which, sexp)				\
+								\
+double								\
+VRT_r_##which##_##age(VRT_CTX)		\
+{								\
+								\
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
+	return(ctx->now - sexp.t_origin);			\
+}
+
+VRT_DO_AGE_R(obj, ctx->req->objcore->exp)
+VRT_DO_AGE_R(beresp, ctx->bo->fetch_objcore->exp)
 
 /*--------------------------------------------------------------------
  * [be]req.xid
  */
 
 const char *
-VRT_r_req_xid(const struct vrt_ctx *ctx)
+VRT_r_req_xid(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -508,7 +552,7 @@ VRT_r_req_xid(const struct vrt_ctx *ctx)
 }
 
 const char *
-VRT_r_bereq_xid(const struct vrt_ctx *ctx)
+VRT_r_bereq_xid(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -517,54 +561,61 @@ VRT_r_bereq_xid(const struct vrt_ctx *ctx)
 	return (WS_Printf(ctx->bo->bereq->ws, "%u", VXID(ctx->bo->vsl->wid)));
 }
 
+/*--------------------------------------------------------------------
+ * req fields
+ */
+
+#define VREQW0(field)
+#define VREQW1(field)						\
+void									\
+VRT_l_req_##field(VRT_CTX, unsigned a)		\
+{									\
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
+	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);			\
+	ctx->req->field = a ? 1 : 0;					\
+}
+
+#define VREQR0(field)
+#define VREQR1(field)						\
+unsigned								\
+VRT_r_req_##field(VRT_CTX)				\
+{									\
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);				\
+	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);			\
+	return (ctx->req->field);					\
+}
+
+#define REQ_FLAG(l, r, w, d) \
+	VREQR##r(l) \
+	VREQW##w(l)
+#include "tbl/req_flags.h"
+#undef REQ_FLAG
+
 /*--------------------------------------------------------------------*/
 
-#define REQ_BOOL(hash_var)					\
-void								\
-VRT_l_req_##hash_var(const struct vrt_ctx *ctx, unsigned val)	\
-{								\
+#define GIP(fld)						\
+	VCL_IP							\
+	VRT_r_##fld##_ip(VRT_CTX)				\
+	{							\
+		struct suckaddr *sa;				\
 								\
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
-	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);			\
-	ctx->req->hash_var = val ? 1 : 0;			\
-}								\
-								\
-unsigned							\
-VRT_r_req_##hash_var(const struct vrt_ctx *ctx)			\
-{								\
-								\
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
-	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);			\
-	return(ctx->req->hash_var);				\
-}
+		CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);		\
+		CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);		\
+		CHECK_OBJ_NOTNULL(ctx->req->sp, SESS_MAGIC);	\
+		AZ(SES_Get_##fld##_addr(ctx->req->sp, &sa));	\
+		return (sa);					\
+	}
 
-REQ_BOOL(hash_ignore_busy)
-REQ_BOOL(hash_always_miss)
+GIP(local)
+GIP(remote)
+GIP(client)
+GIP(server)
+#undef GIP
 
 /*--------------------------------------------------------------------*/
-
-VCL_IP
-VRT_r_client_ip(const struct vrt_ctx *ctx)
-{
-
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
-	CHECK_OBJ_NOTNULL(ctx->req->sp, SESS_MAGIC);
-	return (sess_remote_addr(ctx->req->sp));
-}
-
-VCL_IP
-VRT_r_server_ip(const struct vrt_ctx *ctx)
-{
-
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
-	CHECK_OBJ_NOTNULL(ctx->req->sp, SESS_MAGIC);
-	return (sess_local_addr(ctx->req->sp));
-}
 
 const char*
-VRT_r_server_identity(const struct vrt_ctx *ctx)
+VRT_r_server_identity(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -575,7 +626,7 @@ VRT_r_server_identity(const struct vrt_ctx *ctx)
 }
 
 const char*
-VRT_r_server_hostname(const struct vrt_ctx *ctx)
+VRT_r_server_hostname(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -587,17 +638,16 @@ VRT_r_server_hostname(const struct vrt_ctx *ctx)
 /*--------------------------------------------------------------------*/
 
 long
-VRT_r_obj_hits(const struct vrt_ctx *ctx)
+VRT_r_obj_hits(VRT_CTX)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
 	CHECK_OBJ_NOTNULL(ctx->req->objcore, OBJCORE_MAGIC);
-	CHECK_OBJ_NOTNULL(ctx->req->objcore->objhead, OBJHEAD_MAGIC);
-	return (ctx->req->objcore->objhead->hits);
+	return (ctx->req->is_hit ? ctx->req->objcore->hits : 0);
 }
 
 unsigned
-VRT_r_obj_uncacheable(const struct vrt_ctx *ctx)
+VRT_r_obj_uncacheable(VRT_CTX)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -610,7 +660,7 @@ VRT_r_obj_uncacheable(const struct vrt_ctx *ctx)
 
 #define HTTP_VAR(x)						\
 struct http *							\
-VRT_r_##x(const struct vrt_ctx *ctx)				\
+VRT_r_##x(VRT_CTX)				\
 {								\
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);			\
 	CHECK_OBJ_NOTNULL(ctx->http_##x, HTTP_MAGIC);		\

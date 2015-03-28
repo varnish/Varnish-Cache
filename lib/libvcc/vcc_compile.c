@@ -134,6 +134,7 @@ New_IniFin(struct vcc *tl)
 	p->magic = INIFIN_MAGIC;
 	p->ini = VSB_new_auto();
 	p->fin = VSB_new_auto();
+	p->event = VSB_new_auto();
 	p->n = ++tl->ninifin;
 	VTAILQ_INSERT_TAIL(&tl->inifin, p, list);
 	return (p);
@@ -211,6 +212,7 @@ EncString(struct vsb *sb, const char *b, const char *e, int mode)
 	VSB_cat(sb, "\"");
 	for (; b < e; b++) {
 		switch (*b) {
+		case '?':	// Trigraphs
 		case '\\':
 		case '"':
 			VSB_printf(sb, "\\%c", *b);
@@ -294,14 +296,23 @@ LocTable(const struct vcc *tl)
 	Fc(tl, 0, "};\n");
 }
 
-/*--------------------------------------------------------------------*/
+/*--------------------------------------------------------------------
+ * Init/Fini/Event
+ *
+ * We call Fini-s in the opposite order of init-s.
+ * Other events are called in same order as init-s, no matter which
+ * event it might be.
+ */
 
 static void
-EmitInitFunc(const struct vcc *tl)
+EmitInitFini(const struct vcc *tl)
 {
 	struct inifin *p;
 
-	Fc(tl, 0, "\nstatic int\nVGC_Init(struct cli *cli)\n{\n\n");
+	/*
+	 * INIT
+	 */
+	Fc(tl, 0, "\nstatic int\nVGC_Load(VRT_CTX)\n{\n\n");
 	VTAILQ_FOREACH(p, &tl->inifin, list) {
 		AZ(VSB_finish(p->ini));
 		if (VSB_len(p->ini))
@@ -311,14 +322,11 @@ EmitInitFunc(const struct vcc *tl)
 
 	Fc(tl, 0, "\treturn(0);\n");
 	Fc(tl, 0, "}\n");
-}
 
-static void
-EmitFiniFunc(const struct vcc *tl)
-{
-	struct inifin *p;
-
-	Fc(tl, 0, "\nstatic void\nVGC_Fini(struct cli *cli)\n{\n\n");
+	/*
+	 * FINI
+	 */
+	Fc(tl, 0, "\nstatic int\nVGC_Discard(VRT_CTX)\n{\n\n");
 
 	VTAILQ_FOREACH_REVERSE(p, &tl->inifin, inifinhead, list) {
 		AZ(VSB_finish(p->fin));
@@ -327,6 +335,27 @@ EmitFiniFunc(const struct vcc *tl)
 		VSB_delete(p->fin);
 	}
 
+	Fc(tl, 0, "\treturn(0);\n");
+	Fc(tl, 0, "}\n");
+
+	/*
+	 * EVENTS
+	 */
+	Fc(tl, 0, "\nstatic int\n");
+	Fc(tl, 0, "VGC_Event(VRT_CTX, enum vcl_event_e ev)\n");
+	Fc(tl, 0, "{\n");
+	Fc(tl, 0, "\tif (ev == VCL_EVENT_LOAD)\n");
+	Fc(tl, 0, "\t\treturn(VGC_Load(ctx));\n");
+	Fc(tl, 0, "\tif (ev == VCL_EVENT_DISCARD)\n");
+	Fc(tl, 0, "\t\treturn(VGC_Discard(ctx));\n");
+	Fc(tl, 0, "\t\n");
+	VTAILQ_FOREACH(p, &tl->inifin, list) {
+		AZ(VSB_finish(p->event));
+		if (VSB_len(p->event))
+			Fc(tl, 0, "\t/* %u */\n%s\n", p->n, VSB_data(p->event));
+		VSB_delete(p->event);
+	}
+	Fc(tl, 0, "\treturn (0);\n");
 	Fc(tl, 0, "}\n");
 }
 
@@ -363,8 +392,7 @@ EmitStruct(const struct vcc *tl)
 
 	Fc(tl, 0, "\nconst struct VCL_conf VCL_conf = {\n");
 	Fc(tl, 0, "\t.magic = VCL_CONF_MAGIC,\n");
-	Fc(tl, 0, "\t.init_vcl = VGC_Init,\n");
-	Fc(tl, 0, "\t.fini_vcl = VGC_Fini,\n");
+	Fc(tl, 0, "\t.event_vcl = VGC_Event,\n");
 	Fc(tl, 0, "\t.ndirector = %d,\n", tl->ndirector);
 	Fc(tl, 0, "\t.director = directors,\n");
 	Fc(tl, 0, "\t.ref = VGC_ref,\n");
@@ -604,8 +632,6 @@ vcc_CompileSource(const struct vcc *tl0, struct vsb *sb, struct source *sp)
 	/* Macro for accessing directors */
 	Fh(tl, 0, "#define VGCDIR(n) VCL_conf.director[VGC_backend_##n]\n");
 
-	Fh(tl, 0, "#define __match_proto__(xxx)		/*lint -e{818} */\n");
-
 	/* Register and lex the main source */
 	VTAILQ_INSERT_TAIL(&tl->sources, sp, list);
 	sp->idx = tl->nsources++;
@@ -670,11 +696,11 @@ vcc_CompileSource(const struct vcc *tl0, struct vsb *sb, struct source *sp)
 	for (i = 1; i < VCL_MET_MAX; i++) {
 		Fh(tl, 1, "\nint __match_proto__(vcl_func_f)\n");
 		Fh(tl, 1,
-		    "VGC_function_%s(const struct vrt_ctx *ctx);\n",
+		    "VGC_function_%s(VRT_CTX);\n",
 		    method_tab[i].name);
 		Fc(tl, 1, "\nint __match_proto__(vcl_func_f)\n");
 		Fc(tl, 1,
-		    "VGC_function_%s(const struct vrt_ctx *ctx)\n",
+		    "VGC_function_%s(VRT_CTX)\n",
 		    method_tab[i].name);
 		AZ(VSB_finish(tl->fm[i]));
 		Fc(tl, 1, "{\n");
@@ -684,9 +710,7 @@ vcc_CompileSource(const struct vcc *tl0, struct vsb *sb, struct source *sp)
 
 	LocTable(tl);
 
-	EmitInitFunc(tl);
-
-	EmitFiniFunc(tl);
+	EmitInitFini(tl);
 
 	EmitStruct(tl);
 

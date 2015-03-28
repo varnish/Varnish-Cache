@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -50,8 +50,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "vdef.h"
 #include "vas.h"
 #include "vsa.h"
+#include "vss.h"
 #include "vtcp.h"
 
 /*--------------------------------------------------------------------*/
@@ -61,6 +63,8 @@ vtcp_sa_to_ascii(const void *sa, socklen_t l, char *abuf, unsigned alen,
 {
 	int i;
 
+	assert(abuf == NULL || alen > 0);
+	assert(pbuf == NULL || plen > 0);
 	i = getnameinfo(sa, l, abuf, alen, pbuf, plen,
 	   NI_NUMERICHOST | NI_NUMERICSERV);
 	if (i) {
@@ -69,12 +73,14 @@ vtcp_sa_to_ascii(const void *sa, socklen_t l, char *abuf, unsigned alen,
 		 * for the gai_strerror in the bufffer :-(
 		 */
 		printf("getnameinfo = %d %s\n", i, gai_strerror(i));
-		(void)snprintf(abuf, alen, "Conversion");
-		(void)snprintf(pbuf, plen, "Failed");
+		if (abuf != NULL)
+			(void)snprintf(abuf, alen, "Conversion");
+		if (pbuf != NULL)
+			(void)snprintf(pbuf, plen, "Failed");
 		return;
 	}
 	/* XXX dirty hack for v4-to-v6 mapped addresses */
-	if (strncmp(abuf, "::ffff:", 7) == 0) {
+	if (abuf != NULL && strncmp(abuf, "::ffff:", 7) == 0) {
 		for (i = 0; abuf[i + 7]; ++i)
 			abuf[i] = abuf[i + 7];
 		abuf[i] = '\0';
@@ -92,6 +98,19 @@ VTCP_name(const struct suckaddr *addr, char *abuf, unsigned alen,
 
 	sa = VSA_Get_Sockaddr(addr, &sl);
 	vtcp_sa_to_ascii(sa, sl, abuf, alen, pbuf, plen);
+}
+
+/*--------------------------------------------------------------------*/
+
+struct suckaddr *
+VTCP_my_suckaddr(int sock)
+{
+	struct sockaddr_storage addr_s;
+	socklen_t l;
+
+	l = sizeof addr_s;
+	AZ(getsockname(sock, (void *)&addr_s, &l));
+	return (VSA_Malloc(&addr_s, l));
 }
 
 /*--------------------------------------------------------------------*/
@@ -208,26 +227,65 @@ VTCP_nonblocking(int sock)
  */
 
 int
-VTCP_connect(int s, const struct suckaddr *name, int msec)
+VTCP_connected(int s)
 {
-	int i, k;
+	int k;
 	socklen_t l;
+
+	/* Find out if we got a connection */
+	l = sizeof k;
+	AZ(getsockopt(s, SOL_SOCKET, SO_ERROR, &k, &l));
+
+	/* An error means no connection established */
+	errno = k;
+	if (k) {
+		AZ(close(s));
+		return (-1);
+	}
+
+	(void)VTCP_blocking(s);
+	return (s);
+}
+
+int
+VTCP_connect(const struct suckaddr *name, int msec)
+{
+	int s, i;
 	struct pollfd fds[1];
 	const struct sockaddr *sa;
 	socklen_t sl;
 
-	assert(s >= 0);
-
-	/* Set the socket non-blocking */
-	if (msec > 0)
-		(void)VTCP_nonblocking(s);
-
+	if (name == NULL)
+		return (-1);
 	/* Attempt the connect */
 	AN(VSA_Sane(name));
 	sa = VSA_Get_Sockaddr(name, &sl);
+	AN(sa);
+	AN(sl);
+
+	s = socket(sa->sa_family, SOCK_STREAM, 0);
+	if (s < 0)
+		return (s);
+
+	/* Set the socket non-blocking */
+	if (msec != 0)
+		(void)VTCP_nonblocking(s);
+
 	i = connect(s, sa, sl);
-	if (i == 0 || errno != EINPROGRESS)
-		return (i);
+	if (i == 0)
+		return (s);
+	if (errno != EINPROGRESS) {
+		AZ(close(s));
+		return (-1);
+	}
+
+	if (msec < 0) {
+		/*
+		 * Caller is responsible for waiting and
+		 * calling VTCP_connected
+		 */
+		return (s);
+	}
 
 	assert(msec > 0);
 	/* Exercise our patience, polling for write */
@@ -238,21 +296,12 @@ VTCP_connect(int s, const struct suckaddr *name, int msec)
 
 	if (i == 0) {
 		/* Timeout, close and give up */
+		AZ(close(s));
 		errno = ETIMEDOUT;
 		return (-1);
 	}
 
-	/* Find out if we got a connection */
-	l = sizeof k;
-	AZ(getsockopt(s, SOL_SOCKET, SO_ERROR, &k, &l));
-
-	/* An error means no connection established */
-	errno = k;
-	if (k)
-		return (-1);
-
-	(void)VTCP_blocking(s);
-	return (0);
+	return (VTCP_connected(s));
 }
 
 /*--------------------------------------------------------------------
@@ -292,6 +341,162 @@ VTCP_set_read_timeout(int s, double seconds)
 }
 
 /*--------------------------------------------------------------------
+ */
+
+static int __match_proto__(vss_resolved_f)
+vtcp_open_callback(void *priv, const struct suckaddr *sa)
+{
+	double *p = priv;
+
+	return (VTCP_connect(sa, (int)floor(*p * 1e3)));
+}
+
+int
+VTCP_open(const char *addr, const char *def_port, double timeout,
+    const char **errp)
+{
+	int error;
+	const char *err;
+
+	if (errp != NULL)
+		*errp = NULL;
+	assert(timeout >= 0);
+	error = VSS_resolver(addr, def_port, vtcp_open_callback,
+	    &timeout, &err);
+	if (err != NULL) {
+		if (errp != NULL)
+			*errp = err;
+		return (-1);
+	}
+	return (error);
+}
+
+/*--------------------------------------------------------------------
+ * Given a struct suckaddr, open a socket of the appropriate type, and bind
+ * it to the requested address.
+ *
+ * If the address is an IPv6 address, the IPV6_V6ONLY option is set to
+ * avoid conflicts between INADDR_ANY and IN6ADDR_ANY.
+ */
+
+int
+VTCP_bind(const struct suckaddr *sa, const char **errp)
+{
+	int sd, val, e;
+	socklen_t sl;
+	const struct sockaddr *so;
+	int proto;
+
+	if (errp != NULL)
+		*errp = NULL;
+
+	proto = VSA_Get_Proto(sa);
+	sd = socket(proto, SOCK_STREAM, 0);
+	if (sd < 0) {
+		if (errp != NULL)
+			*errp = "socket(2)";
+		return (-1);
+	}
+	val = 1;
+	if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val) != 0) {
+		if (errp != NULL)
+			*errp = "setsockopt(SO_REUSEADDR, 1)";
+		e = errno;
+		AZ(close(sd));
+		errno = e;
+		return (-1);
+	}
+#ifdef IPV6_V6ONLY
+	/* forcibly use separate sockets for IPv4 and IPv6 */
+	val = 1;
+	if (proto == AF_INET6 &&
+	    setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val) != 0) {
+		if (errp != NULL)
+			*errp = "setsockopt(IPV6_V6ONLY, 1)";
+		e = errno;
+		AZ(close(sd));
+		errno = e;
+		return (-1);
+	}
+#endif
+	so = VSA_Get_Sockaddr(sa, &sl);
+	if (bind(sd, so, sl) != 0) {
+		if (errp != NULL)
+			*errp = "bind(2)";
+		e = errno;
+		AZ(close(sd));
+		errno = e;
+		return (-1);
+	}
+	return (sd);
+}
+
+/*--------------------------------------------------------------------
+ * Given a struct suckaddr, open a socket of the appropriate type, bind it
+ * to the requested address, and start listening.
+ */
+
+int
+VTCP_listen(const struct suckaddr *sa, int depth, const char **errp)
+{
+	int sd;
+	int e;
+
+	if (errp != NULL)
+		*errp = NULL;
+	sd = VTCP_bind(sa, errp);
+	if (sd >= 0)  {
+		if (listen(sd, depth) != 0) {
+			e = errno;
+			AZ(close(sd));
+			errno = e;
+			if (errp != NULL)
+				*errp = "listen(2)";
+			return (-1);
+		}
+	}
+	return (sd);
+}
+
+/*--------------------------------------------------------------------*/
+
+struct helper {
+	int		depth;
+	const char	**errp;
+};
+
+static int __match_proto__(vss_resolved_f)
+vtcp_lo_cb(void *priv, const struct suckaddr *sa)
+{
+	int sock;
+	struct helper *hp = priv;
+
+	sock = VTCP_listen(sa, hp->depth, hp->errp);
+	if (sock > 0) {
+		*hp->errp = NULL;
+		return (sock);
+	}
+	AN(*hp->errp);
+	return (0);
+}
+
+int
+VTCP_listen_on(const char *addr, const char *def_port, int depth,
+    const char **errp)
+{
+	struct helper h;
+	int sock;
+
+	h.depth = depth;
+	h.errp = errp;
+
+	sock = VSS_resolver(addr, def_port, vtcp_lo_cb, &h, errp);
+	if (*errp != NULL)
+		return (-1);
+	return(sock);
+}
+
+/*--------------------------------------------------------------------
  * Set or reset SO_LINGER flag
  */
 
@@ -324,5 +529,28 @@ VTCP_check_hup(int sock)
 
 	if (poll(&pfd, 1, 0) == 1 && pfd.revents & POLLHUP)
 		return (1);
+	return (0);
+}
+
+/*--------------------------------------------------------------------
+ * Check if a TCP syscall return value is fatal
+ */
+
+int
+VTCP_Check(int a)
+{
+	if (a == 0)
+		return (1);
+	if (errno == ECONNRESET || errno == ENOTCONN)
+		return (1);
+#if (defined (__SVR4) && defined (__sun)) || defined (__NetBSD__)
+	/*
+	 * Solaris returns EINVAL if the other end unexepectedly reset the
+	 * connection.
+	 * This is a bug in Solaris and documented behaviour on NetBSD.
+	 */
+	if (errno == EINVAL || errno == ETIMEDOUT)
+		return (1);
+#endif
 	return (0);
 }

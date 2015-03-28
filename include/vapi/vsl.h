@@ -34,10 +34,9 @@
 #ifndef VAPI_VSL_H_INCLUDED
 #define VAPI_VSL_H_INCLUDED
 
-#include <stdio.h>
-
-#include "vapi/vsm.h"
 #include "vapi/vsl_int.h"
+
+struct VSM_data;
 
 /*
  * enum VSL_tag_e enumerates the SHM log tags, where the identifiers are

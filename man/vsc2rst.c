@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2011-2014 Varnish Software AS
+ * Copyright (c) 2011-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Tollef Fog Heen <tfheen@varnish-software.com>
@@ -40,7 +40,7 @@
 	printf(x "\n", ##__VA_ARGS__)
 #define VSC_LEVEL_F(v,l,e,d)		\
 	printf("%s – %s\n\t%s\n\n", l, e, d);
-#define VSC_F(n, t, l, f, v, e, d)	\
+#define VSC_F(n, t, l, s, f, v, d, e)	\
 	printf("%s – %s (%s)\n\t%s\n\n", #n, e, VSC_level_##v, d);
 
 int main(int argc, char **argv)
@@ -55,10 +55,8 @@ int main(int argc, char **argv)
 	P("---------------------------------");
 	P("Varnish counter field definitions");
 	P("---------------------------------");
+	P("");
 
-	P(":Author: Tollef Fog Heen");
-	P(":Date:   2011-09-20");
-	P(":Version: 1.0");
 	P(":Manual section: 7");
 	P("");
 
@@ -68,43 +66,57 @@ int main(int argc, char **argv)
 #include "tbl/vsc_levels.h"
 
 	P("");
-	P("MAIN COUNTERS");
-	P("=============");
+	P("MAIN COUNTERS (MAIN.*)");
+	P("======================");
 	P("");
 #include "tbl/vsc_f_main.h"
 
+	P("MANAGEMENT PROCESS COUNTERS (MGT.*)");
+	P("===================================");
 	P("");
-	P("LOCK COUNTERS");
-	P("=============");
-	P("");
-#define VSC_DO_LCK
+#define VSC_DO_MGT
 #include "tbl/vsc_fields.h"
-#undef VSC_DO_LCK
+#undef VSC_DO_MGT
 
 	P("");
-	P("PER MALLOC STORAGE COUNTERS");
-	P("===========================");
+	P("PER MEMORY POOL COUNTERS (MEMPOOL.*)");
+	P("====================================");
+	P("");
+#define VSC_DO_MEMPOOL
+#include "tbl/vsc_fields.h"
+#undef VSC_DO_MEMPOOL
+
+	P("");
+	P("PER MALLOC STORAGE COUNTERS (SMA.*)");
+	P("===================================");
 	P("");
 #define VSC_DO_SMA
 #include "tbl/vsc_fields.h"
 #undef  VSC_DO_SMA
 
 	P("");
-	P("PER FILE STORAGE COUNTERS");
-	P("=========================");
+	P("PER FILE STORAGE COUNTERS (SMF.*)");
+	P("=================================");
 	P("");
 #define VSC_DO_SMF
 #include "tbl/vsc_fields.h"
 #undef VSC_DO_SMF
 
 	P("");
-	P("PER BACKEND COUNTERS");
-	P("====================");
+	P("PER BACKEND COUNTERS (VBE.*)");
+	P("============================");
 	P("");
 #define VSC_DO_VBE
 #include "tbl/vsc_fields.h"
 #undef VSC_DO_VBE
 
+	P("");
+	P("LOCK COUNTERS (LCK.*)");
+	P("=====================");
+	P("");
+#define VSC_DO_LCK
+#include "tbl/vsc_fields.h"
+#undef VSC_DO_LCK
+
 	return (0);
 }
-

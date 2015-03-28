@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2014 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -30,11 +30,10 @@
 /*lint -save -e525 -e539 */
 
 REQ_BODY(INIT)
-REQ_BODY(PRESENT)
-REQ_BODY(CHUNKED)
+REQ_BODY(WITHOUT_LEN)
+REQ_BODY(WITH_LEN)
 REQ_BODY(TAKEN)
 REQ_BODY(CACHED)
-REQ_BODY(DONE)
 REQ_BODY(FAIL)
 REQ_BODY(NONE)
 

@@ -31,6 +31,7 @@
 
 #include "config.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,8 +40,9 @@
 
 static void __attribute__((__noreturn__))
 VAS_Fail_default(const char *func, const char *file, int line,
-    const char *cond, int err, enum vas_e kind)
+    const char *cond, enum vas_e kind)
 {
+	int err = errno;
 
 	if (kind == VAS_MISSING) {
 		fprintf(stderr,
@@ -49,7 +51,7 @@ VAS_Fail_default(const char *func, const char *file, int line,
 		    func, file, line, cond);
 	} else if (kind == VAS_INCOMPLETE) {
 		fprintf(stderr,
-		    "Incompelte code in %s(), %s line %d:\n",
+		    "Incomplete code in %s(), %s line %d:\n",
 		    func, file, line);
 	} else if (kind == VAS_WRONG) {
 		fprintf(stderr,

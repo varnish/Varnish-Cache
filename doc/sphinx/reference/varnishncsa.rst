@@ -1,4 +1,6 @@
-.. _ref-varnishncsa:
+.. role:: ref(emphasis)
+
+.. _varnishncsa(1):
 
 ===========
 varnishncsa
@@ -7,6 +9,8 @@ varnishncsa
 ---------------------------------------------------------
 Display Varnish logs in Apache / NCSA combined log format
 ---------------------------------------------------------
+
+:Manual section: 1
 
 SYNOPSIS
 ========
@@ -132,9 +136,9 @@ SIGUSR1
 SEE ALSO
 ========
 
-varnishd(1)
-varnishlog(1)
-varnishstat(1)
+:ref:`varnishd(1)`
+:ref:`varnishlog(1)`
+:ref:`varnishstat(1)`
 
 HISTORY
 =======

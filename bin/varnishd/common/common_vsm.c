@@ -42,7 +42,7 @@
 
 #include "common.h"
 
-#include "vapi/vsm_int.h"
+#include "vsm_priv.h"
 #include "vmb.h"
 #include "vtim.h"
 
@@ -384,9 +384,9 @@ VSM_common_copy(struct vsm_sc *to, const struct vsm_sc *from)
  */
 
 void
-VSM_common_ageupdate(struct vsm_sc *sc)
+VSM_common_ageupdate(const struct vsm_sc *sc)
 {
 
 	CHECK_OBJ_NOTNULL(sc, VSM_SC_MAGIC);
-	sc->head->age = VTIM_mono() - sc->t0;
+	sc->head->age = (uint64_t)(VTIM_mono() - sc->t0);
 }

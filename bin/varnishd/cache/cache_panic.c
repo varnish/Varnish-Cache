@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Dag-Erling Smørgrav <des@des.no>
@@ -35,16 +35,19 @@
 #include <execinfo.h>
 #endif
 
-#include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #include "cache.h"
-#include "vend.h"
+#include "cache_filter.h"
 #include "common/heritage.h"
 
 #include "cache_backend.h"
 #include "storage/storage.h"
 #include "vcl.h"
+#include "vcli_priv.h"
+#include "waiter/waiter.h"
 
 /*
  * The panic string is constructed in memory, then copied to the
@@ -76,7 +79,7 @@ body_status_2str(enum body_status e)
 
 /*--------------------------------------------------------------------*/
 
-const char *
+static const char *
 reqbody_status_2str(enum req_body_state_e e)
 {
 	switch (e) {
@@ -95,7 +98,8 @@ sess_close_2str(enum sess_close sc, int want_desc)
 {
 	switch (sc) {
 	case SC_NULL:		return(want_desc ? "(null)": "NULL");
-#define SESS_CLOSE(nm, desc)	case SC_##nm: return(want_desc ? desc : #nm);
+#define SESS_CLOSE(nm, s, err, desc)			\
+	case SC_##nm: return(want_desc ? desc : #nm);
 #include "tbl/sess_close.h"
 #undef SESS_CLOSE
 
@@ -154,6 +158,7 @@ pan_vbc(const struct vbc *vbc)
 
 /*--------------------------------------------------------------------*/
 
+#if 0
 static void
 pan_storage(const struct storage *st)
 {
@@ -186,6 +191,7 @@ pan_storage(const struct storage *st)
 #undef show
 #undef MAX_BYTES
 }
+#endif
 
 /*--------------------------------------------------------------------*/
 
@@ -210,6 +216,7 @@ pan_http(const char *id, const struct http *h, int indent)
 
 /*--------------------------------------------------------------------*/
 
+#if 0
 static void
 pan_object(const char *typ, const struct object *o)
 {
@@ -225,6 +232,7 @@ pan_object(const char *typ, const struct object *o)
 	VSB_printf(pan_vsp, "    },\n");
 	VSB_printf(pan_vsp, "  },\n");
 }
+#endif
 
 /*--------------------------------------------------------------------*/
 
@@ -236,11 +244,11 @@ pan_objcore(const char *typ, const struct objcore *oc)
 	VSB_printf(pan_vsp, "    refcnt = %d\n", oc->refcnt);
 	VSB_printf(pan_vsp, "    flags = 0x%x\n", oc->flags);
 	VSB_printf(pan_vsp, "    objhead = %p\n", oc->objhead);
-	VSB_printf(pan_vsp, "    stevedore = %p", oc->stevedore);
-	if (oc->stevedore != NULL) {
-		VSB_printf(pan_vsp, " (%s", oc->stevedore->name);
-		if (strlen(oc->stevedore->ident))
-			VSB_printf(pan_vsp, " %s", oc->stevedore->ident);
+	VSB_printf(pan_vsp, "    stevedore = %p", oc->stobj->stevedore);
+	if (oc->stobj->stevedore != NULL) {
+		VSB_printf(pan_vsp, " (%s", oc->stobj->stevedore->name);
+		if (strlen(oc->stobj->stevedore->ident))
+			VSB_printf(pan_vsp, " %s", oc->stobj->stevedore->ident);
 		VSB_printf(pan_vsp, ")");
 	}
 	VSB_printf(pan_vsp, "\n");
@@ -273,10 +281,12 @@ pan_wrk(const struct worker *wrk)
 	const char *p;
 
 	VSB_printf(pan_vsp, "  worker = %p {\n", wrk);
+	VSB_printf(pan_vsp, "    stack = {0x%jx -> 0x%jx}\n",
+	    (uintmax_t)wrk->stack_start, (uintmax_t)wrk->stack_end);
 	pan_ws(wrk->aws, 4);
 
 	m = wrk->cur_method;
-	VSB_printf(pan_vsp, "  VCL::method = ");
+	VSB_printf(pan_vsp, "    VCL::method = ");
 	if (m == 0) {
 		VSB_printf(pan_vsp, "none,\n");
 		return;
@@ -291,10 +301,10 @@ pan_wrk(const struct worker *wrk)
 		VSB_printf(pan_vsp, "0x%x,\n", m);
 	hand = VCL_Return_Name(wrk->handling);
 	if (hand != NULL)
-		VSB_printf(pan_vsp, "  VCL::return = %s,\n", hand);
+		VSB_printf(pan_vsp, "    VCL::return = %s,\n", hand);
 	else
-		VSB_printf(pan_vsp, "  VCL::return = 0x%x,\n", wrk->handling);
-	VSB_printf(pan_vsp, "  VCL::methods = {");
+		VSB_printf(pan_vsp, "    VCL::return = 0x%x,\n", wrk->handling);
+	VSB_printf(pan_vsp, "    VCL::methods = {");
 	m = wrk->seen_methods;
 	p = "";
 	for (u = 1; m ; u <<= 1) {
@@ -318,12 +328,17 @@ pan_busyobj(const struct busyobj *bo)
 	VSB_printf(pan_vsp, "  retries = %d\n", bo->retries);
 	VSB_printf(pan_vsp, "  failed = %d\n", bo->vfc->failed);
 	VSB_printf(pan_vsp, "  state = %d\n", (int)bo->state);
-#define BO_FLAG(l, r, w, d) if(bo->l) VSB_printf(pan_vsp, "    is_" #l "\n");
+	VSB_printf(pan_vsp, "  flags = {\n");
+#define BO_FLAG(l, r, w, d) if(bo->l) VSB_printf(pan_vsp, "    " #l "\n");
 #include "tbl/bo_flags.h"
 #undef BO_FLAG
+	VSB_printf(pan_vsp, "  }\n");
 
-	VSB_printf(pan_vsp, "    bodystatus = %d (%s),\n",
-	    bo->htc.body_status, body_status_2str(bo->htc.body_status));
+	if (bo->htc != NULL) {
+		VSB_printf(pan_vsp, "    bodystatus = %d (%s),\n",
+		    bo->htc->body_status,
+		    body_status_2str(bo->htc->body_status));
+	}
 	if (!VTAILQ_EMPTY(&bo->vfc->vfp)) {
 		VSB_printf(pan_vsp, "    filters =");
 		VTAILQ_FOREACH(vfe, &bo->vfc->vfp, list)
@@ -332,17 +347,18 @@ pan_busyobj(const struct busyobj *bo)
 		VSB_printf(pan_vsp, "\n");
 	}
 	VSB_printf(pan_vsp, "    },\n");
-	if (VALID_OBJ(bo->vbc, BACKEND_MAGIC))
-		pan_vbc(bo->vbc);
-	if (bo->bereq->ws != NULL)
+
+	if (bo->htc != NULL && bo->htc->vbc != NULL &&
+	    VALID_OBJ(bo->htc->vbc, BACKEND_MAGIC))
+		pan_vbc(bo->htc->vbc);
+	if (bo->bereq != NULL && bo->bereq->ws != NULL)
 		pan_http("bereq", bo->bereq, 4);
-	if (bo->beresp->ws != NULL)
+	if (bo->beresp != NULL && bo->beresp->ws != NULL)
 		pan_http("beresp", bo->beresp, 4);
-	pan_ws(bo->ws_o, 4);
 	if (bo->fetch_objcore)
 		pan_objcore("FETCH", bo->fetch_objcore);
-	if (bo->ims_obj)
-		pan_object("IMS", bo->ims_obj);
+	if (bo->stale_oc)
+		pan_objcore("IMS", bo->stale_oc);
 	VSB_printf(pan_vsp, "  }\n");
 }
 
@@ -377,7 +393,7 @@ pan_req(const struct req *req)
 		    "  err_code = %d, err_reason = %s,\n", req->err_code,
 		    req->err_reason ? req->err_reason : "(null)");
 
-	VSB_printf(pan_vsp, "  restarts = %d, esi_level = %d\n",
+	VSB_printf(pan_vsp, "  restarts = %d, esi_level = %d,\n",
 	    req->restarts, req->esi_level);
 
 	if (req->sp != NULL)
@@ -394,11 +410,17 @@ pan_req(const struct req *req)
 	if (VALID_OBJ(req->vcl, VCL_CONF_MAGIC))
 		pan_vcl(req->vcl);
 
-	if (VALID_OBJ(req->obj, OBJECT_MAGIC)) {
+	if (req->objcore != NULL) {
+		pan_objcore("REQ", req->objcore);
 		if (req->objcore->busyobj != NULL)
 			pan_busyobj(req->objcore->busyobj);
-		pan_object("REQ", req->obj);
 	}
+
+	VSB_printf(pan_vsp, "  flags = {\n");
+#define REQ_FLAG(l, r, w, d) if(req->l) VSB_printf(pan_vsp, "    " #l ",\n");
+#include "tbl/req_flags.h"
+#undef REQ_FLAG
+	VSB_printf(pan_vsp, "  }\n");
 
 	VSB_printf(pan_vsp, "},\n");
 }
@@ -409,12 +431,15 @@ static void
 pan_sess(const struct sess *sp)
 {
 	const char *stp;
+	char *ci;
+	char *cp;
 
 	VSB_printf(pan_vsp, "  sp = %p {\n", sp);
 	VSB_printf(pan_vsp, "    fd = %d, vxid = %u,\n",
 	    sp->fd, VXID(sp->vxid));
-	VSB_printf(pan_vsp, "    client = %s %s,\n", sp->client_addr_str,
-		sp->client_port_str);
+	AZ(SES_Get_client_ip(sp, &ci));
+	AZ(SES_Get_client_port(sp, &cp));
+	VSB_printf(pan_vsp, "    client = %s %s,\n", ci, cp);
 	switch (sp->sess_step) {
 #define SESS_STEP(l, u) case S_STP_##u: stp = "S_STP_" #u; break;
 #include "tbl/steps.h"
@@ -437,6 +462,8 @@ pan_backtrace(void)
 	void *array[10];
 	size_t size;
 	size_t i;
+	char **strings;
+	char *p;
 
 	size = backtrace (array, 10);
 	if (size == 0)
@@ -445,13 +472,17 @@ pan_backtrace(void)
 	for (i = 0; i < size; i++) {
 		VSB_printf (pan_vsp, "  ");
 		if (Symbol_Lookup(pan_vsp, array[i]) < 0) {
-			char **strings;
 			strings = backtrace_symbols(&array[i], 1);
-			if (strings != NULL && strings[0] != NULL)
-				VSB_printf(pan_vsp,
-				     "%p: %s", array[i], strings[0]);
-			else
+			if (strings == NULL || strings[0] == NULL) {
 				VSB_printf(pan_vsp, "%p: (?)", array[i]);
+			} else {
+				p = strrchr(strings[0], '/');
+				if (p == NULL)
+					p = strings[0];
+				else
+					p++;
+				VSB_printf(pan_vsp, "%p: %s", array[i], p);
+			}
 		}
 		VSB_printf (pan_vsp, "\n");
 	}
@@ -461,15 +492,27 @@ pan_backtrace(void)
 
 static void __attribute__((__noreturn__))
 pan_ic(const char *func, const char *file, int line, const char *cond,
-    int err, enum vas_e kind)
+    enum vas_e kind)
 {
 	const char *q;
 	struct req *req;
 	struct busyobj *bo;
+	struct sigaction sa;
+	int err = errno;
 
 	AZ(pthread_mutex_lock(&panicstr_mtx)); /* Won't be released,
 						  we're going to die
 						  anyway */
+
+	/*
+	 * should we trigger a SIGSEGV while handling a panic, our sigsegv
+	 * handler would hide the panic, so we need to reset the handler to
+	 * default
+	 */
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = SIG_DFL;
+	(void)sigaction(SIGSEGV, &sa, NULL);
+
 	switch(kind) {
 	case VAS_WRONG:
 		VSB_printf(pan_vsp,
@@ -505,8 +548,9 @@ pan_ic(const char *func, const char *file, int line, const char *cond,
 	if (q != NULL)
 		VSB_printf(pan_vsp, "thread = (%s)\n", q);
 
+	VSB_printf(pan_vsp, "version = %s\n", VCS_version);
 	VSB_printf(pan_vsp, "ident = %s,%s\n",
-	    VSB_data(vident) + 1, WAIT_GetName());
+	    VSB_data(vident) + 1, Wait_GetName());
 
 	pan_backtrace();
 
@@ -533,6 +577,27 @@ pan_ic(const char *func, const char *file, int line, const char *cond,
 
 /*--------------------------------------------------------------------*/
 
+static void __match_proto__(cli_func_t)
+ccf_panic(struct cli *cli, const char * const *av, void *priv)
+{
+
+	(void)cli;
+	(void)av;
+	AZ(priv);
+	AZ(strcmp("", "You asked for it"));
+}
+
+/*--------------------------------------------------------------------*/
+
+static struct cli_proto debug_cmds[] = {
+	{ "debug.panic.worker", "debug.panic.worker",
+		"\tPanic the worker process.",
+		0, 0, "d", ccf_panic },
+	{ NULL }
+};
+
+/*--------------------------------------------------------------------*/
+
 void
 PAN_Init(void)
 {
@@ -543,4 +608,5 @@ PAN_Init(void)
 	AN(heritage.panic_str_len);
 	AN(VSB_new(pan_vsp, heritage.panic_str, heritage.panic_str_len,
 	    VSB_FIXEDLEN));
+	CLI_AddFuncs(debug_cmds);
 }

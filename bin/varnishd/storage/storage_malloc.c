@@ -57,7 +57,7 @@ struct sma {
 };
 
 static struct storage *
-sma_alloc(struct stevedore *st, size_t size)
+sma_alloc(const struct stevedore *st, size_t size)
 {
 	struct sma_sc *sma_sc;
 	struct sma *sma = NULL;
@@ -117,7 +117,6 @@ sma_alloc(struct stevedore *st, size_t size)
 	sma->s.priv = sma;
 	sma->s.len = 0;
 	sma->s.space = size;
-	sma->s.stevedore = st;
 	sma->s.magic = STORAGE_MAGIC;
 	return (&sma->s);
 }

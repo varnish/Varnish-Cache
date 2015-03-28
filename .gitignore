@@ -40,6 +40,7 @@ Makefile.in
 /varnishapi.pc
 /build-aux
 TAGS
+tags
 cscope.*out
 #
 /varnishapi-uninstalled.pc
@@ -97,6 +98,9 @@ cscope.*out
 /doc/sphinx/build/
 /doc/sphinx/conf.py
 /doc/sphinx/include/vcl_var.rst
+# graphviz-generated
+/doc/graphviz/*.pdf
+/doc/graphviz/*.svg
 
 # NetBeans insists on this
 /nbproject/private/

@@ -45,22 +45,6 @@
 	"\tmax_age\tmax age of free element."
 
 struct parspec mgt_parspec[] = {
-	{ "user", tweak_user, NULL, NULL, NULL,
-		"The unprivileged user to run as.",
-		MUST_RESTART | ONLY_ROOT,
-		"" },
-	{ "group", tweak_group, NULL, NULL, NULL,
-		"The unprivileged group to run as.",
-		MUST_RESTART | ONLY_ROOT,
-		"" },
-	{ "group_cc", tweak_group_cc, NULL, NULL, NULL,
-		"On some systems the C-compiler is restricted so not"
-		" everybody can run it.  This parameter makes it possible"
-		" to add an extra group to the sandbox process which runs the"
-		" cc_command, in order to gain access to such a restricted"
-		" C-compiler.",
-		ONLY_ROOT,
-		"" },
 	{ "default_ttl", tweak_timeout, &mgt_param.default_ttl,
 		"0", NULL,
 		"The TTL assigned to objects if neither the backend nor "
@@ -92,7 +76,7 @@ struct parspec mgt_parspec[] = {
 		"384", "bytes" },
 	{ "workspace_client",
 		tweak_bytes_u, &mgt_param.workspace_client,
-		"3072", NULL,
+		"9k", NULL,
 		"Bytes of HTTP protocol workspace for clients HTTP req/resp."
 		"  If larger than 4k, use a multiple of 4k for VM efficiency.",
 		DELAYED_EFFECT,
@@ -107,7 +91,7 @@ struct parspec mgt_parspec[] = {
 	{ "workspace_thread",
 		tweak_bytes_u, &mgt_param.workspace_thread,
 		"256", "8192",
-		"Bytes of auxillary workspace per thread.\n"
+		"Bytes of auxiliary workspace per thread.\n"
 		"This workspace is used for certain temporary data structures"
 		" during the operation of a worker thread.\n"
 		"One use is for the io-vectors for writing requests and"
@@ -144,7 +128,7 @@ struct parspec mgt_parspec[] = {
 	{ "http_resp_size",
 		tweak_bytes_u, &mgt_param.http_resp_size,
 		"256", NULL,
-		"Maximum number of bytes of HTTP backend resonse we will deal "
+		"Maximum number of bytes of HTTP backend response we will deal "
 		"with.  This is a limit on all bytes up to the double blank "
 		"line which ends the HTTP request.\n"
 		"The memory for the request is allocated from the worker "
@@ -188,16 +172,10 @@ struct parspec mgt_parspec[] = {
 	{ "timeout_idle", tweak_timeout, &mgt_param.timeout_idle,
 		"0", NULL,
 		"Idle timeout for client connections.\n"
-		"A connection is considered idle, until we receive"
-		" a non-white-space character on it.",
+		"A connection is considered idle, until we have"
+		"received the full request headers.",
 		0,
 		"5", "seconds" },
-	{ "timeout_req", tweak_timeout, &mgt_param.timeout_req,
-		"0", NULL,
-		"Max time to receive clients request header, measured"
-		" from first non-white-space character to double CRNL.",
-		0,
-		"2", "seconds" },
 	{ "pipe_timeout", tweak_timeout, &mgt_param.pipe_timeout,
 		"0", NULL,
 		"Idle timeout for PIPE sessions. "
@@ -242,7 +220,7 @@ struct parspec mgt_parspec[] = {
 		"Internal limits in the storage_file module makes increases "
 		"above 128kb a dubious idea.",
 		EXPERIMENTAL,
-		"128k", "bytes" },
+		"16k", "bytes" },
 	{ "fetch_maxchunksize",
 		tweak_bytes, &mgt_param.fetch_maxchunksize,
 		"65536", NULL,
@@ -258,13 +236,6 @@ struct parspec mgt_parspec[] = {
 		MUST_RESTART,
 		"on", "bool" },
 #endif
-	{ "listen_address", tweak_listen_address, NULL,
-		NULL, NULL,
-		"Whitespace separated list of network endpoints where "
-		"Varnish will accept requests.\n"
-		"Possible formats: host, host:port, :port",
-		MUST_RESTART,
-		":80" },
 	{ "listen_depth", tweak_uint, &mgt_param.listen_depth,
 		"0", NULL,
 		"Listen queue depth.",
@@ -283,7 +254,7 @@ struct parspec mgt_parspec[] = {
 		tweak_bytes_u, &mgt_param.cli_limit,
 		"128", "99999999",
 		"Maximum size of CLI response.  If the response exceeds"
-		" this limit, the reponse code will be 201 instead of"
+		" this limit, the response code will be 201 instead of"
 		" 200 and the last line will indicate the truncation.",
 		0,
 		"48k", "bytes" },
@@ -342,7 +313,7 @@ struct parspec mgt_parspec[] = {
 		"VCL can override this default value for each backend and "
 		"backend request.",
 		0,
-		"3.5", "s" },
+		"3.5", "seconds" },
 	{ "first_byte_timeout", tweak_timeout,
 		&mgt_param.first_byte_timeout,
 		"0", NULL,
@@ -353,7 +324,7 @@ struct parspec mgt_parspec[] = {
 		"VCL can override this default value for each backend and "
 		"backend request. This parameter does not apply to pipe.",
 		0,
-		"60", "s" },
+		"60", "seconds" },
 	{ "between_bytes_timeout", tweak_timeout,
 		&mgt_param.between_bytes_timeout,
 		"0", NULL,
@@ -364,7 +335,7 @@ struct parspec mgt_parspec[] = {
 		"VCL can override this default value for each backend request "
 		"and backend request. This parameter does not apply to pipe.",
 		0,
-		"60", "s" },
+		"60", "seconds" },
 	{ "acceptor_sleep_max", tweak_timeout,
 		&mgt_param.acceptor_sleep_max,
 		"0", "10",
@@ -373,7 +344,7 @@ struct parspec mgt_parspec[] = {
 		"This parameter limits how long it can sleep between "
 		"attempts to accept new connections.",
 		EXPERIMENTAL,
-		"0.050", "s" },
+		"0.050", "seconds" },
 	{ "acceptor_sleep_incr", tweak_timeout,
 		&mgt_param.acceptor_sleep_incr,
 		"0", "1",
@@ -382,14 +353,14 @@ struct parspec mgt_parspec[] = {
 		"This parameter control how much longer we sleep, each time "
 		"we fail to accept a new connection.",
 		EXPERIMENTAL,
-		"0.001", "s" },
+		"0.001", "seconds" },
 	{ "acceptor_sleep_decay", tweak_double,
 		&mgt_param.acceptor_sleep_decay,
 		"0", "1",
 		"If we run out of resources, such as file descriptors or "
 		"worker threads, the acceptor will sleep between accepts.\n"
 		"This parameter (multiplicatively) reduce the sleep duration "
-		"for each succesfull accept. (ie: 0.9 = reduce by 10%)",
+		"for each successful accept. (ie: 0.9 = reduce by 10%)",
 		EXPERIMENTAL,
 		"0.900", "" },
 	{ "clock_skew", tweak_uint, &mgt_param.clock_skew,
@@ -397,7 +368,7 @@ struct parspec mgt_parspec[] = {
 		"How much clockskew we are willing to accept between the "
 		"backend and our own clock.",
 		0,
-		"10", "s" },
+		"10", "seconds" },
 	{ "prefer_ipv6", tweak_bool, &mgt_param.prefer_ipv6,
 		NULL, NULL,
 		"Prefer IPv6 address when connecting to backends which "
@@ -416,7 +387,7 @@ struct parspec mgt_parspec[] = {
 		"100000", "sessions" },
 	{ "timeout_linger", tweak_timeout, &mgt_param.timeout_linger,
 		"0", NULL,
-		"How long time the workerthread lingers on an idle session "
+		"How long the worker thread lingers on an idle session "
 		"before handing it over to the waiter.\n"
 		"When sessions are reused, as much as half of all reuses "
 		"happen within the first 100 msec of the previous request "
@@ -433,7 +404,7 @@ struct parspec mgt_parspec[] = {
 		WAITER_DEFAULT, NULL },
 	{ "ban_dups", tweak_bool, &mgt_param.ban_dups,
 		NULL, NULL,
-		"Elimited older identical bans when new bans are created."
+		"Eliminate older identical bans when new bans are created."
 		"  This test is CPU intensive and scales with the number and"
 		" complexity of active (non-Gone) bans.  If identical bans"
 		" are frequent, the amount of CPU needed to actually test "
@@ -454,7 +425,7 @@ struct parspec mgt_parspec[] = {
 		" lookup.  This parameter prevents the ban-lurker from"
 		" kicking in, until the rush is over.",
 		0,
-		"60", "s" },
+		"60", "seconds" },
 	{ "ban_lurker_sleep", tweak_timeout,
 		&mgt_param.ban_lurker_sleep,
 		"0", NULL,
@@ -464,7 +435,7 @@ struct parspec mgt_parspec[] = {
 		" before looking for new work to do.\n"
 		"A value of zero disables the ban lurker.",
 		0,
-		"0.01", "s" },
+		"0.01", "seconds" },
 	{ "ban_lurker_batch", tweak_uint,
 		&mgt_param.ban_lurker_batch,
 		"1", NULL,
@@ -521,14 +492,14 @@ struct parspec mgt_parspec[] = {
 		"Objects created with (ttl+grace+keep) shorter than this"
 		" are always put in transient storage.",
 		0,
-		"10.0", "s" },
+		"10", "seconds" },
 	{ "critbit_cooloff", tweak_timeout,
 		&mgt_param.critbit_cooloff,
 		"60", "254",
-		"How long time the critbit hasher keeps deleted objheads "
+		"How long the critbit hasher keeps deleted objheads "
 		"on the cooloff list.",
 		WIZARD,
-		"180.0", "s" },
+		"180", "seconds" },
 	{ "sigsegv_handler", tweak_bool, &mgt_param.sigsegv_handler,
 		NULL, NULL,
 		"Install a signal handler which tries to dump debug "
@@ -548,7 +519,12 @@ struct parspec mgt_parspec[] = {
 		0,
 		VARNISH_VMOD_DIR,
 		NULL },
-
+	{ "vcl_cooldown", tweak_timeout, &mgt_param.vcl_cooldown,
+		"0", NULL,
+		"How long time a VCL is kept warm after being replaced as the"
+		" active VCL.  (Granularity approximately 30 seconds.)",
+		0,
+		"600", "seconds" },
 	{ "vcc_err_unref", tweak_bool, &mgt_vcc_err_unref,
 		NULL, NULL,
 		"Unreferenced VCL objects result in error.",
@@ -614,13 +590,6 @@ struct parspec mgt_parspec[] = {
 		"to save the memory of one busyobj per worker thread.",
 		0,
 		"off", "bool"},
-
-	{ "pool_vbc", tweak_poolparam, &mgt_param.vbc_pool,
-		NULL, NULL,
-		"Parameters for backend connection memory pool.\n"
-		MEMPOOL_TEXT,
-		0,
-		"10,100,10", ""},
 
 	{ "pool_req", tweak_poolparam, &mgt_param.req_pool,
 		NULL, NULL,

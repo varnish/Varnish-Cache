@@ -52,7 +52,6 @@
 #include "vcli_priv.h"
 #include "vev.h"
 #include "vlu.h"
-#include "vss.h"
 #include "vtim.h"
 
 #include "mgt_cli.h"
@@ -160,9 +159,17 @@ mcf_panic_show(struct cli *cli, const char * const *av, void *priv)
 void __match_proto__(cli_func_t)
 mcf_panic_clear(struct cli *cli, const char * const *av, void *priv)
 {
-	(void)av;
 	(void)priv;
 
+	if (av[2] != NULL && strcmp(av[2], "-z")) {
+		VCLI_SetResult(cli, CLIS_PARAM);
+		VCLI_Out(cli, "Unknown parameter \"%s\".", av[2]);
+		return;
+	} else if (av[2] != NULL) {
+		VSC_C_mgt->child_panic = static_VSC_C_mgt.child_panic = 0;
+		if (child_panic == NULL)
+			return;
+	}
 	if (child_panic == NULL) {
 		VCLI_SetResult(cli, CLIS_CANT);
 		VCLI_Out(cli, "No panic to clear");
@@ -215,51 +222,6 @@ mgt_child_inherit(int fd, const char *what)
 		vbit_set(fd_map, fd);
 	else
 		vbit_clr(fd_map, fd);
-}
-
-/*=====================================================================
- * Open and close the accept sockets.
- *
- * (The child is priv-sep'ed, so it can't do it.)
- */
-
-int
-MGT_open_sockets(void)
-{
-	struct listen_sock *ls;
-	int good = 0;
-
-	VTAILQ_FOREACH(ls, &heritage.socks, list) {
-		if (ls->sock >= 0) {
-			good++;
-			continue;
-		}
-		ls->sock = VSS_bind(ls->addr);
-		if (ls->sock < 0)
-			continue;
-
-		mgt_child_inherit(ls->sock, "sock");
-
-		good++;
-	}
-	if (!good)
-		return (1);
-	return (0);
-}
-
-/*--------------------------------------------------------------------*/
-
-void
-MGT_close_sockets(void)
-{
-	struct listen_sock *ls;
-
-	VTAILQ_FOREACH(ls, &heritage.socks, list) {
-		if (ls->sock < 0)
-			continue;
-		mgt_child_inherit(ls->sock, NULL);
-		closex(&ls->sock);
-	}
 }
 
 /*=====================================================================
@@ -328,7 +290,6 @@ child_sigsegv_handler(int s, siginfo_t *si, void *c)
 		 __FILE__,
 		 __LINE__,
 		 buf,
-		 errno,
 		 VAS_ASSERT);
 }
 
@@ -349,11 +310,10 @@ mgt_launch_child(struct cli *cli)
 	if (child_state != CH_STOPPED && child_state != CH_DIED)
 		return;
 
-	if (MGT_open_sockets() != 0) {
+	if (!MAC_sockets_ready(cli)) {
 		child_state = CH_STOPPED;
 		if (cli != NULL) {
 			VCLI_SetResult(cli, CLIS_CANT);
-			VCLI_Out(cli, "Could not open sockets");
 			return;
 		}
 		REPORT0(LOG_ERR,
@@ -421,11 +381,11 @@ mgt_launch_child(struct cli *cli)
 		(void)signal(SIGINT, SIG_DFL);
 		(void)signal(SIGTERM, SIG_DFL);
 
-		mgt_sandbox(SANDBOX_WORKER);
+		VJ_subproc(JAIL_SUBPROC_WORKER);
 
 		child_main();
 
-		exit(1);
+		exit(0);
 	}
 	assert(pid > 1);
 	REPORT(LOG_NOTICE, "child (%jd) Started", (intmax_t)pid);
@@ -439,8 +399,6 @@ mgt_launch_child(struct cli *cli)
 
 	mgt_child_inherit(heritage.cli_out, NULL);
 	closex(&heritage.cli_out);
-
-	MGT_close_sockets();
 
 	child_std_vlu = VLU_New(NULL, child_line, 0);
 	AN(child_std_vlu);
@@ -533,6 +491,8 @@ mgt_reap_child(void)
 		fprintf(stderr, "WAIT 0x%jx\n", (uintmax_t)r);
 	assert(r == child_pid);
 
+	MAC_reopen_sockets(NULL);
+
 	/* Compose obituary */
 	vsb = VSB_new_auto();
 	XXXAN(vsb);
@@ -570,6 +530,7 @@ mgt_reap_child(void)
 		mgt_SHM_Destroy(0);
 	}
 	mgt_SHM_Create();
+	mgt_SHM_Commit();
 
 	if (child_state == CH_RUNNING)
 		child_state = CH_DIED;
@@ -683,7 +644,7 @@ mgt_sigint(const struct vev *e, int what)
 	(void)fflush(stdout);
 	if (child_pid >= 0)
 		mgt_stop_child();
-	exit (2);
+	exit(0);
 }
 
 /*--------------------------------------------------------------------*/
@@ -696,7 +657,7 @@ mgt_uptime(const struct vev *e, int what)
 	(void)what;
 	AN(VSC_C_mgt);
 	VSC_C_mgt->uptime = static_VSC_C_mgt.uptime =
-	    VTIM_real() - mgt_uptime_t0;
+	    (uint64_t)(VTIM_real() - mgt_uptime_t0);
 	if (heritage.vsm != NULL)
 		VSM_common_ageupdate(heritage.vsm);
 	return (0);
@@ -752,11 +713,14 @@ MGT_Run(void)
 		REPORT0(LOG_ERR, "No VCL loaded yet");
 	else if (!d_flag) {
 		mgt_launch_child(NULL);
-		if (child_state == CH_STOPPED) {
+		if (child_state != CH_RUNNING) {
+			// XXX correct? or 0?
 			exit_status = 2;
 			return;
 		}
 	}
+
+	mgt_SHM_Commit();
 
 	i = vev_schedule(mgt_evb);
 	if (i != 0)

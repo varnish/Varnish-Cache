@@ -26,35 +26,42 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
+ * Waiters are herders of connections:  They monitor a large number of
+ * connections and react if data arrives, the connection is closed or
+ * if nothing happens for a specified timeout period.
+ *
+ * The "poll" waiter should be portable to just about anything, but it
+ * is not very efficient because it has to setup state on each call to
+ * poll(2).  Almost all kernels have made better facilities for that
+ * reason, needless to say, each with its own NIH-controlled API:
+ *
+ * - kqueue on FreeBSD
+ * - epoll on Linux
+ * - ports on Solaris
+ *
+ * Public interfaces
  */
 
-struct sess;
+struct waited;
+struct waiter;
 
-typedef void* waiter_init_f(void);
-typedef void waiter_pass_f(void *priv, struct sess *);
+enum wait_event {
+	WAITER_REMCLOSE,
+	WAITER_TIMEOUT,
+	WAITER_ACTION,
+	WAITER_CLOSE
+};
 
 #define WAITER_DEFAULT		"platform dependent"
 
-struct waiter {
-	const char		*name;
-	waiter_init_f		*init;
-	waiter_pass_f		*pass;
-};
+typedef void waiter_handle_f(struct waited *, enum wait_event, double now);
+
+/* cache_waiter.c */
+int Wait_Enter(const struct waiter *, struct waited *);
+struct waiter *Wait_New(waiter_handle_f *, volatile double *timeout);
+void Wait_Destroy(struct waiter **);
+const char *Wait_GetName(void);
+void Wait_Init(void);
 
 /* mgt_waiter.c */
-extern struct waiter const * waiter;
-int WAIT_tweak_waiter(struct vsb *vsb, const char *arg);
-
-#if defined(HAVE_EPOLL_CTL)
-extern const struct waiter waiter_epoll;
-#endif
-
-#if defined(HAVE_KQUEUE)
-extern const struct waiter waiter_kqueue;
-#endif
-
-#if defined(HAVE_PORT_CREATE)
-extern const struct waiter waiter_ports;
-#endif
-
-extern const struct waiter waiter_poll;
+int Wait_Argument(struct vsb *vsb, const char *arg);

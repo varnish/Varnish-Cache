@@ -32,24 +32,20 @@
 
 #include "config.h"
 
-#include <grp.h>
 #include <limits.h>
 #include <math.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "mgt/mgt.h"
-#include "common/heritage.h"
 #include "common/params.h"
 
 #include "mgt/mgt_param.h"
 #include "waiter/waiter.h"
 #include "vav.h"
 #include "vnum.h"
-#include "vss.h"
 
 /*--------------------------------------------------------------------
  * Generic handling of double typed parameters
@@ -60,29 +56,25 @@ tweak_generic_double(struct vsb *vsb, volatile double *dest,
     const char *arg, const char *min, const char *max, const char *fmt)
 {
 	double u, minv = 0, maxv = 0;
-	char *p;
 
 	if (arg != NULL) {
 		if (min != NULL) {
-			p = NULL;
-			minv = strtod(min, &p);
-			if (*arg == '\0' || *p != '\0') {
+			minv = VNUM(min);
+			if (isnan(minv)) {
 				VSB_printf(vsb, "Illegal Min: %s\n", min);
 				return (-1);
 			}
 		}
 		if (max != NULL) {
-			p = NULL;
-			maxv = strtod(max, &p);
-			if (*arg == '\0' || *p != '\0') {
+			maxv = VNUM(max);
+			if (isnan(maxv)) {
 				VSB_printf(vsb, "Illegal Max: %s\n", max);
 				return (-1);
 			}
 		}
 
-		p = NULL;
-		u = strtod(arg, &p);
-		if (*arg == '\0' || *p != '\0') {
+		u = VNUM(arg);
+		if (isnan(u)) {
 			VSB_printf(vsb, "Not a number(%s)\n", arg);
 			return (-1);
 		}
@@ -369,192 +361,6 @@ tweak_vsl_reclen(struct vsb *vsb, const struct parspec *par, const char *arg)
 	return (0);
 }
 
-/*--------------------------------------------------------------------
- * XXX: slightly magic.  We want to initialize to "nobody" (XXX: shouldn't
- * XXX: that be something autocrap found for us ?) but we don't want to
- * XXX: fail initialization if that user doesn't exists, even though we
- * XXX: do want to fail it, in subsequent sets.
- * XXX: The magic init string is a hack for this.
- */
-
-int
-tweak_user(struct vsb *vsb, const struct parspec *par, const char *arg)
-{
-	struct passwd *pw;
-
-	(void)par;
-	if (arg != NULL) {
-		if (*arg != '\0') {
-			pw = getpwnam(arg);
-			if (pw == NULL) {
-				VSB_printf(vsb, "Unknown user");
-				return(-1);
-			}
-			REPLACE(mgt_param.user, pw->pw_name);
-			mgt_param.uid = pw->pw_uid;
-		} else {
-			mgt_param.uid = getuid();
-		}
-	} else if (mgt_param.user) {
-		VSB_printf(vsb, "%s (%d)", mgt_param.user, (int)mgt_param.uid);
-	} else {
-		VSB_printf(vsb, "UID %d", (int)mgt_param.uid);
-	}
-	return (0);
-}
-
-/*--------------------------------------------------------------------
- * XXX: see comment for tweak_user, same thing here.
- */
-
-int
-tweak_group(struct vsb *vsb, const struct parspec *par, const char *arg)
-{
-	struct group *gr;
-
-	(void)par;
-	if (arg != NULL) {
-		if (*arg != '\0') {
-			gr = getgrnam(arg);
-			if (gr == NULL) {
-				VSB_printf(vsb, "Unknown group");
-				return(-1);
-			}
-			REPLACE(mgt_param.group, gr->gr_name);
-			mgt_param.gid = gr->gr_gid;
-		} else {
-			mgt_param.gid = getgid();
-		}
-	} else if (mgt_param.group) {
-		VSB_printf(vsb, "%s (%d)", mgt_param.group, (int)mgt_param.gid);
-	} else {
-		VSB_printf(vsb, "GID %d", (int)mgt_param.gid);
-	}
-	return (0);
-}
-
-/*--------------------------------------------------------------------
- * XXX: see comment for tweak_user, same thing here.
- */
-
-int
-tweak_group_cc(struct vsb *vsb, const struct parspec *par, const char *arg)
-{
-	struct group *gr;
-
-	(void)par;
-	if (arg != NULL) {
-		if (*arg != '\0') {
-			gr = getgrnam(arg);
-			if (gr == NULL) {
-				VSB_printf(vsb, "Unknown group");
-				return(-1);
-			}
-			REPLACE(mgt_param.group_cc, gr->gr_name);
-			mgt_param.gid_cc = gr->gr_gid;
-		} else {
-			REPLACE(mgt_param.group_cc, "");
-			mgt_param.gid_cc = 0;
-		}
-	} else if (strlen(mgt_param.group_cc) > 0) {
-		VSB_printf(vsb, "%s (%d)",
-		    mgt_param.group_cc, (int)mgt_param.gid_cc);
-	} else {
-		VSB_printf(vsb, "<not set>");
-	}
-	return (0);
-}
-
-/*--------------------------------------------------------------------*/
-
-static void
-clean_listen_sock_head(struct listen_sock_head *lsh)
-{
-	struct listen_sock *ls, *ls2;
-
-	VTAILQ_FOREACH_SAFE(ls, lsh, list, ls2) {
-		CHECK_OBJ_NOTNULL(ls, LISTEN_SOCK_MAGIC);
-		VTAILQ_REMOVE(lsh, ls, list);
-		free(ls->name);
-		free(ls->addr);
-		FREE_OBJ(ls);
-	}
-}
-
-int
-tweak_listen_address(struct vsb *vsb, const struct parspec *par,
-    const char *arg)
-{
-	char **av;
-	int i, retval = 0;
-	struct listen_sock		*ls;
-	struct listen_sock_head		lsh;
-
-	(void)par;
-	if (arg == NULL) {
-		VSB_quote(vsb, mgt_param.listen_address, -1, 0);
-		return (0);
-	}
-
-	av = VAV_Parse(arg, NULL, ARGV_COMMA);
-	if (av == NULL) {
-		VSB_printf(vsb, "Parse error: out of memory");
-		return(-1);
-	}
-	if (av[0] != NULL) {
-		VSB_printf(vsb, "Parse error: %s", av[0]);
-		VAV_Free(av);
-		return(-1);
-	}
-	if (av[1] == NULL) {
-		VSB_printf(vsb, "Empty listen address");
-		VAV_Free(av);
-		return(-1);
-	}
-	VTAILQ_INIT(&lsh);
-	for (i = 1; av[i] != NULL; i++) {
-		struct vss_addr **ta;
-		int j, n;
-
-		n = VSS_resolve(av[i], "http", &ta);
-		if (n == 0) {
-			VSB_printf(vsb, "Invalid listen address ");
-			VSB_quote(vsb, av[i], -1, 0);
-			retval = -1;
-			break;
-		}
-		for (j = 0; j < n; ++j) {
-			ALLOC_OBJ(ls, LISTEN_SOCK_MAGIC);
-			AN(ls);
-			ls->sock = -1;
-			ls->addr = ta[j];
-			ls->name = strdup(av[i]);
-			AN(ls->name);
-			VTAILQ_INSERT_TAIL(&lsh, ls, list);
-		}
-		free(ta);
-	}
-	VAV_Free(av);
-	if (retval) {
-		clean_listen_sock_head(&lsh);
-		return (-1);
-	}
-
-	REPLACE(mgt_param.listen_address, arg);
-
-	clean_listen_sock_head(&heritage.socks);
-	heritage.nsocks = 0;
-
-	while (!VTAILQ_EMPTY(&lsh)) {
-		ls = VTAILQ_FIRST(&lsh);
-		VTAILQ_REMOVE(&lsh, ls, list);
-		CHECK_OBJ_NOTNULL(ls, LISTEN_SOCK_MAGIC);
-		VTAILQ_INSERT_TAIL(&heritage.socks, ls, list);
-		heritage.nsocks++;
-	}
-	return (0);
-}
-
 /*--------------------------------------------------------------------*/
 
 int
@@ -580,7 +386,7 @@ tweak_waiter(struct vsb *vsb, const struct parspec *par, const char *arg)
 
 	/* XXX should have tweak_generic_string */
 	(void)par;
-	return (WAIT_tweak_waiter(vsb, arg));
+	return (Wait_Argument(vsb, arg));
 }
 
 /*--------------------------------------------------------------------*/

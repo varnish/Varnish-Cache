@@ -30,7 +30,6 @@
 
 #include <sys/types.h>
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
 
@@ -150,6 +149,7 @@ struct inifin {
 	unsigned		n;
 	struct vsb		*ini;
 	struct vsb		*fin;
+	struct vsb		*event;
 	VTAILQ_ENTRY(inifin)	list;
 };
 
@@ -255,11 +255,11 @@ struct inifin *New_IniFin(struct vcc *tl);
  * F -> Finish function
  */
 void Fh(const struct vcc *tl, int indent, const char *fmt, ...)
-    __printflike(3, 4);
+    __v_printflike(3, 4);
 void Fc(const struct vcc *tl, int indent, const char *fmt, ...)
-    __printflike(3, 4);
+    __v_printflike(3, 4);
 void Fb(const struct vcc *tl, int indent, const char *fmt, ...)
-    __printflike(3, 4);
+    __v_printflike(3, 4);
 void EncToken(struct vsb *sb, const struct token *t);
 int IsMethod(const struct token *t);
 void *TlAlloc(struct vcc *tl, unsigned len);
@@ -292,8 +292,8 @@ sym_wildcard_t vcc_Stv_Wildcard;
 
 /* vcc_utils.c */
 const char *vcc_regexp(struct vcc *tl);
-void Resolve_Sockaddr(struct vcc *tl, const char *host, const char *port, \
-    const char **ipv4, const char **ipv4_ascii, const char **ipv6, \
+void Resolve_Sockaddr(struct vcc *tl, const char *host, const char *defport,
+    const char **ipv4, const char **ipv4_ascii, const char **ipv6,
     const char **ipv6_ascii, const char **p_ascii, int maxips,
     const struct token *t_err, const char *errid);
 

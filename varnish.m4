@@ -1,7 +1,7 @@
 # varnish.m4 - Macros to locate Varnish header files.            -*- Autoconf -*-
-# serial 1 (varnish-4.0)
+# serial 3 (varnish-4.0)
 
-# Copyright (c) 2013 Varnish Software AS
+# Copyright (c) 2013-2015 Varnish Software AS
 # All rights reserved.
 #
 # Author: Tollef Fog Heen <tfheen@varnish-software.com>
@@ -28,6 +28,11 @@
 # SUCH DAMAGE.
 #
 
+# For compatibility with autoconf < 2.63b
+m4_ifndef([AS_VAR_COPY],
+  [m4_define([AS_VAR_COPY],
+     [AS_LITERAL_IF([$1[]$2], [$1=$$2], [eval $1=\$$2])])]) 
+
 # VARNISH_VMOD_INCLUDE_DIR([])
 # ----------------------------
 
@@ -53,10 +58,9 @@ variable if you installed software in a non-standard prefix.])
 	fi
 ])
 
-VARNISH_PKG_GET_VAR([VMOD_INCLUDE_DIR], [vmodincludedir])
 VARNISH_PKG_GET_VAR([VAPI_INCLUDE_DIR], [pkgincludedir])
 _CPPFLAGS="$CPPFLAGS"
-VMOD_INCLUDES="-I$VMOD_INCLUDE_DIR -I$VAPI_INCLUDE_DIR"
+VMOD_INCLUDES="-I$VAPI_INCLUDE_DIR"
 CPPFLAGS="$VMOD_INCLUDES $CPPFLAGS"
 AC_CHECK_HEADERS([vsha256.h cache/cache.h])
 CPPFLAGS="$_CPPFLAGS"

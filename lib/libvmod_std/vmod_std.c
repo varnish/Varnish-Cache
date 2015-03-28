@@ -33,7 +33,6 @@
 #include <netinet/in.h>
 
 #include <ctype.h>
-#include <errno.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <syslog.h>
@@ -44,12 +43,12 @@
 #include "vtim.h"
 
 #include "cache/cache.h"
-#include "cache/cache_backend.h"
+#include "cache/cache_director.h"
 
 #include "vcc_if.h"
 
 VCL_VOID __match_proto__(td_std_set_ip_tos)
-vmod_set_ip_tos(const struct vrt_ctx *ctx, VCL_INT tos)
+vmod_set_ip_tos(VRT_CTX, VCL_INT tos)
 {
 	int itos = tos;
 
@@ -59,7 +58,7 @@ vmod_set_ip_tos(const struct vrt_ctx *ctx, VCL_INT tos)
 }
 
 static const char *
-vmod_updown(const struct vrt_ctx *ctx, int up, const char *s, va_list ap)
+vmod_updown(VRT_CTX, int up, const char *s, va_list ap)
 {
 	unsigned u;
 	char *b, *e;
@@ -95,7 +94,7 @@ vmod_updown(const struct vrt_ctx *ctx, int up, const char *s, va_list ap)
 }
 
 VCL_STRING __match_proto__(td_std_toupper)
-vmod_toupper(const struct vrt_ctx *ctx, const char *s, ...)
+vmod_toupper(VRT_CTX, const char *s, ...)
 {
 	const char *p;
 	va_list ap;
@@ -108,7 +107,7 @@ vmod_toupper(const struct vrt_ctx *ctx, const char *s, ...)
 }
 
 VCL_STRING __match_proto__(td_std_tolower)
-vmod_tolower(const struct vrt_ctx *ctx, const char *s, ...)
+vmod_tolower(VRT_CTX, const char *s, ...)
 {
 	const char *p;
 	va_list ap;
@@ -121,7 +120,7 @@ vmod_tolower(const struct vrt_ctx *ctx, const char *s, ...)
 }
 
 VCL_REAL __match_proto__(td_std_random)
-vmod_random(const struct vrt_ctx *ctx, VCL_REAL lo, VCL_REAL hi)
+vmod_random(VRT_CTX, VCL_REAL lo, VCL_REAL hi)
 {
 	double a;
 
@@ -133,7 +132,7 @@ vmod_random(const struct vrt_ctx *ctx, VCL_REAL lo, VCL_REAL hi)
 }
 
 VCL_VOID __match_proto__(td_std_log)
-vmod_log(const struct vrt_ctx *ctx, const char *fmt, ...)
+vmod_log(VRT_CTX, const char *fmt, ...)
 {
 	unsigned u;
 	va_list ap;
@@ -143,7 +142,7 @@ vmod_log(const struct vrt_ctx *ctx, const char *fmt, ...)
 	u = WS_Reserve(ctx->ws, 0);
 	t.b = ctx->ws->f;
 	va_start(ap, fmt);
-	t.e = VRT_StringList(t.b, u, fmt, ap);
+	t.e = VRT_StringList(ctx->ws->f, u, fmt, ap);
 	va_end(ap);
 	if (t.e != NULL) {
 		assert(t.e > t.b);
@@ -154,50 +153,45 @@ vmod_log(const struct vrt_ctx *ctx, const char *fmt, ...)
 }
 
 VCL_VOID __match_proto__(td_std_syslog)
-vmod_syslog(const struct vrt_ctx *ctx, VCL_INT fac, const char *fmt, ...)
+vmod_syslog(VRT_CTX, VCL_INT fac, const char *fmt, ...)
 {
-	char *p;
 	unsigned u;
 	va_list ap;
+	txt t;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	u = WS_Reserve(ctx->ws, 0);
-	p = ctx->ws->f;
+	t.b = ctx->ws->f;
 	va_start(ap, fmt);
-	p = VRT_StringList(p, u, fmt, ap);
+	t.e = VRT_StringList(ctx->ws->f, u, fmt, ap);
 	va_end(ap);
-	if (p != NULL)
-		syslog((int)fac, "%s", p);
+	if (t.e != NULL)
+		syslog((int)fac, "%s", t.b);
 	WS_Release(ctx->ws, 0);
 }
 
 VCL_VOID __match_proto__(td_std_collect)
-vmod_collect(const struct vrt_ctx *ctx, VCL_HEADER hdr)
+vmod_collect(VRT_CTX, VCL_HEADER hdr)
 {
+	struct http *hp;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
-	if (hdr->where == HDR_REQ)
-		http_CollectHdr(ctx->http_req, hdr->what);
-	else if (hdr->where == HDR_BEREQ)
-		http_CollectHdr(ctx->http_bereq, hdr->what);
-	else if (hdr->where == HDR_BERESP)
-		http_CollectHdr(ctx->http_beresp, hdr->what);
-	else if (hdr->where == HDR_RESP)
-		http_CollectHdr(ctx->http_resp, hdr->what);
+	hp = VRT_selecthttp(ctx, hdr->where);
+	http_CollectHdr(hp, hdr->what);
 }
 
 VCL_BOOL __match_proto__(td_std_healthy)
-vmod_healthy(const struct vrt_ctx *ctx, VCL_BACKEND be)
+vmod_healthy(VRT_CTX, VCL_BACKEND be)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	if (be == NULL)
 		return (0);
 	CHECK_OBJ_NOTNULL(be, DIRECTOR_MAGIC);
-	return (VDI_Healthy(be));
+	return (VDI_Healthy(be, ctx->bo));
 }
 
 VCL_INT __match_proto__(td_std_port)
-vmod_port(const struct vrt_ctx *ctx, VCL_IP ip)
+vmod_port(VRT_CTX, VCL_IP ip)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	if (ip == NULL)
@@ -206,13 +200,13 @@ vmod_port(const struct vrt_ctx *ctx, VCL_IP ip)
 }
 
 VCL_VOID __match_proto__(td_std_rollback)
-vmod_rollback(const struct vrt_ctx *ctx, VCL_HTTP hp)
+vmod_rollback(VRT_CTX, VCL_HTTP hp)
 {
 	VRT_Rollback(ctx, hp);
 }
 
 VCL_VOID __match_proto__(td_std_timestamp)
-vmod_timestamp(const struct vrt_ctx *ctx, VCL_STRING label)
+vmod_timestamp(VRT_CTX, VCL_STRING label)
 {
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
@@ -225,8 +219,32 @@ vmod_timestamp(const struct vrt_ctx *ctx, VCL_STRING label)
 		CHECK_OBJ_NOTNULL(ctx->bo, BUSYOBJ_MAGIC);
 		VSLb_ts_busyobj(ctx->bo, label, VTIM_real());
 	} else if (ctx->req != NULL) {
-		/* Called from request vcl methdos */
+		/* Called from request vcl methods */
 		CHECK_OBJ_NOTNULL(ctx->req, REQ_MAGIC);
 		VSLb_ts_req(ctx->req, label, VTIM_real());
 	}
 }
+
+VCL_VOID __match_proto__(td_std_cache_req_body)
+vmod_cache_req_body(VRT_CTX, VCL_BYTES size)
+{
+	int result;
+	ssize_t ss;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	if (size < 0)
+		size = 0;
+	ss = (ssize_t)size;
+	result = VRT_CacheReqBody(ctx, ss);
+	VSLb(ctx->vsl, SLT_Debug, "VRT_CacheReqBody(%zd): %d", ss, result);
+}
+
+VCL_STRING __match_proto__(td_std_strstr)
+vmod_strstr(VRT_CTX, VCL_STRING s1, VCL_STRING s2)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	if (s1 == NULL || s2 == NULL)
+		return (NULL);
+	return (strstr(s1, s2));
+}
+

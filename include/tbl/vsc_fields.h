@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -26,21 +26,24 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * Definition of all shared memory statistics below.
+ * Definition of all shared memory statistics below (except main - see
+ * include/tbl/vsc_f_main.h).
  *
- * Fields (n, t, l, f, v, e, d):
+ * Fields (n, t, l, s, f, v, d, e):
  *    n - Name:		Field name, in C-source and stats programs
- *    t - Type:		C-type, uint64_t, unless marked in 'f'
+ *    t - C-type:	uint64_t, unless marked in 's'
  *    l - Local:	Local counter in worker thread.
- *    f - Format:	Semantics of the value in this field
- *				'a' - Accumulator (deprecated, use 'c')
+ *    s - Semantics:	Semantics of the value in this field
  *				'b' - Bitmap
  *				'c' - Counter, never decreases.
  *				'g' - Gauge, goes up and down
- *				'i' - Integer (deprecated, use 'g')
+ *    f - Format:	Display format for the field
+ *				'b' - Bitmap
+ *				'i' - Integer
+ *				'd' - Duration
  *    v - Verbosity:	Counter verbosity level (see vsc_levels.h)
- *    e - Explantion:	Short explanation of field (for screen use)
- *    d - Description:	Long explanation of field (for doc use)
+ *    d - Description:	Short description of field (for screen use)
+ *    e - Explanation:	Long explanation of field (for doc use)
  *
  * Please describe Gauge variables as "Number of..." to indicate that
  * this is a snapshot, and Counter variables as "Count of" to indicate
@@ -62,32 +65,32 @@
 
 #ifdef VSC_DO_MGT
 
-VSC_F(uptime,			uint64_t, 0, 'c', info,
+VSC_F(uptime,			uint64_t, 0, 'c', 'd', info,
     "Management process uptime",
 	"Uptime in seconds of the management process"
 )
-VSC_F(child_start,		uint64_t, 0, 'c', diag,
+VSC_F(child_start,		uint64_t, 0, 'c', 'i', diag,
     "Child process started",
 	"Number of times the child process has been started"
 )
-VSC_F(child_exit,		uint64_t, 0, 'c', diag,
+VSC_F(child_exit,		uint64_t, 0, 'c', 'i', diag,
     "Child process normal exit",
 	"Number of times the child process has been cleanly stopped"
 )
-VSC_F(child_stop,		uint64_t, 0, 'c', diag,
+VSC_F(child_stop,		uint64_t, 0, 'c', 'i', diag,
     "Child process unexpected exit",
 	"Number of times the child process has exited with an unexpected"
 	" return code"
 )
-VSC_F(child_died,		uint64_t, 0, 'c', diag,
+VSC_F(child_died,		uint64_t, 0, 'c', 'i', diag,
     "Child process died (signal)",
 	"Number of times the child process has died due to signals"
 )
-VSC_F(child_dump,		uint64_t, 0, 'c', diag,
+VSC_F(child_dump,		uint64_t, 0, 'c', 'i', diag,
     "Child process core dumped",
 	"Number of times the child process has produced core dumps"
 )
-VSC_F(child_panic,		uint64_t, 0, 'c', diag,
+VSC_F(child_panic,		uint64_t, 0, 'c', 'i', diag,
     "Child process panic",
 	"Number of times the management process has caught a child panic"
 )
@@ -98,15 +101,15 @@ VSC_F(child_panic,		uint64_t, 0, 'c', diag,
 
 #ifdef VSC_DO_LCK
 
-VSC_F(creat,			uint64_t, 0, 'a', debug,
+VSC_F(creat,			uint64_t, 0, 'c', 'i', debug,
     "Created locks",
 	""
 )
-VSC_F(destroy,			uint64_t, 0, 'a', debug,
+VSC_F(destroy,			uint64_t, 0, 'c', 'i', debug,
     "Destroyed locks",
 	""
 )
-VSC_F(locks,			uint64_t, 0, 'a', debug,
+VSC_F(locks,			uint64_t, 0, 'c', 'i', debug,
     "Lock Operations",
 	""
 )
@@ -118,31 +121,31 @@ VSC_F(locks,			uint64_t, 0, 'a', debug,
  */
 
 #if defined(VSC_DO_SMA) || defined (VSC_DO_SMF)
-VSC_F(c_req,			uint64_t, 0, 'a', info,
+VSC_F(c_req,			uint64_t, 0, 'c', 'i', info,
     "Allocator requests",
 	""
 )
-VSC_F(c_fail,			uint64_t, 0, 'a', info,
+VSC_F(c_fail,			uint64_t, 0, 'c', 'i', info,
     "Allocator failures",
 	""
 )
-VSC_F(c_bytes,			uint64_t, 0, 'a', info,
+VSC_F(c_bytes,			uint64_t, 0, 'c', 'B', info,
     "Bytes allocated",
 	""
 )
-VSC_F(c_freed,			uint64_t, 0, 'a', info,
+VSC_F(c_freed,			uint64_t, 0, 'c', 'B', info,
     "Bytes freed",
 	""
 )
-VSC_F(g_alloc,			uint64_t, 0, 'i', info,
+VSC_F(g_alloc,			uint64_t, 0, 'g', 'i', info,
     "Allocations outstanding",
 	""
 )
-VSC_F(g_bytes,			uint64_t, 0, 'i', info,
+VSC_F(g_bytes,			uint64_t, 0, 'g', 'B', info,
     "Bytes outstanding",
 	""
 )
-VSC_F(g_space,			uint64_t, 0, 'i', info,
+VSC_F(g_space,			uint64_t, 0, 'g', 'B', info,
     "Bytes available",
 	""
 )
@@ -158,15 +161,15 @@ VSC_F(g_space,			uint64_t, 0, 'i', info,
 /**********************************************************************/
 
 #ifdef VSC_DO_SMF
-VSC_F(g_smf,			uint64_t, 0, 'i', info,
+VSC_F(g_smf,			uint64_t, 0, 'g', 'i', info,
     "N struct smf",
 	""
 )
-VSC_F(g_smf_frag,		uint64_t, 0, 'i', info,
+VSC_F(g_smf_frag,		uint64_t, 0, 'g', 'i', info,
     "N small free smf",
 	""
 )
-VSC_F(g_smf_large,		uint64_t, 0, 'i', info,
+VSC_F(g_smf_large,		uint64_t, 0, 'g', 'i', info,
     "N large free smf",
 	""
 )
@@ -176,43 +179,47 @@ VSC_F(g_smf_large,		uint64_t, 0, 'i', info,
 
 #ifdef VSC_DO_VBE
 
-VSC_F(vcls,			uint64_t, 0, 'i', debug,
-    "VCL references",
-	""
-)
-VSC_F(happy,			uint64_t, 0, 'b', info,
+VSC_F(happy,			uint64_t, 0, 'b', 'b', info,
     "Happy health probes",
 	""
 )
-VSC_F(bereq_hdrbytes,		uint64_t, 0, 'a', info,
+VSC_F(bereq_hdrbytes,		uint64_t, 0, 'c', 'B', info,
     "Request header bytes",
 	"Total backend request header bytes sent"
 )
-VSC_F(bereq_bodybytes,		uint64_t, 0, 'a', info,
+VSC_F(bereq_bodybytes,		uint64_t, 0, 'c', 'B', info,
     "Request body bytes",
 	"Total backend request body bytes sent"
 )
-VSC_F(beresp_hdrbytes,		uint64_t, 0, 'a', info,
+VSC_F(beresp_hdrbytes,		uint64_t, 0, 'c', 'B', info,
     "Response header bytes",
 	"Total backend response header bytes received"
 )
-VSC_F(beresp_bodybytes,		uint64_t, 0, 'a', info,
+VSC_F(beresp_bodybytes,		uint64_t, 0, 'c', 'B', info,
     "Response body bytes",
 	"Total backend response body bytes received"
 )
-VSC_F(pipe_hdrbytes,		uint64_t, 0, 'a', info,
+VSC_F(pipe_hdrbytes,		uint64_t, 0, 'c', 'B', info,
     "Pipe request header bytes",
 	"Total request bytes sent for piped sessions"
 )
-VSC_F(pipe_out,			uint64_t, 0, 'a', info,
+VSC_F(pipe_out,			uint64_t, 0, 'c', 'B', info,
     "Piped bytes to backend",
 	"Total number of bytes forwarded to backend in"
 	" pipe sessions"
 )
-VSC_F(pipe_in,			uint64_t, 0, 'a', info,
+VSC_F(pipe_in,			uint64_t, 0, 'c', 'B', info,
     "Piped bytes from backend",
 	"Total number of bytes forwarded from backend in"
 	" pipe sessions"
+)
+VSC_F(conn,			uint64_t, 0, 'g', 'i', info,
+    "Concurrent connections to backend",
+	""
+)
+VSC_F(req,			uint64_t, 0, 'c', 'i', info,
+    "Backend requests sent",
+	""
 )
 
 #endif
@@ -220,47 +227,47 @@ VSC_F(pipe_in,			uint64_t, 0, 'a', info,
 /**********************************************************************/
 #ifdef VSC_DO_MEMPOOL
 
-VSC_F(live,			uint64_t, 0, 'g', debug,
+VSC_F(live,			uint64_t, 0, 'g', 'i', debug,
     "In use",
 	""
 )
-VSC_F(pool,			uint64_t, 0, 'g', debug,
+VSC_F(pool,			uint64_t, 0, 'g', 'i', debug,
     "In Pool",
 	""
 )
-VSC_F(sz_wanted,		uint64_t, 0, 'g', debug,
+VSC_F(sz_wanted,		uint64_t, 0, 'g', 'B', debug,
     "Size requested",
 	""
 )
-VSC_F(sz_needed,		uint64_t, 0, 'g', debug,
+VSC_F(sz_needed,		uint64_t, 0, 'g', 'B', debug,
     "Size allocated",
 	""
 )
-VSC_F(allocs,			uint64_t, 0, 'c', debug,
+VSC_F(allocs,			uint64_t, 0, 'c', 'i', debug,
     "Allocations",
 	""
 )
-VSC_F(frees,			uint64_t, 0, 'c', debug,
+VSC_F(frees,			uint64_t, 0, 'c', 'i', debug,
     "Frees",
 	""
 )
-VSC_F(recycle,			uint64_t, 0, 'c', debug,
+VSC_F(recycle,			uint64_t, 0, 'c', 'i', debug,
     "Recycled from pool",
 	""
 )
-VSC_F(timeout,			uint64_t, 0, 'c', debug,
+VSC_F(timeout,			uint64_t, 0, 'c', 'i', debug,
     "Timed out from pool",
 	""
 )
-VSC_F(toosmall,			uint64_t, 0, 'c', debug,
+VSC_F(toosmall,			uint64_t, 0, 'c', 'i', debug,
     "Too small to recycle",
 	""
 )
-VSC_F(surplus,			uint64_t, 0, 'c', debug,
+VSC_F(surplus,			uint64_t, 0, 'c', 'i', debug,
     "Too many for pool",
 	""
 )
-VSC_F(randry,			uint64_t, 0, 'c', debug,
+VSC_F(randry,			uint64_t, 0, 'c', 'i', debug,
     "Pool ran dry",
 	""
 )

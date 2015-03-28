@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@FreeBSD.org>
@@ -32,7 +32,7 @@
 #include <stdlib.h>
 
 #include "cache/cache.h"
-#include "cache/cache_backend.h"
+#include "cache/cache_director.h"
 
 #include "vrt.h"
 #include "vbm.h"
@@ -45,37 +45,38 @@ struct vmod_directors_random {
 	unsigned				magic;
 #define VMOD_DIRECTORS_RANDOM_MAGIC		0x4732d092
 	struct vdir				*vd;
-	unsigned				nloops;
-	struct vbitmap				*vbm;
 };
 
 static unsigned __match_proto__(vdi_healthy)
-vmod_rr_healthy(const struct director *dir, double *changed)
+vmod_random_healthy(const struct director *dir, const struct busyobj *bo,
+    double *changed)
 {
 	struct vmod_directors_random *rr;
 
 	CAST_OBJ_NOTNULL(rr, dir->priv, VMOD_DIRECTORS_RANDOM_MAGIC);
-	return (vdir_any_healthy(rr->vd, changed));
+	return (vdir_any_healthy(rr->vd, bo, changed));
 }
 
-static struct vbc * __match_proto__(vdi_getfd_f)
-vmod_rr_getfd(const struct director *dir, struct busyobj *bo)
+static const struct director * __match_proto__(vdi_resolve_f)
+vmod_random_resolve(const struct director *dir, struct worker *wrk,
+    struct busyobj *bo)
 {
 	struct vmod_directors_random *rr;
 	VCL_BACKEND be;
 	double r;
 
+	CHECK_OBJ_NOTNULL(dir, DIRECTOR_MAGIC);
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 	CAST_OBJ_NOTNULL(rr, dir->priv, VMOD_DIRECTORS_RANDOM_MAGIC);
 	r = scalbn(random(), -31);
 	assert(r >= 0 && r < 1.0);
-	be = vdir_pick_be(rr->vd, r, rr->nloops);
-	if (be == NULL)
-		return (NULL);
-	return (be->getfd(be, bo));
+	be = vdir_pick_be(rr->vd, r);
+	return (be);
 }
 
 VCL_VOID __match_proto__()
-vmod_random__init(const struct vrt_ctx *ctx, struct vmod_directors_random **rrp,
+vmod_random__init(VRT_CTX, struct vmod_directors_random **rrp,
     const char *vcl_name)
 {
 	struct vmod_directors_random *rr;
@@ -85,11 +86,9 @@ vmod_random__init(const struct vrt_ctx *ctx, struct vmod_directors_random **rrp,
 	AZ(*rrp);
 	ALLOC_OBJ(rr, VMOD_DIRECTORS_RANDOM_MAGIC);
 	AN(rr);
-	rr->vbm = vbit_init(8);
-	AN(rr->vbm);
-	rr->nloops = 3; //
 	*rrp = rr;
-	vdir_new(&rr->vd, vcl_name, vmod_rr_healthy, vmod_rr_getfd, rr);
+	vdir_new(&rr->vd, vcl_name, vmod_random_healthy, vmod_random_resolve,
+	    rr);
 }
 
 VCL_VOID __match_proto__()
@@ -101,12 +100,11 @@ vmod_random__fini(struct vmod_directors_random **rrp)
 	*rrp = NULL;
 	CHECK_OBJ_NOTNULL(rr, VMOD_DIRECTORS_RANDOM_MAGIC);
 	vdir_delete(&rr->vd);
-	vbit_destroy(rr->vbm);
 	FREE_OBJ(rr);
 }
 
 VCL_VOID __match_proto__()
-vmod_random_add_backend(const struct vrt_ctx *ctx,
+vmod_random_add_backend(VRT_CTX,
     struct vmod_directors_random *rr, VCL_BACKEND be, double w)
 {
 
@@ -116,7 +114,7 @@ vmod_random_add_backend(const struct vrt_ctx *ctx,
 }
 
 VCL_BACKEND __match_proto__()
-vmod_random_backend(const struct vrt_ctx *ctx, struct vmod_directors_random *rr)
+vmod_random_backend(VRT_CTX, struct vmod_directors_random *rr)
 {
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(rr, VMOD_DIRECTORS_RANDOM_MAGIC);

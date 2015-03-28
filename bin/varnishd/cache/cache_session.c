@@ -40,7 +40,8 @@
 
 #include "config.h"
 
-#include <math.h>
+#include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -59,7 +60,240 @@ struct sesspool {
 	struct pool		*pool;
 	struct mempool		*mpl_req;
 	struct mempool		*mpl_sess;
+
+	struct waiter		*http1_waiter;
 };
+
+/*--------------------------------------------------------------------*/
+
+static int
+ses_get_attr(const struct sess *sp, enum sess_attr a, void **dst)
+{
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	assert(a < SA_LAST);
+	AN(dst);
+
+	if (sp->sattr[a] == 0xffff) {
+		*dst = NULL;
+		return (-1);
+	} else {
+		*dst = sp->ws->s + sp->sattr[a];
+		return (0);
+	}
+}
+
+static void
+ses_reserve_attr(struct sess *sp, enum sess_attr a, void **dst, int sz)
+{
+	ssize_t o;
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	assert(a < SA_LAST);
+	assert(sz >= 0);
+	AN(dst);
+	o = WS_Reserve(sp->ws, sz);
+	assert(o >= sz);
+	*dst = sp->ws->f;
+	o = sp->ws->f - sp->ws->s;
+	WS_Release(sp->ws, sz);
+	assert(o >= 0 && o <= 0xffff);
+	sp->sattr[a] = (uint16_t)o;
+}
+
+#define SESS_ATTR(UP, low, typ, len)					\
+	int								\
+	SES_Get_##low(const struct sess *sp, typ *dst)			\
+	{								\
+		return (ses_get_attr(sp, SA_##UP, (void**)dst));	\
+	}								\
+									\
+	void								\
+	SES_Reserve_##low(struct sess *sp, typ *dst)			\
+	{								\
+		assert(len >= 0);					\
+		ses_reserve_attr(sp, SA_##UP, (void*)dst, len);		\
+	}
+
+#include "tbl/sess_attr.h"
+#undef SESS_ATTR
+
+void
+SES_Set_String_Attr(struct sess *sp, enum sess_attr a, const char *src)
+{
+	void *q;
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+	AN(src);
+
+	switch (a) {
+#define SESS_ATTR(UP, low, typ, len)	case SA_##UP: assert(len < 0); break;
+#include "tbl/sess_attr.h"
+#undef SESS_ATTR
+	default:  WRONG("wrong sess_attr");
+	}
+
+	ses_reserve_attr(sp, a, &q, strlen(src) + 1);
+	strcpy(q, src);
+}
+
+const char *
+SES_Get_String_Attr(const struct sess *sp, enum sess_attr a)
+{
+	void *q;
+
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+
+	switch (a) {
+#define SESS_ATTR(UP, low, typ, len)	case SA_##UP: assert(len < 0); break;
+#include "tbl/sess_attr.h"
+#undef SESS_ATTR
+	default:  WRONG("wrong sess_attr");
+	}
+
+	if (ses_get_attr(sp, a, &q) < 0)
+		return (NULL);
+	return (q);
+}
+
+/*--------------------------------------------------------------------*/
+
+void
+SES_RxInit(struct http_conn *htc, struct ws *ws, unsigned maxbytes,
+    unsigned maxhdr)
+{
+
+	htc->magic = HTTP_CONN_MAGIC;
+	htc->ws = ws;
+	htc->maxbytes = maxbytes;
+	htc->maxhdr = maxhdr;
+
+	(void)WS_Reserve(htc->ws, htc->maxbytes);
+	htc->rxbuf_b = ws->f;
+	htc->rxbuf_e = ws->f;
+	*htc->rxbuf_e = '\0';
+	htc->pipeline_b = NULL;
+	htc->pipeline_e = NULL;
+}
+
+/*--------------------------------------------------------------------
+ * Start over, and recycle any pipelined input.
+ * The WS_Reset is safe, even though the pipelined input is stored in
+ * the ws somewhere, because WS_Reset only fiddles pointers.
+ */
+
+void
+SES_RxReInit(struct http_conn *htc)
+{
+	ssize_t l;
+
+	CHECK_OBJ_NOTNULL(htc, HTTP_CONN_MAGIC);
+	(void)WS_Reserve(htc->ws, htc->maxbytes);
+	htc->rxbuf_b = htc->ws->f;
+	htc->rxbuf_e = htc->ws->f;
+	if (htc->pipeline_b != NULL) {
+		l = htc->pipeline_e - htc->pipeline_b;
+		assert(l > 0);
+		memmove(htc->rxbuf_b, htc->pipeline_b, l);
+		htc->rxbuf_e += l;
+		htc->pipeline_b = NULL;
+		htc->pipeline_e = NULL;
+	}
+	*htc->rxbuf_e = '\0';
+}
+
+/*--------------------------------------------------------------------
+ * Receive more HTTP protocol bytes
+ */
+
+enum htc_status_e
+SES_Rx(struct http_conn *htc, double tmo)
+{
+	int i, j;
+	struct pollfd pfd[1];
+
+	CHECK_OBJ_NOTNULL(htc, HTTP_CONN_MAGIC);
+	AN(htc->ws->r);
+	AZ(htc->pipeline_b);
+	AZ(htc->pipeline_e);
+	i = (htc->ws->r - htc->rxbuf_e) - 1;	/* space for NUL */
+	if (i <= 0)
+		return (HTC_S_OVERFLOW);
+	if (tmo > 0.0) {
+		pfd[0].fd = htc->fd;
+		pfd[0].events = POLLIN;
+		pfd[0].revents = 0;
+		j = (int)floor(tmo * 1e3);
+		if (j == 0)
+			j++;
+		j = poll(pfd, 1, j);
+		if (j == 0)
+			return (HTC_S_TIMEOUT);
+	}
+	i = read(htc->fd, htc->rxbuf_e, i);
+	if (i <= 0)
+		return (HTC_S_EOF);
+	htc->rxbuf_e += i;
+	*htc->rxbuf_e = '\0';
+	return (HTC_S_MORE);
+}
+
+/*----------------------------------------------------------------------
+ * Receive a request/packet/whatever, with timeouts
+ */
+
+enum htc_status_e
+SES_RxReq(const struct worker *wrk, struct req *req, htc_complete_f *func)
+{
+	double tmo;
+	double now, when;
+	struct sess *sp;
+	enum htc_status_e hs;
+
+	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
+	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
+	sp = req->sp;
+	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
+
+	AZ(isnan(sp->t_idle));
+	assert(isnan(req->t_first));
+
+	when = sp->t_idle + cache_param->timeout_idle;
+	tmo = cache_param->timeout_linger;
+	while (1) {
+		hs = SES_Rx(req->htc, tmo);
+		now = VTIM_real();
+		if (hs == HTC_S_EOF) {
+			WS_ReleaseP(req->htc->ws, req->htc->rxbuf_b);
+			return (HTC_S_CLOSE);
+		}
+		if (hs == HTC_S_OVERFLOW) {
+			WS_ReleaseP(req->htc->ws, req->htc->rxbuf_b);
+			return (HTC_S_OVERFLOW);
+		}
+		hs = func(req->htc);
+		if (hs == HTC_S_COMPLETE) {
+			/* Got it, run with it */
+			if (isnan(req->t_first))
+				req->t_first = now;
+			req->t_req = now;
+			return (HTC_S_COMPLETE);
+		}
+		if (when < now)
+			return (HTC_S_TIMEOUT);
+		if (hs == HTC_S_MORE) {
+			/* Working on it */
+			if (isnan(req->t_first))
+				req->t_first = now;
+			tmo = when - now;
+			continue;
+		}
+		assert(hs == HTC_S_EMPTY);
+		/* Nothing but whitespace */
+		tmo = sp->t_idle + cache_param->timeout_linger - now;
+		if (tmo < 0)
+			return (HTC_S_IDLE);
+	}
+}
 
 /*--------------------------------------------------------------------
  * Get a new session, preferably by recycling an already ready one
@@ -69,8 +303,8 @@ struct sesspool {
  *	workspace
  */
 
-static struct sess *
-ses_new(struct sesspool *pp)
+struct sess *
+SES_New(struct sesspool *pp)
 {
 	struct sess *sp;
 	unsigned sz;
@@ -80,27 +314,28 @@ ses_new(struct sesspool *pp)
 	sp = MPL_Get(pp->mpl_sess, &sz);
 	sp->magic = SESS_MAGIC;
 	sp->sesspool = pp;
+	memset(sp->sattr, 0xff, sizeof sp->sattr);
 
 	e = (char*)sp + sz;
 	p = (char*)(sp + 1);
 	p = (void*)PRNDUP(p);
 	assert(p < e);
 	WS_Init(sp->ws, "ses", p, e - p);
-	sp->addrs = (void*)WS_Alloc(sp->ws, vsa_suckaddr_len * 2);
 
 	sp->t_open = NAN;
 	sp->t_idle = NAN;
+	VRTPRIV_init(sp->privs);
 	Lck_New(&sp->mtx, lck_sess);
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	return (sp);
 }
 
 /*--------------------------------------------------------------------
- * Process new/existing request on this session.
+ * Call protocol for this request
  */
 
-static void
-ses_req_pool_task(struct worker *wrk, void *arg)
+void __match_proto__(task_func_t)
+SES_Proto_Req(struct worker *wrk, void *arg)
 {
 	struct req *req;
 
@@ -109,120 +344,68 @@ ses_req_pool_task(struct worker *wrk, void *arg)
 
 	THR_SetRequest(req);
 	AZ(wrk->aws->r);
-	wrk->lastused = NAN;
-	HTTP1_Session(wrk, req);
+	if (req->sp->sess_step < S_STP_H1_LAST) {
+		HTTP1_Session(wrk, req);
+		AZ(wrk->v1l);
+	} else {
+		WRONG("Wrong session step");
+	}
 	WS_Assert(wrk->aws);
-	AZ(wrk->wrw);
 	if (DO_DEBUG(DBG_VCLREL) && wrk->vcl != NULL)
 		VCL_Rel(&wrk->vcl);
 	THR_SetRequest(NULL);
 }
 
 /*--------------------------------------------------------------------
- * Allocate a request + vxid, call ses_req_pool_task()
+ * Call protocol for this session (new or from waiter)
+ *
+ * When sessions are rescheduled from the waiter, a struct pool_task
+ * is put on the reserved session workspace (for reasons of memory
+ * conservation).  This reservation is released as the first thing.
+ * The acceptor and any other code which schedules this function
+ * must obey this calling convention with a dummy reservation.
  */
 
-static void
-ses_sess_pool_task(struct worker *wrk, void *arg)
+void __match_proto__(task_func_t)
+SES_Proto_Sess(struct worker *wrk, void *arg)
 {
 	struct req *req;
 	struct sess *sp;
 
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CAST_OBJ_NOTNULL(sp, arg, SESS_MAGIC);
+	WS_Release(sp->ws, 0);
 
+	/*
+	 * Assume we're going to receive something that will likely
+	 * involve a request...
+	 */
+	(void)VTCP_blocking(sp->fd);
 	req = SES_GetReq(wrk, sp);
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
-	AN(req->vsl->wid & VSL_CLIENTMARKER);
-	VSLb(req->vsl, SLT_Begin, "req %u rxreq", VXID(sp->vxid));
-	VSL(SLT_Link, sp->vxid, "req %u rxreq", VXID(req->vsl->wid));
+	req->htc->fd = sp->fd;
+	SES_RxInit(req->htc, req->ws,
+	    cache_param->http_req_size, cache_param->http_req_hdr_len);
 
-	sp->sess_step = S_STP_NEWREQ;
-	ses_req_pool_task(wrk, req);
-}
-
-/*--------------------------------------------------------------------
- * VSL log the endpoints of the TCP connection.
- *
- * We use VSL() to get the sessions vxid and to make sure tha this
- * VSL comes before anything else for this session.
- *
- * This is a separate procedure only to isolate the two stack buffers.
- *
- */
-
-static void
-ses_vsl_socket(struct sess *sp, const char *lsockname)
-{
-	struct sockaddr_storage ss;
-	socklen_t sl;
-	char laddr[ADDR_BUFSIZE];
-	char lport[PORT_BUFSIZE];
-
-	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
-	AN(lsockname);
-
-	AN(sp->addrs);
-	sl = sizeof ss;
-	AZ(getsockname(sp->fd, (void*)&ss, &sl));
-	AN(VSA_Build(sess_local_addr(sp), &ss, sl));
-	assert(VSA_Sane(sess_local_addr(sp)));
-
-	VTCP_name(sess_remote_addr(sp), laddr, sizeof laddr,
-	    lport, sizeof lport);
-	sp->client_addr_str = WS_Copy(sp->ws, laddr, -1);
-	sp->client_port_str = WS_Copy(sp->ws, lport, -1);
-	VTCP_name(sess_local_addr(sp), laddr, sizeof laddr,
-	    lport, sizeof lport);
-	VSL(SLT_Begin, sp->vxid, "sess 0 HTTP/1");
-	VSL(SLT_SessOpen, sp->vxid, "%s %s %s %s %s %.6f %d",
-	    sp->client_addr_str, sp->client_port_str, lsockname, laddr, lport,
-	    sp->t_open, sp->fd);
-}
-
-/*--------------------------------------------------------------------
- * The pool-task for a newly accepted session
- *
- * Called from assigned worker thread
- */
-
-void
-SES_pool_accept_task(struct worker *wrk, void *arg)
-{
-	struct sesspool *pp;
-	struct sess *sp;
-	const char *lsockname;
-
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-	CAST_OBJ_NOTNULL(pp, arg, SESSPOOL_MAGIC);
-
-	/* Turn accepted socket into a session */
-	AN(wrk->aws->r);
-	sp = ses_new(pp);
-	if (sp == NULL) {
-		VCA_FailSess(wrk);
-		return;
+	if (sp->sess_step < S_STP_H1_LAST) {
+		wrk->task.func = SES_Proto_Req;
+		wrk->task.priv = req;
+	} else if (sp->sess_step < S_STP_PROXY_LAST) {
+		wrk->task.func = VPX_Proto_Sess;
+		wrk->task.priv = req;
+	} else {
+		WRONG("Wrong session step");
 	}
-	wrk->stats.s_sess++;
-
-	sp->t_open = VTIM_real();
-	sp->t_idle = sp->t_open;
-	sp->vxid = VXID_Get(wrk, VSL_CLIENTMARKER);
-
-	lsockname = VCA_SetupSess(wrk, sp);
-	ses_vsl_socket(sp, lsockname);
-
-	ses_sess_pool_task(wrk, sp);
 }
 
 /*--------------------------------------------------------------------
- * Schedule a request back on a work-thread from its sessions pool
+ * Reschedule a request on a work-thread from its sessions pool
  *
  * This is used to reschedule requests waiting on busy objects
  */
 
 int
-SES_ScheduleReq(struct req *req)
+SES_Reschedule_Req(struct req *req)
 {
 	struct sess *sp;
 	struct sesspool *pp;
@@ -234,35 +417,107 @@ SES_ScheduleReq(struct req *req)
 	CHECK_OBJ_NOTNULL(pp, SESSPOOL_MAGIC);
 	AN(pp->pool);
 
-	sp->task.func = ses_req_pool_task;
-	sp->task.priv = req;
+	req->task.func = SES_Proto_Req;
+	req->task.priv = req;
 
-	if (Pool_Task(pp->pool, &sp->task, POOL_QUEUE_FRONT)) {
-		AN (req->vcl);
-		VCL_Rel(&req->vcl);
-		SES_Delete(sp, SC_OVERLOAD, NAN);
-		return (1);
-	}
-	return (0);
+	return (Pool_Task(pp->pool, &req->task, POOL_QUEUE_FRONT));
 }
 
 /*--------------------------------------------------------------------
  * Handle a session (from waiter)
  */
 
+static void __match_proto__(waiter_handle_f)
+ses_handle(struct waited *wp, enum wait_event ev, double now)
+{
+	struct sess *sp;
+	struct sesspool *pp;
+	struct pool_task *tp;
+
+	CHECK_OBJ_NOTNULL(wp, WAITED_MAGIC);
+	CAST_OBJ_NOTNULL(sp, wp->ptr, SESS_MAGIC);
+
+	AZ(sp->ws->r);
+
+	switch (ev) {
+	case WAITER_TIMEOUT:
+		SES_Delete(sp, SC_RX_TIMEOUT, now);
+		break;
+	case WAITER_REMCLOSE:
+		SES_Delete(sp, SC_REM_CLOSE, now);
+		break;
+	case WAITER_ACTION:
+		pp = sp->sesspool;
+		CHECK_OBJ_NOTNULL(pp, SESSPOOL_MAGIC);
+		AN(pp->pool);
+		assert(sizeof *tp == WS_Reserve(sp->ws, sizeof *tp));
+		tp = (void*)sp->ws->f;
+		tp->func = SES_Proto_Sess;
+		tp->priv = sp;
+		if (Pool_Task(pp->pool, tp, POOL_QUEUE_FRONT))
+			SES_Delete(sp, SC_OVERLOAD, now);
+		break;
+	case WAITER_CLOSE:
+		WRONG("Should not see WAITER_CLOSE on client side");
+		break;
+	default:
+		WRONG("Wrong event in ses_handle");
+	}
+}
+
+/*--------------------------------------------------------------------
+ */
+
 void
-SES_Handle(struct sess *sp, double now)
+SES_Wait(struct sess *sp)
 {
 	struct sesspool *pp;
 
 	CHECK_OBJ_NOTNULL(sp, SESS_MAGIC);
 	pp = sp->sesspool;
 	CHECK_OBJ_NOTNULL(pp, SESSPOOL_MAGIC);
-	AN(pp->pool);
-	sp->task.func = ses_sess_pool_task;
-	sp->task.priv = sp;
-	if (Pool_Task(pp->pool, &sp->task, POOL_QUEUE_FRONT))
-		SES_Delete(sp, SC_OVERLOAD, now);
+	/*
+	 * XXX: waiter_epoll prevents us from zeroing the struct because
+	 * XXX: it keeps state across calls.
+	 */
+	if (VTCP_nonblocking(sp->fd)) {
+		SES_Delete(sp, SC_REM_CLOSE, NAN);
+		return;
+	}
+	sp->waited.magic = WAITED_MAGIC;
+	sp->waited.fd = sp->fd;
+	sp->waited.ptr = sp;
+	sp->waited.idle = sp->t_idle;
+	if (Wait_Enter(pp->http1_waiter, &sp->waited))
+		SES_Delete(sp, SC_PIPE_OVERFLOW, NAN);
+}
+
+/*--------------------------------------------------------------------
+ * Update sc_ counters by reason
+ *
+ * assuming that the approximation of non-atomic global counters is sufficient.
+ * if not: update to per-wrk
+ */
+
+static void
+ses_close_acct(enum sess_close reason)
+{
+	int i = 0;
+
+	assert(reason != SC_NULL);
+	switch (reason) {
+#define SESS_CLOSE(reason, stat, err, desc)		\
+	case SC_ ## reason:				\
+		VSC_C_main->sc_ ## stat++;		\
+		i = err;				\
+		break;
+#include "tbl/sess_close.h"
+#undef SESS_CLOSE
+	default:
+		WRONG("Wrong event in ses_close_acct");
+	}
+	if (i)
+		VSC_C_main->sess_closed_err++;
 }
 
 /*--------------------------------------------------------------------
@@ -277,10 +532,11 @@ SES_Close(struct sess *sp, enum sess_close reason)
 	int i;
 
 	assert(sp->fd >= 0);
-	sp->reason = reason;
 	i = close(sp->fd);
 	assert(i == 0 || errno != EBADF); /* XXX EINVAL seen */
 	sp->fd = -1;
+	if (reason != SC_NULL)
+		ses_close_acct(reason);
 }
 
 /*--------------------------------------------------------------------
@@ -305,8 +561,9 @@ SES_Delete(struct sess *sp, enum sess_close reason, double now)
 		now = VTIM_real();
 	AZ(isnan(sp->t_open));
 
+	assert(VTAILQ_EMPTY(&sp->privs->privs));
 	VSL(SLT_SessClose, sp->vxid, "%s %.3f",
-	    sess_close_2str(sp->reason, 0), now - sp->t_open);
+	    sess_close_2str(reason, 0), now - sp->t_open);
 	VSL(SLT_End, sp->vxid, "%s", "");
 
 	Lck_Delete(&sp->mtx);
@@ -318,7 +575,7 @@ SES_Delete(struct sess *sp, enum sess_close reason, double now)
  */
 
 struct req *
-SES_GetReq(struct worker *wrk, struct sess *sp)
+SES_GetReq(const struct worker *wrk, struct sess *sp)
 {
 	struct sesspool *pp;
 	struct req *req;
@@ -336,6 +593,7 @@ SES_GetReq(struct worker *wrk, struct sess *sp)
 	AN(req);
 	req->magic = REQ_MAGIC;
 	req->sp = sp;
+	req->top = req;	// esi overrides
 
 	e = (char*)req + sz;
 	p = (char*)(req + 1);
@@ -362,7 +620,6 @@ SES_GetReq(struct worker *wrk, struct sess *sp)
 
 	sz = cache_param->vsl_buffer;
 	VSL_Setup(req->vsl, p, sz);
-	req->vsl->wid = VXID_Get(wrk, VSL_CLIENTMARKER);
 	p += sz;
 	p = (void*)PRNDUP(p);
 
@@ -371,14 +628,13 @@ SES_GetReq(struct worker *wrk, struct sess *sp)
 	WS_Init(req->ws, "req", p, e - p);
 
 	req->req_bodybytes = 0;
-	req->resp_hdrbytes = 0;
-	req->resp_bodybytes = 0;
 
 	req->t_first = NAN;
 	req->t_prev = NAN;
 	req->t_req = NAN;
 
-	VTAILQ_INIT(&req->body->list);
+	req->vdp_nxt = 0;
+	VTAILQ_INIT(&req->vdp);
 
 	return (req);
 }
@@ -431,6 +687,9 @@ SES_NewPool(struct pool *wp, unsigned pool_no)
 	bprintf(nb, "sess%u", pool_no);
 	pp->mpl_sess = MPL_New(nb, &cache_param->sess_pool,
 	    &cache_param->workspace_session);
+	pp->http1_waiter = Wait_New(ses_handle, &cache_param->timeout_idle);
+
+	VCA_New_SessPool(wp, pp);
 	return (pp);
 }
 
@@ -441,5 +700,7 @@ SES_DeletePool(struct sesspool *pp)
 	CHECK_OBJ_NOTNULL(pp, SESSPOOL_MAGIC);
 	MPL_Destroy(&pp->mpl_sess);
 	MPL_Destroy(&pp->mpl_req);
+	/* Delete session pool must stop acceptor threads */
 	FREE_OBJ(pp);
+	INCOMPL();
 }

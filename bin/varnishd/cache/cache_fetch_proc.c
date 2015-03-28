@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -29,16 +29,11 @@
 
 #include "config.h"
 
-#include <inttypes.h>
-#include <math.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #include "cache.h"
+#include "cache_filter.h"
 
-#include "hash/hash_slinger.h"
-
-#include "cache_backend.h"
 #include "vcli_priv.h"
 
 static unsigned fetchfrag;
@@ -58,10 +53,9 @@ VFP_Error(struct vfp_ctx *vc, const char *fmt, ...)
 	va_list ap;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
-	assert(vc->bo->state >= BOS_REQ_DONE);
 	if (!vc->failed) {
 		va_start(ap, fmt);
-		VSLbv(vc->vsl, SLT_FetchError, fmt, ap);
+		VSLbv(vc->wrk->vsl, SLT_FetchError, fmt, ap);
 		va_end(ap);
 		vc->failed = 1;
 	}
@@ -73,35 +67,31 @@ VFP_Error(struct vfp_ctx *vc, const char *fmt, ...)
  *
  */
 
-struct storage *
-VFP_GetStorage(struct vfp_ctx *vc, ssize_t sz)
+enum vfp_status
+VFP_GetStorage(struct vfp_ctx *vc, ssize_t *sz, uint8_t **ptr)
 {
 	ssize_t l;
-	struct storage *st;
+
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(vc->bo, BUSYOBJ_MAGIC);
-	AN(vc->body);
-	st = VTAILQ_LAST(&vc->body->list, storagehead);
-	if (st != NULL && st->len < st->space)
-		return (st);
+	AN(sz);
+	assert(*sz >= 0);
+	AN(ptr);
 
-	AN(vc->bo->stats);
 	l = fetchfrag;
 	if (l == 0)
-		l = sz;
+		l = *sz;
 	if (l == 0)
 		l = cache_param->fetch_chunksize;
-	st = STV_alloc(vc, l);
-	if (st == NULL) {
-		(void)VFP_Error(vc, "Could not get storage");
-	} else {
-		AZ(st->len);
-		Lck_Lock(&vc->bo->mtx);
-		VTAILQ_INSERT_TAIL(&vc->body->list, st, list);
-		Lck_Unlock(&vc->bo->mtx);
+	*sz = l;
+	if (!ObjGetSpace(vc->wrk, vc->oc, sz, ptr)) {
+		*sz = 0;
+		*ptr = NULL;
+		return (VFP_Error(vc, "Could not get storage"));
 	}
-	return (st);
+	assert(*sz > 0);
+	AN(*ptr);
+	return (VFP_OK);
 }
 
 /**********************************************************************
@@ -110,22 +100,25 @@ VFP_GetStorage(struct vfp_ctx *vc, ssize_t sz)
 void
 VFP_Setup(struct vfp_ctx *vc)
 {
-	memset(vc, 0, sizeof *vc);
-	vc->magic = VFP_CTX_MAGIC;
+
+	INIT_OBJ(vc, VFP_CTX_MAGIC);
 	VTAILQ_INIT(&vc->vfp);
 }
 
 /**********************************************************************
  */
 
-static void
-vfp_suck_fini(struct vfp_ctx *vc)
+void
+VFP_Close(struct vfp_ctx *vc)
 {
 	struct vfp_entry *vfe;
 
-	VTAILQ_FOREACH(vfe, &vc->vfp, list)
+	VTAILQ_FOREACH(vfe, &vc->vfp, list) {
 		if(vfe->vfp->fini != NULL)
 			vfe->vfp->fini(vc, vfe);
+		VSLb(vc->wrk->vsl, SLT_VfpAcct, "%s %ju %ju", vfe->vfp->name,
+		    (uintmax_t)vfe->calls, (uintmax_t)vfe->bytes_out);
+	}
 }
 
 int
@@ -134,6 +127,10 @@ VFP_Open(struct vfp_ctx *vc)
 	struct vfp_entry *vfe;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(vc->http, HTTP_MAGIC);
+	CHECK_OBJ_NOTNULL(vc->wrk, WORKER_MAGIC);
+	AN(vc->wrk->vsl);
+
 	VTAILQ_FOREACH_REVERSE(vfe, &vc->vfp, vfp_entry_s, list) {
 		if (vfe->vfp->init == NULL)
 			continue;
@@ -141,10 +138,11 @@ VFP_Open(struct vfp_ctx *vc)
 		if (vfe->closed != VFP_OK && vfe->closed != VFP_NULL) {
 			(void)VFP_Error(vc, "Fetch filter %s failed to open",
 			    vfe->vfp->name);
-			vfp_suck_fini(vc);
+			VFP_Close(vc);
 			return (-1);
 		}
 	}
+
 	return (0);
 }
 
@@ -161,7 +159,6 @@ VFP_Suck(struct vfp_ctx *vc, void *p, ssize_t *lp)
 	struct vfp_entry *vfe;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
-	CHECK_OBJ_NOTNULL(vc->bo, BUSYOBJ_MAGIC);
 	AN(p);
 	AN(lp);
 	vfe = vc->vfp_nxt;
@@ -169,14 +166,18 @@ VFP_Suck(struct vfp_ctx *vc, void *p, ssize_t *lp)
 	vc->vfp_nxt = VTAILQ_NEXT(vfe, list);
 
 	if (vfe->closed == VFP_NULL) {
+		/* Layer asked to be bypassed when opened */
 		vp = VFP_Suck(vc, p, lp);
 	} else if (vfe->closed == VFP_OK) {
 		vp = vfe->vfp->pull(vc, vfe, p, lp);
-		if (vp == VFP_END || vp == VFP_ERROR) {
-			vfe->closed = vp;
-		} else if (vp != VFP_OK)
+		if (vp != VFP_OK && vp != VFP_END && vp != VFP_ERROR) {
 			(void)VFP_Error(vc, "Fetch filter %s returned %d",
 			    vfe->vfp->name, vp);
+			vp = VFP_ERROR;
+		}
+		vfe->closed = vp;
+		vfe->calls++;
+		vfe->bytes_out += *lp;
 	} else {
 		/* Already closed filter */
 		*lp = 0;
@@ -188,83 +189,16 @@ VFP_Suck(struct vfp_ctx *vc, void *p, ssize_t *lp)
 
 /*--------------------------------------------------------------------
  */
-
-void
-VFP_Fetch_Body(struct busyobj *bo)
-{
-	ssize_t l;
-	enum vfp_status vfps = VFP_ERROR;
-	struct storage *st = NULL;
-	ssize_t est;
-
-	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
-
-	AN(bo->vfc->vfp_nxt);
-
-	est = bo->content_length;
-	if (est < 0)
-		est = 0;
-
-	do {
-		if (bo->abandon) {
-			/*
-			 * A pass object and delivery was terminted
-			 * We don't fail the fetch, in order for hit-for-pass
-			 * objects to be created.
-			 */
-			AN(bo->fetch_objcore->flags & OC_F_PASS);
-			VSLb(bo->vsl, SLT_FetchError,
-			    "Pass delivery abandoned");
-			vfps = VFP_END;
-			bo->doclose = SC_RX_BODY;
-			break;
-		}
-		AZ(bo->vfc->failed);
-		if (st == NULL) {
-			st = VFP_GetStorage(bo->vfc, est);
-			est = 0;
-		}
-		if (st == NULL) {
-			bo->doclose = SC_RX_BODY;
-			(void)VFP_Error(bo->vfc, "Out of storage");
-			break;
-		}
-
-		CHECK_OBJ_NOTNULL(st, STORAGE_MAGIC);
-		assert(st == VTAILQ_LAST(&bo->vfc->body->list,
-		    storagehead));
-		l = st->space - st->len;
-		AZ(bo->vfc->failed);
-		vfps = VFP_Suck(bo->vfc, st->ptr + st->len, &l);
-		if (l > 0 && vfps != VFP_ERROR) {
-			AZ(VTAILQ_EMPTY(&bo->vfc->body->list));
-			VBO_extend(bo, l);
-		}
-		if (st->len == st->space)
-			st = NULL;
-	} while (vfps == VFP_OK);
-
-	if (vfps == VFP_ERROR) {
-		AN(bo->vfc->failed);
-		(void)VFP_Error(bo->vfc, "Fetch Pipeline failed to process");
-		bo->doclose = SC_RX_BODY;
-	}
-
-	vfp_suck_fini(bo->vfc);
-
-	if (!bo->do_stream)
-		ObjTrimStore(bo->fetch_objcore, bo->stats);
-}
-
 struct vfp_entry *
 VFP_Push(struct vfp_ctx *vc, const struct vfp *vfp, int top)
 {
 	struct vfp_entry *vfe;
 
 	CHECK_OBJ_NOTNULL(vc, VFP_CTX_MAGIC);
-	vfe = (void*)WS_Alloc(vc->bo->ws, sizeof *vfe);
+	CHECK_OBJ_NOTNULL(vc->http, HTTP_MAGIC);
+	vfe = WS_Alloc(vc->http->ws, sizeof *vfe);
 	AN(vfe);
-	vfe->magic = VFP_ENTRY_MAGIC;
+	INIT_OBJ(vfe, VFP_ENTRY_MAGIC);
 	vfe->vfp = vfp;
 	vfe->closed = VFP_OK;
 	if (top)
@@ -290,7 +224,7 @@ debug_fragfetch(struct cli *cli, const char * const *av, void *priv)
 
 static struct cli_proto debug_cmds[] = {
 	{ "debug.fragfetch", "debug.fragfetch",
-		"\tEnable fetch fragmentation\n", 1, 1, "d", debug_fragfetch },
+		"\tEnable fetch fragmentation.", 1, 1, "d", debug_fragfetch },
 	{ NULL }
 };
 

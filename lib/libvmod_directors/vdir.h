@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@FreeBSD.org>
@@ -41,11 +41,12 @@ struct vdir {
 	struct vbitmap				*vbm;
 };
 
-void vdir_new(struct vdir **vdp, const char *vcl_name, vdi_healthy *healthy,
-    vdi_getfd_f *getfd, void *priv);
+void vdir_new(struct vdir **vdp, const char *vcl_name, vdi_healthy_f *healthy,
+    vdi_resolve_f *resolve, void *priv);
 void vdir_delete(struct vdir **vdp);
 void vdir_lock(struct vdir *vd);
 void vdir_unlock(struct vdir *vd);
-unsigned vdir_add_backend(struct vdir *vd, VCL_BACKEND be, double weight);
-unsigned vdir_any_healthy(struct vdir *vd, double *changed);
-VCL_BACKEND vdir_pick_be(struct vdir *vd, double w, unsigned nloops);
+unsigned vdir_add_backend(struct vdir *, VCL_BACKEND be, double weight);
+unsigned vdir_any_healthy(struct vdir *, const struct busyobj *,
+    double *changed);
+VCL_BACKEND vdir_pick_be(struct vdir *, double w);

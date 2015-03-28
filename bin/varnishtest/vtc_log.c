@@ -187,7 +187,7 @@ vtc_dump(struct vtclog *vl, int lvl, const char *pfx, const char *str, int len)
 		if (len < 0)
 			len = strlen(str);
 		for (l = 0; l < len; l++, str++) {
-			if (l > 512 && olen != -2) {
+			if (l > 1024 && olen != -2) {
 				VSB_printf(vl->vsb, "...");
 				break;
 			}
@@ -289,11 +289,10 @@ vtc_hexdump(struct vtclog *vl, int lvl, const char *pfx,
 
 static void __attribute__((__noreturn__))
 vtc_log_VAS_Fail(const char *func, const char *file, int line,
-    const char *cond, int err, enum vas_e why)
+    const char *cond, enum vas_e why)
 {
 	struct vtclog *vl;
 
-	(void)err;
 	(void)why;
 	vl = pthread_getspecific(log_key);
 	if (vl == NULL || vl->act) {

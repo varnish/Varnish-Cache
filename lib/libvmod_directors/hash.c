@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@FreeBSD.org>
@@ -32,7 +32,7 @@
 #include <stdlib.h>
 
 #include "cache/cache.h"
-#include "cache/cache_backend.h"
+#include "cache/cache_director.h"
 
 #include "vrt.h"
 #include "vbm.h"
@@ -47,12 +47,11 @@ struct vmod_directors_hash {
 	unsigned				magic;
 #define VMOD_DIRECTORS_HASH_MAGIC		0xc08dd611
 	struct vdir				*vd;
-	unsigned				nloops;
 	struct vbitmap				*vbm;
 };
 
 VCL_VOID __match_proto__()
-vmod_hash__init(const struct vrt_ctx *ctx, struct vmod_directors_hash **rrp,
+vmod_hash__init(VRT_CTX, struct vmod_directors_hash **rrp,
     const char *vcl_name)
 {
 	struct vmod_directors_hash *rr;
@@ -64,7 +63,6 @@ vmod_hash__init(const struct vrt_ctx *ctx, struct vmod_directors_hash **rrp,
 	AN(rr);
 	rr->vbm = vbit_init(8);
 	AN(rr->vbm);
-	rr->nloops = 3; //
 	*rrp = rr;
 	vdir_new(&rr->vd, vcl_name, NULL, NULL, rr);
 }
@@ -83,7 +81,7 @@ vmod_hash__fini(struct vmod_directors_hash **rrp)
 }
 
 VCL_VOID __match_proto__()
-vmod_hash_add_backend(const struct vrt_ctx *ctx,
+vmod_hash_add_backend(VRT_CTX,
     struct vmod_directors_hash *rr, VCL_BACKEND be, double w)
 {
 
@@ -93,7 +91,7 @@ vmod_hash_add_backend(const struct vrt_ctx *ctx,
 }
 
 VCL_BACKEND __match_proto__()
-vmod_hash_backend(const struct vrt_ctx *ctx, struct vmod_directors_hash *rr,
+vmod_hash_backend(VRT_CTX, struct vmod_directors_hash *rr,
     const char *arg, ...)
 {
 	struct SHA256Context sha_ctx;
@@ -110,7 +108,8 @@ vmod_hash_backend(const struct vrt_ctx *ctx, struct vmod_directors_hash *rr,
 	va_start(ap, arg);
 	p = arg;
 	while (p != vrt_magic_string_end) {
-		SHA256_Update(&sha_ctx, arg, strlen(arg));
+		if (p != NULL && *p != '\0')
+			SHA256_Update(&sha_ctx, p, strlen(p));
 		p = va_arg(ap, const char *);
 	}
 	va_end(ap);
@@ -119,6 +118,6 @@ vmod_hash_backend(const struct vrt_ctx *ctx, struct vmod_directors_hash *rr,
 	r = vbe32dec(sha256);
 	r = scalbn(r, -32);
 	assert(r >= 0 && r <= 1.0);
-	be = vdir_pick_be(rr->vd, r, rr->nloops);
+	be = vdir_pick_be(rr->vd, r);
 	return (be);
 }

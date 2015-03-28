@@ -15,6 +15,8 @@ nobase_pkginclude_HEADERS = \
 	tbl/locks.h \
 	tbl/obj_attr.h \
 	tbl/req_body.h \
+	tbl/req_flags.h \
+	tbl/sess_attr.h \
 	tbl/sess_close.h \
 	tbl/steps.h \
 	tbl/symbol_kind.h \
@@ -38,6 +40,24 @@ nobase_pkginclude_HEADERS = \
 	vapi/vapi_options.h \
 	vcli.h
 
+# Headers for use with vmods
+nobase_pkginclude_HEADERS += \
+	miniobj.h \
+	vas.h \
+	vav.h \
+	vbm.h \
+	vcl.h \
+	vcs.h \
+	vmod_abi.h \
+	vqueue.h \
+	vre.h \
+	vdef.h \
+	vrt.h \
+	vrt_obj.h \
+	vsa.h \
+	vsb.h \
+	vsha256.h
+
 # Private headers
 nobase_noinst_HEADERS = \
 	binary_heap.h \
@@ -60,6 +80,8 @@ nobase_noinst_HEADERS = \
 	vnum.h \
 	vpf.h \
 	vrnd.h \
+	vsl_priv.h \
+	vsm_priv.h \
 	vsub.h \
 	vss.h \
 	vtcp.h \
@@ -68,26 +90,8 @@ nobase_noinst_HEADERS = \
 	vut.h \
 	vut_options.h
 
-# Headers for use with vmods
-pkgdataincludedir = $(pkgdatadir)/include
-nobase_pkgdatainclude_HEADERS = \
-	miniobj.h \
-	vas.h \
-	vav.h \
-	vbm.h \
-	vcl.h \
-	vcs.h \
-	vmod_abi.h \
-	vqueue.h \
-	vre.h \
-	vdef.h \
-	vrt.h \
-	vrt_obj.h \
-	vsa.h \
-	vsb.h \
-	vsha256.h
-
-tbl/vrt_stv_var.h tbl/vcl_returns.h tbl/vcc_types.h vcl.h vrt_obj.h: $(top_srcdir)/lib/libvcc/generate.py $(top_srcdir)/include/vrt.h
+tbl/vrt_stv_var.h tbl/vcl_returns.h tbl/vcc_types.h vrt_obj.h: vcl.h
+vcl.h: $(top_srcdir)/lib/libvcc/generate.py $(top_srcdir)/include/vrt.h
 	mkdir -p tbl
 	@PYTHON@ $(top_srcdir)/lib/libvcc/generate.py $(top_srcdir) $(top_builddir)
 
@@ -96,6 +100,7 @@ MAINTAINERCLEANFILES = vcs_version.h
 vcs_version.h: FORCE
 	@if [ -d "$(top_srcdir)/.git" ]; then \
 		V="$$(git show -s --pretty=format:%h)" \
+		B="$$(git rev-parse --abbrev-ref HEAD)" \
 		H="$$(head -n 1 vcs_version.h 2>/dev/null || true)"; \
 		if [ "/* $$V */" != "$$H" ]; then \
 		( \
@@ -108,7 +113,8 @@ vcs_version.h: FORCE
 		  echo ' */' ;\
 		  echo "/* $$V */" ;\
 		  echo '' ;\
-		  echo "#define VCS_Version \"$$V\"" \
+		  echo "#define VCS_Version \"$$V\"" ; \
+		  echo "#define VCS_Branch \"$$B\"" \
 		) > vcs_version.h ; \
 		fi \
 	else \
@@ -116,7 +122,8 @@ vcs_version.h: FORCE
 		( \
 		  echo "/* NOGIT */" ; \
 		  echo '/* No git commit ID available, see include/Makefile.am for explanation */' ; \
-		  echo '#define VCS_Version "NOGIT"' \
+		  echo '#define VCS_Version "NOGIT"' ; \
+		  echo '#define VCS_Branch "NOGIT"' \
 		) >  vcs_version.h ; \
 		fi \
 	fi

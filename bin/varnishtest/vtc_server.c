@@ -55,9 +55,6 @@ struct server {
 	int			depth;
 	int			sock;
 	char			listen[256];
-	struct vss_addr		**vss_addr;
-	char			*addr;
-	char			*port;
 	char			aaddr[32];
 	char			aport[32];
 
@@ -125,8 +122,7 @@ server_new(const char *name)
 	if (*s->name != 's')
 		vtc_log(s->vl, 0, "Server name must start with 's'");
 
-	bprintf(s->listen, "127.0.0.1:%d", 0);
-	AZ(VSS_parse(s->listen, &s->addr, &s->port));
+	bprintf(s->listen, "%s", "127.0.0.1 0");
 	s->repeat = 1;
 	s->depth = 10;
 	s->sock = -1;
@@ -159,29 +155,27 @@ server_delete(struct server *s)
 static void
 server_start(struct server *s)
 {
-	int naddr;
+	const char *err;
 
 	CHECK_OBJ_NOTNULL(s, SERVER_MAGIC);
 	vtc_log(s->vl, 2, "Starting server");
 	if (s->sock < 0) {
-		naddr = VSS_resolve(s->addr, s->port, &s->vss_addr);
-		if (naddr != 1)
+		s->sock = VTCP_listen_on(s->listen, "0", s->depth, &err);
+		if (err != NULL)
 			vtc_log(s->vl, 0,
-			    "Server s listen address not unique"
-			    " \"%s\" resolves to (%d) sockets",
-			    s->listen, naddr);
-		s->sock = VSS_listen(s->vss_addr[0], s->depth);
-		assert(s->sock >= 0);
+			    "Server s listen address cannot be resolved: %s",
+			    err);
+		assert(s->sock > 0);
 		VTCP_myname(s->sock, s->aaddr, sizeof s->aaddr,
 		    s->aport, sizeof s->aport);
 		macro_def(s->vl, s->name, "addr", "%s", s->aaddr);
 		macro_def(s->vl, s->name, "port", "%s", s->aport);
 		macro_def(s->vl, s->name, "sock", "%s %s", s->aaddr, s->aport);
+
 		/* Record the actual port, and reuse it on subsequent starts */
-		if (!strcmp(s->port, "0"))
-			REPLACE(s->port, s->aport);
+		bprintf(s->listen, "%s %s", s->aaddr, s->aport);
 	}
-	vtc_log(s->vl, 1, "Listen on %s %s", s->addr, s->port);
+	vtc_log(s->vl, 1, "Listen on %s", s->listen);
 	s->run = 1;
 	AZ(pthread_create(&s->tp, NULL, server_thread, s));
 }
@@ -261,10 +255,8 @@ cmd_server(CMD_ARGS)
 				(void)pthread_cancel(s->tp);
 				server_wait(s);
 			}
-			if (s->sock >= 0) {
+			if (s->sock >= 0)
 				VTCP_close(&s->sock);
-				s->sock = -1;
-			}
 			server_delete(s);
 		}
 		return;
@@ -310,12 +302,9 @@ cmd_server(CMD_ARGS)
 			continue;
 		}
 		if (!strcmp(*av, "-listen")) {
-			if (s->sock >= 0) {
+			if (s->sock >= 0)
 				VTCP_close(&s->sock);
-				s->sock = -1;
-			}
 			bprintf(s->listen, "%s", av[1]);
-			AZ(VSS_parse(s->listen, &s->addr, &s->port));
 			av++;
 			continue;
 		}

@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Varnish Software AS
+ * Copyright (c) 2013-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -33,7 +33,6 @@
 
 #include "config.h"
 
-#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -286,6 +285,14 @@ VSA_Get_Sockaddr(const struct suckaddr *sua, socklen_t *sl)
 }
 
 int
+VSA_Get_Proto(const struct suckaddr *sua)
+{
+
+	CHECK_OBJ_NOTNULL(sua, SUCKADDR_MAGIC);
+	return (sua->sa.sa_family);
+}
+
+int
 VSA_Sane(const struct suckaddr *sua)
 {
 	CHECK_OBJ_NOTNULL(sua, SUCKADDR_MAGIC);
@@ -299,21 +306,6 @@ VSA_Sane(const struct suckaddr *sua)
 	}
 }
 
-socklen_t
-VSA_Len(const struct suckaddr *sua)
-{
-	CHECK_OBJ_NOTNULL(sua, SUCKADDR_MAGIC);
-
-	switch(sua->sa.sa_family) {
-		case PF_INET:
-			return (sizeof(sua->sa4));
-		case PF_INET6:
-			return (sizeof(sua->sa6));
-		default:
-			return (0);
-	}
-}
-
 int
 VSA_Compare(const struct suckaddr *sua1, const struct suckaddr *sua2)
 {
@@ -321,6 +313,18 @@ VSA_Compare(const struct suckaddr *sua1, const struct suckaddr *sua2)
 	CHECK_OBJ_NOTNULL(sua1, SUCKADDR_MAGIC);
 	CHECK_OBJ_NOTNULL(sua2, SUCKADDR_MAGIC);
 	return (memcmp(sua1, sua2, vsa_suckaddr_len));
+}
+
+struct suckaddr *
+VSA_Clone(const struct suckaddr *sua)
+{
+	struct suckaddr *sua2;
+
+	assert(VSA_Sane(sua));
+	sua2 = calloc(1, vsa_suckaddr_len);
+	XXXAN(sua2);
+	memcpy(sua2, sua, vsa_suckaddr_len);
+	return (sua2);
 }
 
 unsigned

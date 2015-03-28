@@ -51,13 +51,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include <errno.h>
 
 #include "vapi/vsm.h"
 #include "vapi/vsl.h"
 #include "vtim.h"
-#include "vqueue.h"
-#include "vas.h"
 #include "vre.h"
 
 #include "vtc.h"
@@ -183,7 +180,7 @@ logexp_dispatch(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 	struct VSL_transaction *t;
 	int i;
 	int ok, skip;
-	int vxid, tag, type, len, lvl;
+	int vxid, tag, type, len;
 	const char *legend, *data;
 
 	(void)vsl;
@@ -228,21 +225,19 @@ logexp_dispatch(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 				le->test->skip_max > le->skip_cnt))
 				skip = 1;
 
-			if (ok) {
-				lvl = 4;
+			if (ok)
 				legend = "ok";
-			} else if (skip) {
-				lvl = 4;
-				legend = "skp";
-			} else {
-				lvl = 0;
+			else if (skip)
+				legend = NULL;
+			else
 				legend = "err";
-			}
 			type = VSL_CLIENT(t->c->rec.ptr) ? 'c' :
 			    VSL_BACKEND(t->c->rec.ptr) ? 'b' : '-';
 
-			vtc_log(le->vl, lvl, "%3s| %10u %-15s %c %.*s",
-			    legend, vxid, VSL_tags[tag], type, len, data);
+			if (legend != NULL)
+				vtc_log(le->vl, 4, "%3s| %10u %-15s %c %.*s",
+				    legend, vxid, VSL_tags[tag], type, len,
+				    data);
 
 			if (ok) {
 				le->vxid_last = vxid;
@@ -252,9 +247,12 @@ logexp_dispatch(struct VSL_data *vsl, struct VSL_transaction * const pt[],
 				if (le->test == NULL)
 					/* End of test script */
 					return (1);
-			}
-			if (skip)
+			} else if (skip)
 				le->skip_cnt++;
+			else {
+				/* Signal fail */
+				return (2);
+			}
 		}
 	}
 
@@ -280,9 +278,11 @@ logexp_thread(void *priv)
 	logexp_next(le);
 	while (le->test) {
 		i = VSLQ_Dispatch(le->vslq, logexp_dispatch, le);
-		if (i < 0)
-			vtc_log(le->vl, 0, "dispatch: %d", i);
-		if (i == 0 && le->test)
+		if (i == 2)
+			vtc_log(le->vl, 0, "bad| expectation failed");
+		else if (i < 0)
+			vtc_log(le->vl, 0, "bad| dispatch failed (%d)", i);
+		else if (i == 0 && le->test)
 			VTIM_sleep(0.01);
 	}
 	vtc_log(le->vl, 4, "end|");
@@ -330,7 +330,8 @@ logexp_start(struct logexp *le)
 	}
 	le->vsl = VSL_New();
 	AN(le->vsl);
-	c = VSL_CursorVSM(le->vsl, le->vsm, !le->d_arg);
+	c = VSL_CursorVSM(le->vsl, le->vsm,
+	    (le->d_arg ? 0 : VSL_COPT_TAIL) | VSL_COPT_BATCH);
 	if (c == NULL) {
 		vtc_log(le->vl, 0, "VSL_CursorVSM: %s", VSL_Error(le->vsl));
 		logexp_close(le);

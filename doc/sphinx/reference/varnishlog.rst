@@ -1,4 +1,6 @@
-.. _ref-varnishlog:
+.. role:: ref(emphasis)
+
+.. _varnishlog(1):
 
 ==========
 varnishlog
@@ -8,11 +10,13 @@ varnishlog
 Display Varnish logs
 --------------------
 
+:Manual section: 1
+
 SYNOPSIS
 ========
 
 .. include:: ../include/varnishlog_synopsis.rst
-varnishlog |synopsis| <query expression>
+varnishlog |synopsis|
 
 OPTIONS
 =======
@@ -20,20 +24,6 @@ OPTIONS
 The following options are available:
 
 .. include:: ../include/varnishlog_options.rst
-
--k num
-
-	Only show the first num log transactions (or log records
-	in -g raw mode)
-
-	XXX: Not yet implemented
-
--s num
-
-	Skip the first num log transactions (or log records if
-	in -g raw mode)
-
-	XXX: Not yet implemented
 
 SIGNALS
 =======
@@ -48,13 +38,13 @@ SIGNALS
 
 SEE ALSO
 ========
-* varnishd(1)
-* varnishhist(1)
-* varnishncsa(1)
-* varnishstat(1)
-* varnishtop(1)
-* vsl(7)
-* vsl-query(7)
+* :ref:`varnishd(1)`
+* :ref:`varnishhist(1)`
+* :ref:`varnishncsa(1)`
+* :ref:`varnishstat(1)`
+* :ref:`varnishtop(1)`
+* :ref:`vsl(7)`
+* :ref:`vsl-query(7)`
 
 HISTORY
 =======

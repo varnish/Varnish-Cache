@@ -63,6 +63,8 @@
 #include "vct.h"
 #include "vend.h"
 
+static unsigned VRY_Validate(const uint8_t *vary);
+
 /**********************************************************************
  * Create a Vary matching string from a Vary header
  *
@@ -75,7 +77,7 @@
 int
 VRY_Create(struct busyobj *bo, struct vsb **psb)
 {
-	char *v, *p, *q, *h, *e;
+	const char *v, *p, *q, *h, *e;
 	struct vsb *sb, *sbh;
 	unsigned l;
 	int error = 0;
@@ -284,7 +286,7 @@ int
 VRY_Match(struct req *req, const uint8_t *vary)
 {
 	uint8_t *vsp = req->vary_b;
-	char *h, *e;
+	const char *h, *e;
 	unsigned lh, ln;
 	int i, oflo = 0;
 
@@ -319,7 +321,7 @@ VRY_Match(struct req *req, const uint8_t *vary)
 				lh = 0xffff;
 			}
 
-			if (vsp + ln + 2 >= req->vary_e) {
+			if (vsp + ln + 3 >= req->vary_e) {
 				/*
 				 * Not enough space to build new entry
 				 * and put terminator behind it.
@@ -368,7 +370,7 @@ VRY_Match(struct req *req, const uint8_t *vary)
  * Check the validity of a Vary string and return its total length
  */
 
-unsigned
+static unsigned
 VRY_Validate(const uint8_t *vary)
 {
 	unsigned retval = 0;

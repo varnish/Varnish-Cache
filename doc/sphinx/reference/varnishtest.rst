@@ -1,4 +1,6 @@
-.. _ref-varnishtest:
+.. role:: ref(emphasis)
+
+.. _varnishtest(1):
 
 ===========
 varnishtest
@@ -8,10 +10,12 @@ varnishtest
 Test program for Varnish
 ------------------------
 
+:Manual section: 1
+
 SYNOPSIS
 ========
 
-     varnishtest [-iklLqv] [-n iter] [-D name=val] [-j jobs] [-t duration] file [file ...]
+varnishtest [-iklLqv] [-n iter] [-D name=val] [-j jobs] [-t duration] file [file ...]
 
 DESCRIPTION
 ===========
@@ -112,12 +116,12 @@ SEE ALSO
 ========
 
 * varnishtest source code repository with tests
-* varnishhist(1)
-* varnishlog(1)
-* varnishncsa(1)
-* varnishstat(1)
-* varnishtop(1)
-* vcl(7)
+* :ref:`varnishhist(1)`
+* :ref:`varnishlog(1)`
+* :ref:`varnishncsa(1)`
+* :ref:`varnishstat(1)`
+* :ref:`varnishtop(1)`
+* :ref:`vcl(7)`
 
 HISTORY
 =======

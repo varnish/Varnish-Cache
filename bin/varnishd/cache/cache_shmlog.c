@@ -29,14 +29,14 @@
 
 #include "config.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "cache.h"
 #include "common/heritage.h"
 
-#include "cache_backend.h"	// For wrk->vbc
-
+#include "vsl_priv.h"
 #include "vmb.h"
 #include "vtim.h"
 
@@ -52,6 +52,16 @@ static ssize_t			vsl_segsize;
 static unsigned			vsl_seq;
 
 struct VSC_C_main       *VSC_C_main;
+
+
+static void
+vsl_sanity(const struct vsl_log *vsl)
+{
+	AN(vsl);
+	AN(vsl->wlp);
+	AN(vsl->wlb);
+	AN(vsl->wle);
+}
 
 /*--------------------------------------------------------------------
  * Check if the VSL_tag is masked by parameter bitmap
@@ -238,6 +248,7 @@ VSL_Flush(struct vsl_log *vsl, int overflow)
 	uint32_t *p;
 	unsigned l;
 
+	vsl_sanity(vsl);
 	l = pdiff(vsl->wlb, vsl->wlp);
 	if (l == 0)
 		return;
@@ -264,6 +275,7 @@ VSLbt(struct vsl_log *vsl, enum VSL_tag_e tag, txt t)
 	unsigned l, mlen;
 	char *p;
 
+	vsl_sanity(vsl);
 	Tcheck(t);
 	if (vsl_tag_is_masked(tag))
 		return;
@@ -303,6 +315,7 @@ VSLbv(struct vsl_log *vsl, enum VSL_tag_e tag, const char *fmt, va_list ap)
 	unsigned n, mlen;
 	txt t;
 
+	vsl_sanity(vsl);
 	AN(fmt);
 	if (vsl_tag_is_masked(tag))
 		return;
@@ -345,6 +358,7 @@ VSLb(struct vsl_log *vsl, enum VSL_tag_e tag, const char *fmt, ...)
 {
 	va_list ap;
 
+	vsl_sanity(vsl);
 	va_start(ap, fmt);
 	VSLbv(vsl, tag, fmt, ap);
 	va_end(ap);
@@ -357,8 +371,9 @@ VSLb_ts(struct vsl_log *vsl, const char *event, double first, double *pprev,
 
 	/* XXX: Make an option to turn off some unnecessary timestamp
 	   logging. This must be done carefully because some functions
-	   (e.g. WRW_Reserve) takes the last timestamp as it's inital
+	   (e.g. V1L_Reserve) takes the last timestamp as it's inital
 	   value for timeout calculation. */
+	vsl_sanity(vsl);
 	assert(!isnan(now) && now != 0.);
 	VSLb(vsl, SLT_Timestamp, "%s: %.6f %.6f %.6f",
 	    event, now, now - first, now - *pprev);
@@ -384,6 +399,7 @@ VSL_Setup(struct vsl_log *vsl, void *ptr, size_t len)
 	vsl->wle += len / sizeof(*vsl->wle);
 	vsl->wlr = 0;
 	vsl->wid = 0;
+	vsl_sanity(vsl);
 }
 
 /*--------------------------------------------------------------------*/
@@ -393,6 +409,7 @@ VSL_ChgId(struct vsl_log *vsl, const char *typ, const char *why, uint32_t vxid)
 {
 	uint32_t ovxid;
 
+	vsl_sanity(vsl);
 	ovxid = vsl->wid;
 	VSLb(vsl, SLT_Link, "%s %u %s", typ, VXID(vxid), why);
 	VSL_End(vsl);
@@ -408,6 +425,7 @@ VSL_End(struct vsl_log *vsl)
 	txt t;
 	char p[] = "";
 
+	vsl_sanity(vsl);
 	AN(vsl->wid);
 	t.b = p;
 	t.e = p;

@@ -251,9 +251,9 @@ vcc_ParseFunction(struct vcc *tl)
 		}
 		tl->curproc = vcc_AddProc(tl, tl->t);
 		Fh(tl, 0, "int VGC_function_%.*s "
-		    "(const struct vrt_ctx *ctx);\n", PF(tl->t));
+		    "(VRT_CTX);\n", PF(tl->t));
 		Fc(tl, 1, "\nint __match_proto__(vcl_func_t)\n");
-		Fc(tl, 1, "VGC_function_%.*s(const struct vrt_ctx *ctx)\n",
+		Fc(tl, 1, "VGC_function_%.*s(VRT_CTX)\n",
 		    PF(tl->t));
 	}
 	vcc_NextToken(tl);
@@ -338,7 +338,7 @@ vcc_Parse(struct vcc *tl)
 {
 	struct toplev *tp;
 
-	if (!vcc_IdIs(tl->t, "vcl")) {
+	if (tl->t->tok != ID || !vcc_IdIs(tl->t, "vcl")) {
 		VSB_printf(tl->sb,
 		    "VCL version declaration missing\n"
 		    "Update your VCL to Version 4 syntax, and add\n"

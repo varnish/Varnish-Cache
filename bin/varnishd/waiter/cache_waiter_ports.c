@@ -35,7 +35,6 @@
 
 #include <sys/time.h>
 
-#include <math.h>
 #include <port.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +42,7 @@
 #include "cache/cache.h"
 
 #include "waiter/waiter.h"
+#include "waiter/waiter_priv.h"
 #include "vtim.h"
 
 #define MAX_EVENTS 256
@@ -50,9 +50,10 @@
 struct vws {
 	unsigned		magic;
 #define VWS_MAGIC		0x0b771473
-	pthread_t		ports_thread;
+	struct waiter		*waiter;
+
+	pthread_t		thread;
 	int			dport;
-	VTAILQ_HEAD(,sess)	sesshead;
 };
 
 static inline void
@@ -73,20 +74,19 @@ vws_del(struct vws *vws, int fd)
 
 static inline void
 vws_port_ev(struct vws *vws, port_event_t *ev, double now) {
-	struct sess *sp;
+	struct waited *sp;
 	if(ev->portev_source == PORT_SOURCE_USER) {
-		CAST_OBJ_NOTNULL(sp, ev->portev_user, SESS_MAGIC);
+		CAST_OBJ_NOTNULL(sp, ev->portev_user, WAITED_MAGIC);
 		assert(sp->fd >= 0);
-		VTAILQ_INSERT_TAIL(&vws->sesshead, sp, list);
+		VTAILQ_INSERT_TAIL(&vws->waiter->waithead, sp, list);
 		vws_add(vws, sp->fd, sp);
 	} else {
 		assert(ev->portev_source == PORT_SOURCE_FD);
-		CAST_OBJ_NOTNULL(sp, ev->portev_user, SESS_MAGIC);
+		CAST_OBJ_NOTNULL(sp, ev->portev_user, WAITED_MAGIC);
 		assert(sp->fd >= 0);
 		if(ev->portev_events & POLLERR) {
 			vws_del(vws, sp->fd);
-			VTAILQ_REMOVE(&vws->sesshead, sp, list);
-			SES_Delete(sp, SC_REM_CLOSE, now);
+			Wait_Handle(vws->waiter, sp, WAITER_REMCLOSE, now);
 			return;
 		}
 
@@ -104,10 +104,7 @@ vws_port_ev(struct vws *vws, port_event_t *ev, double now) {
 		 *          threadID=129476&tstart=0
 		 */
 		vws_del(vws, sp->fd);
-		VTAILQ_REMOVE(&vws->sesshead, sp, list);
-
-		/* SES_Handle will also handle errors */
-		SES_Handle(sp, now);
+		Wait_Handle(vws->waiter, sp, WAITER_ACTION, now);
 	}
 	return;
 }
@@ -115,7 +112,7 @@ vws_port_ev(struct vws *vws, port_event_t *ev, double now) {
 static void *
 vws_thread(void *priv)
 {
-	struct sess *sp;
+	struct waited *sp;
 	struct vws *vws;
 
 	CAST_OBJ_NOTNULL(vws, priv, VWS_MAGIC);
@@ -147,16 +144,13 @@ vws_thread(void *priv)
 	struct timespec ts;
 	struct timespec *timeout;
 
-	vws->dport = port_create();
-	assert(vws->dport >= 0);
-
 	timeout = &max_ts;
 
-	while (1) {
+	while (!vws->waiter->dismantle) {
 		port_event_t ev[MAX_EVENTS];
 		u_int nevents;
 		int ei, ret;
-		double now, deadline;
+		double now, idle;
 
 		/*
 		 * XXX Do we want to scale this up dynamically to increase
@@ -184,6 +178,12 @@ vws_thread(void *priv)
 		ret = port_getn(vws->dport, ev, MAX_EVENTS, &nevents, timeout);
 		now = VTIM_real();
 
+		if (ret < 0 && errno == EBADF) {
+			/* Our stop signal */
+			AN(vws->waiter->dismantle);
+			break;
+		}
+
 		if (ret < 0)
 			assert((errno == EINTR) || (errno == ETIME));
 
@@ -191,7 +191,7 @@ vws_thread(void *priv)
 			vws_port_ev(vws, ev + ei, now);
 
 		/* check for timeouts */
-		deadline = now - cache_param->timeout_idle;
+		idle = now - *vws->waiter->tmo;
 
 		/*
 		 * This loop assumes that the oldest sessions are always at the
@@ -201,17 +201,14 @@ vws_thread(void *priv)
 		 */
 
 		for (;;) {
-			sp = VTAILQ_FIRST(&vws->sesshead);
+			sp = VTAILQ_FIRST(&vws->waiter->waithead);
 			if (sp == NULL)
 				break;
-			if (sp->t_idle > deadline) {
+			if (sp->idle > idle) {
 				break;
 			}
-			VTAILQ_REMOVE(&vws->sesshead, sp, list);
-			if(sp->fd != -1) {
-				vws_del(vws, sp->fd);
-			}
-			SES_Delete(sp, SC_RX_TIMEOUT, now);
+			vws_del(vws, sp->fd);
+			Wait_Handle(vws->waiter, sp, WAITER_TIMEOUT, now);
 		}
 
 		/*
@@ -219,8 +216,7 @@ vws_thread(void *priv)
 		 */
 
 		if (sp) {
-			double tmo =
-			    (sp->t_idle + cache_param->timeout_idle) - now;
+			double tmo = (sp->idle + *vws->waiter->tmo) - now;
 
 			if (tmo < min_t) {
 				timeout = &min_ts;
@@ -239,42 +235,58 @@ vws_thread(void *priv)
 
 /*--------------------------------------------------------------------*/
 
-static void
-vws_pass(void *priv, struct sess *sp)
+static int
+vws_pass(void *priv, struct waited *sp)
 {
 	int r;
 	struct vws *vws;
 
 	CAST_OBJ_NOTNULL(vws, priv, VWS_MAGIC);
 	r = port_send(vws->dport, 0, TRUST_ME(sp));
-	if (r == -1 && errno == EAGAIN) {
-		VSC_C_main->sess_pipe_overflow++;
-		SES_Delete(sp, SC_SESS_PIPE_OVERFLOW, NAN);
-		return;
-	}
+	if (r == -1 && errno == EAGAIN)
+		return (-1);
 	AZ(r);
+	return (0);
 }
 
 /*--------------------------------------------------------------------*/
 
-static void *
-vws_init(void)
+static void __match_proto__(waiter_init_f)
+vws_init(struct waiter *w)
 {
 	struct vws *vws;
 
-	ALLOC_OBJ(vws, VWS_MAGIC);
-	AN(vws);
-	VTAILQ_INIT(&vws->sesshead);
-	AZ(pthread_create(&vws->ports_thread, NULL, vws_thread, vws));
-	return (vws);
+	CHECK_OBJ_NOTNULL(w, WAITER_MAGIC);
+	vws = w->priv;
+	INIT_OBJ(vws, VWS_MAGIC);
+	vws->waiter = w;
+	vws->dport = port_create();
+	assert(vws->dport >= 0);
+
+	AZ(pthread_create(&vws->thread, NULL, vws_thread, vws));
 }
 
 /*--------------------------------------------------------------------*/
 
-const struct waiter waiter_ports = {
+static void __match_proto__(waiter_fini_f)
+vws_fini(struct waiter *w)
+{
+	struct vws *vws;
+	void *vp;
+
+	CAST_OBJ_NOTNULL(vws, w->priv, VWS_MAGIC);
+	AZ(close(vws->dport));
+	AZ(pthread_join(vws->thread, &vp));
+}
+
+/*--------------------------------------------------------------------*/
+
+const struct waiter_impl waiter_ports = {
 	.name =		"ports",
 	.init =		vws_init,
-	.pass =		vws_pass
+	.fini =		vws_fini,
+	.pass =		vws_pass,
+	.size =		sizeof(struct vws),
 };
 
 #endif /* defined(HAVE_PORT_CREATE) */

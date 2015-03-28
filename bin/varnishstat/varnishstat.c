@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Verdens Gang AS
- * Copyright (c) 2006-2014 Varnish Software AS
+ * Copyright (c) 2006-2015 Varnish Software AS
  * All rights reserved.
  *
  * Author: Poul-Henning Kamp <phk@phk.freebsd.dk>
@@ -34,7 +34,6 @@
 
 #include <sys/time.h>
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,7 +54,7 @@ do_xml_cb(void *priv, const struct VSC_point * const pt)
 	(void)priv;
 	if (pt == NULL)
 		return (0);
-	AZ(strcmp(pt->desc->fmt, "uint64_t"));
+	AZ(strcmp(pt->desc->ctype, "uint64_t"));
 	val = *(const volatile uint64_t*)pt->ptr;
 	sec = pt->section;
 
@@ -66,7 +65,8 @@ do_xml_cb(void *priv, const struct VSC_point * const pt)
 		printf("\t\t<ident>%s</ident>\n", sec->fantom->ident);
 	printf("\t\t<name>%s</name>\n", pt->desc->name);
 	printf("\t\t<value>%ju</value>\n", (uintmax_t)val);
-	printf("\t\t<flag>%c</flag>\n", pt->desc->flag);
+	printf("\t\t<flag>%c</flag>\n", pt->desc->semantics);
+	printf("\t\t<format>%c</format>\n", pt->desc->format);
 	printf("\t\t<description>%s</description>\n", pt->desc->sdesc);
 	printf("\t</stat>\n");
 	return (0);
@@ -100,11 +100,14 @@ do_json_cb(void *priv, const struct VSC_point * const pt)
 		return (0);
 
 	jp = priv;
-	AZ(strcmp(pt->desc->fmt, "uint64_t"));
+	AZ(strcmp(pt->desc->ctype, "uint64_t"));
 	val = *(const volatile uint64_t*)pt->ptr;
 	sec = pt->section;
 
-	if (*jp) *jp = 0; else printf(",\n");
+	if (*jp)
+		*jp = 0;
+	else
+		printf(",\n");
 
 	printf("\t\"");
 	/* build the JSON key name.  */
@@ -113,19 +116,18 @@ do_json_cb(void *priv, const struct VSC_point * const pt)
 	if (sec->fantom->ident[0])
 		printf("%s.", sec->fantom->ident);
 	printf("%s\": {", pt->desc->name);
-
-	if (strcmp(sec->fantom->type, "")) printf("\"type\": \"%s\", ",
-	    sec->fantom->type);
-	if (strcmp(sec->fantom->ident, "")) printf("\"ident\": \"%s\", ",
-	    sec->fantom->ident);
-
+	if (strcmp(sec->fantom->type, ""))
+		printf("\"type\": \"%s\", ", sec->fantom->type);
+	if (strcmp(sec->fantom->ident, ""))
+		printf("\"ident\": \"%s\", ", sec->fantom->ident);
 	printf("\"value\": %ju, ", (uintmax_t)val);
-
-	printf("\"flag\": \"%c\", ", pt->desc->flag);
+	printf("\"flag\": \"%c\", ", pt->desc->semantics);
+	printf("\"format\": \"%c\", ", pt->desc->format);
 	printf("\"description\": \"%s\"", pt->desc->sdesc);
 	printf("}");
 
-	if (*jp) printf("\n");
+	if (*jp)
+		printf("\n");
 	return (0);
 }
 
@@ -167,7 +169,7 @@ do_once_cb(void *priv, const struct VSC_point * const pt)
 	if (pt == NULL)
 		return (0);
 	op = priv;
-	AZ(strcmp(pt->desc->fmt, "uint64_t"));
+	AZ(strcmp(pt->desc->ctype, "uint64_t"));
 	val = *(const volatile uint64_t*)pt->ptr;
 	sec = pt->section;
 	i = 0;
@@ -179,7 +181,7 @@ do_once_cb(void *priv, const struct VSC_point * const pt)
 	if (i >= op->pad)
 		op->pad = i + 1;
 	printf("%*.*s", op->pad - i, op->pad - i, "");
-	if (pt->desc->flag == 'a' || pt->desc->flag == 'c')
+	if (pt->desc->semantics == 'c')
 		printf("%12ju %12.2f %s\n",
 		    (uintmax_t)val, val / op->up, pt->desc->sdesc);
 	else
@@ -273,7 +275,8 @@ main(int argc, char * const *argv)
 {
 	int c;
 	struct VSM_data *vd;
-	int delay = 1, once = 0, xml = 0, json = 0, do_repeat = 0, f_list = 0;
+	double delay = 1.0;
+	int   once = 0, xml = 0, json = 0, do_repeat = 0, f_list = 0;
 
 	vd = VSM_New();
 
@@ -290,7 +293,7 @@ main(int argc, char * const *argv)
 			exit(0);
 		case 'w':
 			do_repeat = 1;
-			delay = atoi(optarg);
+			delay = atof(optarg);
 			break;
 		case 'x':
 			xml = 1;
@@ -324,15 +327,15 @@ main(int argc, char * const *argv)
 			do_once(vd, VSC_Main(vd, NULL));
 		else if (f_list)
 			list_fields(vd);
-		else {
+		else
 			assert(0);
-		}
-		if (!do_repeat) break;
+		if (!do_repeat)
+			break;
 
-		// end of output block marker.
+		/* end of output block marker. */
 		printf("\n");
 
-		sleep(delay);
+		(void)usleep(delay * 1e6);
 	}
 	exit(0);
 }

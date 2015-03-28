@@ -31,7 +31,6 @@
 #include "config.h"
 
 #include <stdio.h>
-#include <stdarg.h>
 
 #include "cache.h"
 
@@ -57,6 +56,7 @@ WS_Assert(const struct ws *ws)
 		assert(ws->r <= ws->e);
 		assert(PAOK(ws->r));
 	}
+	assert(*ws->e == 0x15);
 }
 
 /*
@@ -71,12 +71,12 @@ WS_Init(struct ws *ws, const char *id, void *space, unsigned len)
 	DSL(DBG_WORKSPACE, 0,
 	    "WS_Init(%p, \"%s\", %p, %u)", ws, id, space, len);
 	assert(space != NULL);
-	memset(ws, 0, sizeof *ws);
-	ws->magic = WS_MAGIC;
+	INIT_OBJ(ws, WS_MAGIC);
 	ws->s = space;
 	assert(PAOK(space));
+	len = PRNDDN(len - 1);
 	ws->e = ws->s + len;
-	assert(PAOK(len));
+	*ws->e = 0x15;
 	ws->f = ws->s;
 	assert(id[0] & 0x40);
 	assert(strlen(id) < sizeof ws->id);
@@ -90,7 +90,15 @@ WS_MarkOverflow(struct ws *ws)
 {
 	CHECK_OBJ_NOTNULL(ws, WS_MAGIC);
 
-	ws->id[0] &= ~0x40;		// Cheasy toupper()
+	ws->id[0] &= ~0x40;		// cheesy toupper()
+}
+
+static void
+ws_ClearOverflow(struct ws *ws)
+{
+	CHECK_OBJ_NOTNULL(ws, WS_MAGIC);
+
+	ws->id[0] |= 0x40;		// cheesy tolower()
 }
 
 /*
@@ -111,10 +119,11 @@ WS_Reset(struct ws *ws, char *p)
 		assert(p < ws->e);
 		ws->f = p;
 	}
+	ws_ClearOverflow(ws);
 	WS_Assert(ws);
 }
 
-char *
+void *
 WS_Alloc(struct ws *ws, unsigned bytes)
 {
 	char *r;
@@ -202,13 +211,11 @@ WS_Reserve(struct ws *ws, unsigned bytes)
 
 	WS_Assert(ws);
 	assert(ws->r == NULL);
-	if (bytes == 0)
-		b2 = ws->e - ws->f;
-	else if (bytes > ws->e - ws->f)
-		b2 = ws->e - ws->f;
-	else
-		b2 = bytes;
-	b2 = PRNDDN(b2);
+
+	b2 = PRNDDN(ws->e - ws->f);
+	if (bytes != 0 && bytes < b2)
+		b2 = PRNDUP(bytes);
+
 	xxxassert(ws->f + b2 <= ws->e);
 	ws->r = ws->f + b2;
 	DSL(DBG_WORKSPACE, 0, "WS_Reserve(%p, %u/%u) = %u",
