@@ -57,10 +57,8 @@ much anything the kernel will accept::
 	-T '[fe80::1]:8082'
 
 The default is ``-T localhost:0`` which will pick a random
-port number, which `varnishadm(8)` can learn in the shared
+port number, which `varnishadm(8)` can learn from the shared
 memory.
-
-.. XXX:Me no understand sentence above, (8)? and learn in the shared memory? Stored and retrieved by varnishadm from th e shared memory? benc 
 
 By using a "localhost" address, you restrict CLI access
 to the local machine.
@@ -77,9 +75,8 @@ Alternatively you can bind the CLI port to a 'localhost' address,
 and give remote users access via a secure connection to the local
 machine, using ssh/VPN or similar.
 
-If you use `ssh` you can restrict which commands each user can execute to
-just `varnishadm`, or even to wrapper scripts around `varnishadm`, which
-only allow specific CLI commands.
+Using `sudo` and wrapper scripts it is possible to control which
+users can run which `varnishadm` CLI commands.
 
 It is also possible to configure `varnishd` for "reverse mode", using
 the '-M' argument.  In that case `varnishd` will attempt to open a
@@ -100,10 +97,9 @@ CLI interface authentication
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 By default the CLI interface is protected with a simple, yet
-strong "Pre Shared Key" authentication method, which do not provide
-secrecy (ie: The CLI commands and responses are not encrypted).
-
-.. XXX:Encryption instead of secrecy? benc
+powerful "Pre Shared Key" authentication method, but it does not
+provide secrecy (ie: The CLI commands and responses are not
+encrypted).
 
 The way -S/PSK works is really simple:  During startup a file is
 created with a random content and the file is only accessible to
@@ -111,18 +107,14 @@ the user who started `varnishd` (or the superuser).
 
 To authenticate and use a CLI connection, you need to know the
 contents of that file, in order to answer the cryptographic
-challenge `varnishd` issues. 
+challenge `varnishd` issues, see :ref:`ref_psk_auth`.
 
+`varnishadm` uses all of this to restrict access, it will only
+function, provided it can read the secret file.
 
-(XXX: xref to algo in refman)
-.. XXX:Dunno what this is? benc
-
-`varnishadm` uses all of this to restrict access, it will only function,
-provided it can read the secret file.
-
-If you want to allow other users, local or remote, to be able to access CLI connections, you must create your
-own secret file and make it possible for (only!) these users to
-read it.
+If you want to allow other users, local or remote, to be able to
+access CLI connections, you must create your own secret file and
+make it possible for (only!) these users to read it.
 
 A good way to create the secret file is::
 
@@ -187,13 +179,8 @@ and operating system, it will not protect your HTTP service.
 We do not currently have a way to restrict specific CLI commands
 to specific CLI connections. One way to get such an effect is to
 "wrap" all CLI access in pre-approved scripts which use `varnishadm(1)`
-
-.. XXX:what does the 1 stand for? benc
-
 to submit the sanitized CLI commands, and restrict a remote user
 to only those scripts, for instance using sshd(8)'s configuration.
-
-.. XXX:what does the 8 stand for? benc
 
 VCL programs
 ------------
