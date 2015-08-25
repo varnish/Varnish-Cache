@@ -229,6 +229,7 @@ vcl_BackendEvent(const struct vcl *vcl, enum vcl_event_e e)
 {
 	struct backend *be;
 
+	ASSERT_CLI();
 	CHECK_OBJ_NOTNULL(vcl, VCL_MAGIC);
 	AZ(vcl->busy);
 
@@ -393,6 +394,7 @@ vcl_set_state(struct vcl *vcl, const char *state)
 
 	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
 	ctx.handling = &hand;
+	ctx.vcl = vcl;
 
 	switch(state[0]) {
 	case '0':
@@ -624,6 +626,7 @@ ccf_config_use(struct cli *cli, const char * const *av, void *priv)
 	vsb = VSB_new_auto();
 	AN(vsb);
 	ctx.msg = vsb;
+	ctx.vcl = vcl;
 	i = vcl->conf->event_vcl(&ctx, VCL_EVENT_USE);
 	AZ(VSB_finish(vsb));
 	if (i) {
