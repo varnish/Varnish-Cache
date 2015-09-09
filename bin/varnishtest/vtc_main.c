@@ -80,6 +80,7 @@ struct vtc_job {
 
 int iflg = 0;
 unsigned vtc_maxdur = 60;
+unsigned vtc_bufsiz = 512;
 
 static VTAILQ_HEAD(, vtc_tst) tst_head = VTAILQ_HEAD_INITIALIZER(tst_head);
 static struct vev_base *vb;
@@ -134,6 +135,7 @@ usage(void)
 	fprintf(stderr, FMT, "-q", "Quiet mode: report only failures");
 	fprintf(stderr, FMT, "-t duration", "Time tests out after this long");
 	fprintf(stderr, FMT, "-v", "Verbose mode: always report test log");
+	fprintf(stderr, FMT, "-b size", "Set internal buffer size in KB");
 	fprintf(stderr, "\n");
 	exit(1);
 }
@@ -234,7 +236,7 @@ start_test(void)
 	ALLOC_OBJ(jp, JOB_MAGIC);
 	AN(jp);
 
-	jp->bufsiz = 512*1024;		/* XXX */
+	jp->bufsiz = vtc_bufsiz*1024;
 
 	jp->buf = mmap(NULL, jp->bufsiz, PROT_READ|PROT_WRITE,
 	    MAP_ANON | MAP_SHARED, -1, 0);
@@ -490,6 +492,9 @@ main(int argc, char * const *argv)
 		case 'v':
 			if (vtc_verbosity < 2)
 				vtc_verbosity++;
+			break;
+		case 'b':
+			vtc_bufsiz = strtoul(optarg, NULL, 512);
 			break;
 		case 'W':
 			vtc_witness++;
