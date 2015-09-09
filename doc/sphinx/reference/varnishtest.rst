@@ -15,7 +15,7 @@ Test program for Varnish
 SYNOPSIS
 ========
 
-varnishtest [-iklLqv] [-n iter] [-D name=val] [-j jobs] [-t duration] file [file ...]
+varnishtest [-iklLqv] [-n iter] [-D name=val] [-j jobs] [-t duration] [-b size] file [file ...]
 
 DESCRIPTION
 ===========
@@ -49,6 +49,8 @@ The following options are available:
 -t duration      Time tests out after this long
 
 -v               Verbose mode: always report test log
+
+-b size          Set internal buffer size in KB
 
 -W               Enable the witness facility for locking
 
