@@ -68,21 +68,15 @@ vcc_ParseImport(struct vcc *tl)
 		vcc_ErrWhere2(tl, t1, tl->t);
 		return;
 	}
-	if (osym != NULL) {
-		VSB_printf(tl->sb, "Module %.*s already imported.\n",
-		    PF(mod));
-		vcc_ErrWhere2(tl, t1, tl->t);
-		VSB_printf(tl->sb, "Previous import was here:\n");
-		vcc_ErrWhere2(tl, osym->def_b, osym->def_e);
-		return;
-	}
 
-	bprintf(fn, "%.*s", PF(mod));
-	sym = VCC_AddSymbolStr(tl, fn, SYM_VMOD);
-	ERRCHK(tl);
-	AN(sym);
-	sym->def_b = t1;
-	sym->def_e = tl->t;
+	if(osym == NULL) {
+		bprintf(fn, "%.*s", PF(mod));
+		sym = VCC_AddSymbolStr(tl, fn, SYM_VMOD);
+		ERRCHK(tl);
+		AN(sym);
+		sym->def_b = t1;
+		sym->def_e = tl->t;
+	}
 
 	if (tl->t->tok == ID) {
 		if (!tl->unsafe_path) {
@@ -106,6 +100,8 @@ vcc_ParseImport(struct vcc *tl)
 	}
 
 	SkipToken(tl, ';');
+	if (osym != NULL)
+		return;
 
 	hdl = dlopen(fn, RTLD_NOW | RTLD_LOCAL);
 	if (hdl == NULL) {
