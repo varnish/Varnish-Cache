@@ -31,7 +31,7 @@ if [ -z "$automake_version" ] ; then
     warn "unable to determine automake version"
 else
     case $automake_version in
-	0.*|1.[0-8]|1.[0-8][.-]*)
+	0.*|1.[0-8]+[.-]*)
 	    warn "automake ($automake_version) detected; 1.9 or newer recommended"
 	    ;;
 	*)
