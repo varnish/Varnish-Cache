@@ -53,7 +53,8 @@ int VTCP_check_hup(int sock);
 void VTCP_name(const struct suckaddr *addr, char *abuf, unsigned alen,
     char *pbuf, unsigned plen);
 int VTCP_connected(int s);
-int VTCP_connect(const struct suckaddr *name, int msec);
+int VTCP_bindany(int s, int pf);
+int VTCP_connect(const struct suckaddr *name, int msec, unsigned bindany);
 int VTCP_open(const char *addr, const char *def_port, double timeout,
     const char **err);
 void VTCP_close(int *s);

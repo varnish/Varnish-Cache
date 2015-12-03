@@ -168,6 +168,9 @@ struct params {
 	/* Default connection_timeout */
 	double			connect_timeout;
 
+	/* bind-before-connect strategy */
+	unsigned		connect_bindany;
+
 	/* CLI buffer size */
 	unsigned		cli_buffer;
 
