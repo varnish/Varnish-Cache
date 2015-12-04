@@ -340,16 +340,15 @@ VTCP_connect(const struct suckaddr *name, int msec, unsigned bindany)
 			/* Timeout */
 			i = -1;
 			errno = ETIMEDOUT;
+			AZ(close(s));
 		} else {
 			i = VTCP_connected(s);
 		}
 		if (i >= 0)
 			return (s);
 		if (errno != EADDRNOTAVAIL && errno != ETIMEDOUT) {
-			AZ(close(s));
 			return (-1);
 		}
-		AZ(close(s));
 	}
 	return (-1);
 }
