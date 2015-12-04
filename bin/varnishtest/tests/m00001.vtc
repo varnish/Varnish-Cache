@@ -47,10 +47,24 @@ varnish v1 -cliok "vcl.discard vcl1"
 varnish v1 -cliok "vcl.list"
 varnish v1 -cliok "debug.vmod"
 
-varnish v1 -errvcl {Module std already imported.} {
+shell "cp $( echo ${vmod_std} | sed 's/std from//') ${tmpdir}"
+
+varnish v1 -errvcl {Warning: Module std imported from different location.} {
+	import ${vmod_std};
+	import std from "${tmpdir}";
+}
+
+varnish v1 -vcl+backend {
 	import ${vmod_std};
 	import ${vmod_std};
 }
+
+varnish v1 -vcl+backend {
+}
+
+varnish v1 -cliok "vcl.discard vcl4"
+varnish v1 -cliok "vcl.list"
+varnish v1 -cliok "debug.vmod"
 
 varnish v1 -errvcl {Symbol not found: 'std' (expected type BOOL):} {
 	import ${vmod_std};
