@@ -47,7 +47,7 @@ varnish v1 -cliok "vcl.discard vcl1"
 varnish v1 -cliok "vcl.list"
 varnish v1 -cliok "debug.vmod"
 
-shell "cp $( echo ${vmod_std} | sed 's/std from//') ${tmpdir}"
+shell "cp ${topbuild}/lib/libvmod_std/.libs/libvmod_std.so ${tmpdir}"
 
 varnish v1 -errvcl {Warning: Module std imported from different location.} {
 	import ${vmod_std};
@@ -59,13 +59,6 @@ varnish v1 -vcl+backend {
 	import ${vmod_std};
 }
 
-varnish v1 -vcl+backend {
-}
-
-varnish v1 -cliok "vcl.discard vcl4"
-varnish v1 -cliok "vcl.list"
-varnish v1 -cliok "debug.vmod"
-
 varnish v1 -errvcl {Symbol not found: 'std' (expected type BOOL):} {
 	import ${vmod_std};
 
@@ -75,6 +68,9 @@ varnish v1 -errvcl {Symbol not found: 'std' (expected type BOOL):} {
 	}
 }
 
+varnish v1 -vcl+backend {
+}
+varnish v1 -cliok "vcl.discard vcl4"
 varnish v1 -cliok "debug.vmod"
 varnish v1 -cliok "vcl.list"
 varnish v1 -expect vmods == 0
