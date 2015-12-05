@@ -87,6 +87,7 @@ struct source {
 	const char		*e;
 	unsigned		idx;
 	char			*freeit;
+	char			*path;
 };
 
 struct token {
