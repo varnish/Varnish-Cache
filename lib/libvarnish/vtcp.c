@@ -248,15 +248,17 @@ VTCP_connected(int s)
 }
 
 int
-VTCP_connect(const struct suckaddr *name, int msec)
+VTCP_connect(const struct suckaddr *name, const struct suckaddr *source,
+    int msec)
 {
 	int s, i;
 	struct pollfd fds[1];
-	const struct sockaddr *sa;
+	const struct sockaddr *sa, *soa;
 	socklen_t sl;
 
 	if (name == NULL)
 		return (-1);
+
 	/* Attempt the connect */
 	AN(VSA_Sane(name));
 	sa = VSA_Get_Sockaddr(name, &sl);
@@ -271,6 +273,19 @@ VTCP_connect(const struct suckaddr *name, int msec)
 	if (msec != 0)
 		(void)VTCP_nonblocking(s);
 
+	/* Bind if we need to, to set the source */
+	if (source != NULL) {
+		AN(VSA_Sane(source));
+		soa = VSA_Get_Sockaddr(source, &sl);
+		AN(source);
+		i = bind(s, soa, sl);
+		if (i == -1) {
+			AZ(close(s));
+			return (-1);
+		}
+	}	
+
+	/* Now actually connect */
 	i = connect(s, sa, sl);
 	if (i == 0)
 		return (s);
@@ -348,7 +363,7 @@ vtcp_open_callback(void *priv, const struct suckaddr *sa)
 {
 	double *p = priv;
 
-	return (VTCP_connect(sa, (int)floor(*p * 1e3)));
+	return (VTCP_connect(sa, NULL, (int)floor(*p * 1e3)));
 }
 
 int

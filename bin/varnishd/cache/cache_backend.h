@@ -120,7 +120,8 @@ void VBP_Status(struct cli *cli, const struct backend *, int details);
 
 /* cache_backend_tcp.c */
 struct tcp_pool *VBT_Ref(const struct suckaddr *ip4,
-    const struct suckaddr *ip6);
+    const struct suckaddr *ip6, const struct suckaddr *ip4_src,
+    const struct suckaddr *ip6_src);
 void VBT_Rel(struct tcp_pool **tpp);
 int VBT_Open(const struct tcp_pool *tp, double tmo, const struct suckaddr **sa);
 void VBT_Recycle(const struct worker *, struct tcp_pool *, struct vbc **);

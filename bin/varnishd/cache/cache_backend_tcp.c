@@ -54,6 +54,8 @@ struct tcp_pool {
 	char			*name;
 	struct suckaddr		*ip4;
 	struct suckaddr		*ip6;
+	struct suckaddr		*ip4_src;
+	struct suckaddr		*ip6_src;
 
 	VTAILQ_ENTRY(tcp_pool)	list;
 	int			refcnt;
@@ -119,11 +121,12 @@ tcp_handle(struct waited *w, enum wait_event ev, double now)
 
 /*--------------------------------------------------------------------
  * Reference a TCP pool given by {ip4, ip6} pair.  Create if it
- * doesn't exist already.
+ * doesn't exist already, given the sources in ip4_src and ip6_src if need be.
  */
 
 struct tcp_pool *
-VBT_Ref(const struct suckaddr *ip4, const struct suckaddr *ip6)
+VBT_Ref(const struct suckaddr *ip4, const struct suckaddr *ip6, 
+    const struct suckaddr *ip4_src, const struct suckaddr *ip6_src)
 {
 	struct tcp_pool *tp;
 
@@ -137,6 +140,15 @@ VBT_Ref(const struct suckaddr *ip4, const struct suckaddr *ip6)
 				continue;
 			if (VSA_Compare(ip4, tp->ip4))
 				continue;
+			if (ip4_src == NULL) {
+				if (tp->ip4_src != NULL)
+					continue;
+			} else {
+				if (tp->ip4_src == NULL)
+					continue;
+				if (VSA_Compare(ip4_src,tp->ip4_src))
+					continue;
+			}
 		}
 		if (ip6 == NULL) {
 			if (tp->ip6 != NULL)
@@ -146,6 +158,15 @@ VBT_Ref(const struct suckaddr *ip4, const struct suckaddr *ip6)
 				continue;
 			if (VSA_Compare(ip6, tp->ip6))
 				continue;
+			if (ip6_src == NULL) {
+				if (tp->ip6_src != NULL)
+					continue;
+			} else {
+				if (tp->ip6_src == NULL)
+					continue;
+				if (VSA_Compare(ip6_src, tp->ip6_src))
+					continue;
+			}
 		}
 		tp->refcnt++;
 		return (tp);
@@ -155,8 +176,12 @@ VBT_Ref(const struct suckaddr *ip4, const struct suckaddr *ip6)
 	AN(tp);
 	if (ip4 != NULL)
 		tp->ip4 = VSA_Clone(ip4);
+	if (ip4_src != NULL)
+		tp->ip4_src = VSA_Clone(ip4_src);
 	if (ip6 != NULL)
 		tp->ip6 = VSA_Clone(ip6);
+	if (ip6_src != NULL)
+		tp->ip6_src = VSA_Clone(ip6_src);
 	tp->refcnt = 1;
 	Lck_New(&tp->mtx, lck_backend_tcp);
 	VTAILQ_INIT(&tp->connlist);
@@ -229,15 +254,15 @@ VBT_Open(const struct tcp_pool *tp, double tmo, const struct suckaddr **sa)
 	msec = (int)floor(tmo * 1000.0);
 	if (cache_param->prefer_ipv6) {
 		*sa = tp->ip6;
-		s = VTCP_connect(tp->ip6, msec);
+		s = VTCP_connect(tp->ip6, tp->ip6_src, msec);
 		if (s >= 0)
 			return(s);
 	}
 	*sa = tp->ip4;
-	s = VTCP_connect(tp->ip4, msec);
+	s = VTCP_connect(tp->ip4, tp->ip4_src, msec);
 	if (s < 0 && !cache_param->prefer_ipv6) {
 		*sa = tp->ip6;
-		s = VTCP_connect(tp->ip6, msec);
+		s = VTCP_connect(tp->ip6, tp->ip6_src, msec);
 	}
 	return(s);
 }

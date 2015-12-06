@@ -164,6 +164,8 @@ extern const void * const vrt_magic_string_unset;
 	rigid char			*vcl_name;		\
 	rigid char			*ipv4_addr;		\
 	rigid char			*ipv6_addr;		\
+	rigid char			*ipv4_src_addr;		\
+	rigid char			*ipv6_src_addr;		\
 	rigid char			*port;			\
 	rigid char			*hosthdr;		\
 	double				connect_timeout;	\
@@ -190,6 +192,8 @@ struct vrt_backend {
 	VRT_BACKEND_FIELDS(const)
 	const struct suckaddr		*ipv4_suckaddr;
 	const struct suckaddr		*ipv6_suckaddr;
+	const struct suckaddr		*ipv4_src_suckaddr;
+	const struct suckaddr		*ipv6_src_suckaddr;
 	const struct vrt_backend_probe	*probe;
 };
 

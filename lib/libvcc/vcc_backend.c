@@ -43,10 +43,12 @@
 
 static void
 Emit_Sockaddr(struct vcc *tl, const struct token *t_host,
-    const struct token *t_port)
+    const struct token *t_port, const struct token *t_src)
 {
-	const char *ipv4, *ipv4a, *ipv6, *ipv6a, *pa;
+	const char *ipv4, *ipv4a, *ipv6, *ipv6a, *ipv4_src, *ipv4_srca,
+	    *ipv6_src, *ipv6_srca, *pa, *pa_src;
 	char buf[256];
+	char buf_src[256];
 
 	AN(t_host->dec);
 
@@ -68,6 +70,25 @@ Emit_Sockaddr(struct vcc *tl, const struct token *t_host,
 		Fb(tl, 0, "\t.ipv6_addr = \"%s\",\n", ipv6a);
 	}
 	Fb(tl, 0, "\t.port = \"%s\",\n", pa);
+	if (t_src != NULL) {
+		bprintf(buf_src, "%s 0", t_src->dec);
+		Resolve_Sockaddr(tl, buf_src, "80",
+	            &ipv4_src, &ipv4_srca, &ipv6_src, &ipv6_srca, &pa_src,
+		    2, t_src, "Backend source");
+		ERRCHK(tl);
+		if (ipv4_src != NULL) {
+			Fb(tl, 0,
+			    "\t.ipv4_src_suckaddr = (const struct suckaddr *)%s,\n",
+			    ipv4_src);
+			Fb(tl, 0, "\t.ipv4_src_addr = \"%s\",\n", ipv4_srca);
+		}
+		if (ipv6_src != NULL) {
+			Fb(tl, 0,
+			    "\t.ipv6_src_suckaddr = (const struct suckaddr *)%s,\n",
+			    ipv6_src);
+			Fb(tl, 0, "\t.ipv6_src_addr = \"%s\",\n", ipv6_srca);
+		}
+	}
 }
 
 /*--------------------------------------------------------------------
@@ -290,6 +311,7 @@ vcc_ParseHostDef(struct vcc *tl, const struct token *t_be, const char *vgcname)
 	struct token *t_field;
 	struct token *t_host = NULL;
 	struct token *t_port = NULL;
+	struct token *t_src = NULL;
 	struct token *t_hosthdr = NULL;
 	struct fld_spec *fs;
 	struct inifin *ifp;
@@ -301,6 +323,7 @@ vcc_ParseHostDef(struct vcc *tl, const struct token *t_be, const char *vgcname)
 	fs = vcc_FldSpec(tl,
 	    "!host",
 	    "?port",
+	    "?source",
 	    "?host_header",
 	    "?connect_timeout",
 	    "?first_byte_timeout",
@@ -348,6 +371,12 @@ vcc_ParseHostDef(struct vcc *tl, const struct token *t_be, const char *vgcname)
 			ExpectErr(tl, CSTR);
 			assert(tl->t->dec != NULL);
 			t_port = tl->t;
+			vcc_NextToken(tl);
+			SkipToken(tl, ';');
+		} else if (vcc_IdIs(t_field, "source")) {
+			ExpectErr(tl, CSTR);
+			assert(tl->t->dec != NULL);
+			t_src = tl->t;
 			vcc_NextToken(tl);
 			SkipToken(tl, ';');
 		} else if (vcc_IdIs(t_field, "host_header")) {
@@ -407,7 +436,7 @@ vcc_ParseHostDef(struct vcc *tl, const struct token *t_be, const char *vgcname)
 
 	/* Check that the hostname makes sense */
 	assert(t_host != NULL);
-	Emit_Sockaddr(tl, t_host, t_port);
+	Emit_Sockaddr(tl, t_host, t_port, t_src);
 	ERRCHK(tl);
 
 	ExpectErr(tl, '}');
