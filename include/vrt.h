@@ -40,6 +40,9 @@
  *
  * changes to consider with next VRT_MAJOR_VERSION bump:
  * - cache_vrt.c: -> ssize_t VRT_CacheReqBody(VRT_CTX, size_t)
+ *
+ * changes to consider with next VRT_MINOR_VERSION bump for 4.1:
+ * - cache_vcl.c: -> VRT_ref_vcl, VRT_rel_vcl
  */
 
 #define VRT_MAJOR_VERSION	3U
@@ -294,6 +297,9 @@ struct vmod_priv {
 #ifdef VCL_RET_MAX
 typedef int vmod_event_f(VRT_CTX, struct vmod_priv *, enum vcl_event_e);
 #endif
+
+void VRT_ref_vcl(VRT_CTX);
+void VRT_rel_vcl(VRT_CTX);
 
 void VRT_priv_fini(const struct vmod_priv *p);
 struct vmod_priv *VRT_priv_task(VRT_CTX, void *vmod_id);

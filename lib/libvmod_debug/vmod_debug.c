@@ -28,6 +28,7 @@
 
 #include "config.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -45,6 +46,8 @@ struct priv_vcl {
 	char			*foo;
 	uintptr_t		exp_cb;
 };
+
+VCL_DURATION vcl_release_delay = 0.0;
 
 VCL_VOID __match_proto__(td_debug_panic)
 vmod_panic(VRT_CTX, const char *str, ...)
@@ -249,23 +252,10 @@ priv_vcl_free(void *priv)
 	AZ(priv_vcl);
 }
 
-int __match_proto__(vmod_event_f)
-event_function(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
+static int
+event_load(VRT_CTX, struct vmod_priv *priv)
 {
 	struct priv_vcl *priv_vcl;
-	const char *ev;
-
-	switch (e) {
-		case VCL_EVENT_COLD: ev = "VCL_EVENT_COLD"; break;
-		case VCL_EVENT_WARM: ev = "VCL_EVENT_WARM"; break;
-		default: ev = NULL;
-	}
-
-	if (ev != NULL)
-		VSL(SLT_Debug, 0, "%s: %s", VCL_Name(ctx->vcl), ev);
-
-	if (e != VCL_EVENT_LOAD)
-		return (0);
 
 	AN(ctx->msg);
 	if (cache_param->nuke_limit == 42) {
@@ -280,6 +270,64 @@ event_function(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
 	priv->priv = priv_vcl;
 	priv->free = priv_vcl_free;
 	return (0);
+}
+
+static int
+event_warm(VRT_CTX)
+{
+
+	VSL(SLT_Debug, 0, "%s: VCL_EVENT_WARM", VCL_Name(ctx->vcl));
+
+	if (cache_param->max_esi_depth == 42) {
+		VSB_printf(ctx->msg, "max_esi_depth is not the answer.");
+		return (-1);
+	}
+
+	VRT_ref_vcl(ctx);
+	return (0);
+}
+
+static void*
+cooldown_thread(void *priv)
+{
+	struct vrt_ctx ctx;
+
+	AN(priv);
+	INIT_OBJ(&ctx, VRT_CTX_MAGIC);
+	ctx.vcl = (struct vcl*)priv;
+
+	VTIM_sleep(vcl_release_delay);
+	VRT_rel_vcl(&ctx);
+	return (NULL);
+}
+
+static int
+event_cold(VRT_CTX)
+{
+	pthread_t thread;
+
+	VSL(SLT_Debug, 0, "%s: VCL_EVENT_COLD", VCL_Name(ctx->vcl));
+
+	if (vcl_release_delay == 0.0) {
+		VRT_rel_vcl(ctx);
+		return (0);
+	}
+
+	AZ(pthread_create(&thread, NULL, cooldown_thread, ctx->vcl));
+	AZ(pthread_detach(thread));
+	return (0);
+}
+
+int __match_proto__(vmod_event_f)
+event_function(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
+{
+
+	switch (e) {
+		case VCL_EVENT_LOAD: return event_load(ctx, priv);
+		case VCL_EVENT_COLD: return event_cold(ctx);
+		case VCL_EVENT_WARM: return event_warm(ctx);
+		default: return (0);
+	}
 }
 
 VCL_VOID __match_proto__(td_debug_sleep)
@@ -357,4 +405,13 @@ vmod_workspace_overflow(VRT_CTX, VCL_ENUM which)
 	WS_Assert(ws);
 
 	WS_MarkOverflow(ws);
+}
+
+void
+vmod_vcl_release_delay(VRT_CTX, VCL_DURATION delay)
+{
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	assert(delay > 0.0);
+	vcl_release_delay = delay;
 }

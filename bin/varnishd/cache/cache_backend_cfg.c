@@ -65,10 +65,12 @@ struct director *
 VRT_new_backend(VRT_CTX, const struct vrt_backend *vrt)
 {
 	struct backend *b;
+	struct director *d;
 	struct vsb *vsb;
 	struct vcl *vcl;
 	struct tcp_pool *tp = NULL;
 	const struct vrt_backend_probe *vbp;
+	int retval;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	CHECK_OBJ_NOTNULL(vrt, VRT_BACKEND_MAGIC);
@@ -123,9 +125,15 @@ VRT_new_backend(VRT_CTX, const struct vrt_backend *vrt)
 	if (vbp != NULL)
 		VBP_Insert(b, vbp, tp);
 
-	VCL_AddBackend(ctx->vcl, b);
+	retval = VCL_AddBackend(ctx->vcl, b);
 
-	return (b->director);
+	if (retval == 0)
+		return (b->director);
+
+	d = b->director;
+	VRT_delete_backend(ctx, &d);
+	AZ(d);
+	return (NULL);
 }
 
 /*--------------------------------------------------------------------
@@ -152,6 +160,9 @@ VRT_delete_backend(VRT_CTX, struct director **dp)
 	VTAILQ_REMOVE(&backends, be, list);
 	VTAILQ_INSERT_TAIL(&cool_backends, be, list);
 	Lck_Unlock(&be->mtx);
+
+	// NB. The backend is still usable for the ongoing transactions,
+	// this is why we don't bust the director's magic number.
 }
 
 /*---------------------------------------------------------------------

@@ -31,7 +31,7 @@
  *	ObjExtend	Commit space
  *	ObjDone		Object completed
  *	ObjGetLen	Len of committed space
- *	ObjIter		Iterate over committed space
+ *	ObjIterate	Iterate over committed space
  *	ObjReserveAttr	Attr will be set later
  *	ObjSetAttr	Set attr now
  *	ObjGetAttr	Get attr no
@@ -70,165 +70,102 @@ obj_getobj(struct worker *wrk, struct objcore *oc)
 }
 
 /*====================================================================
- * ObjIterBegin()
- * ObjIter()
- * ObjIterEnd()
+ * ObjIterate()
  *
- * These three allow iteration over the body of an object.
- * The ObjIterBegin() returns a magic cookie which must be passed to
- * ObjIter() and which ObjIterEnd() will obliterate again.
- *
- * These functions get slightly complicated due to unbusy but not
- * yet completed objects (ie: when streaming).  Exactly how they
- * interact with ObjExtend(), especially with respect to locking,
- * is entirely up to the implementation.
  */
 
-struct objiter {
-	unsigned			magic;
-#define OBJITER_MAGIC			0x745fb151
-	struct busyobj			*bo;
-	struct objcore			*oc;
-	struct object			*obj;
-	struct storage			*st;
-	struct worker			*wrk;
-	ssize_t				len;
-	struct storage			*checkpoint;
-	ssize_t				checkpoint_len;
-};
-
-void *
-ObjIterBegin(struct worker *wrk, struct objcore *oc)
+int
+ObjIterate(struct worker *wrk, struct objcore *oc,
+    void *priv, objiterate_f *func)
 {
-	struct objiter *oi;
+	struct busyobj *bo;
 	struct object *obj;
-	const struct storeobj_methods *om = obj_getmethods(oc);
-
-	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
-
-	if (om->objiterbegin != NULL)
-		return (om->objiterbegin(wrk, oc));
-
-	CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
-	obj = obj_getobj(wrk, oc);
-	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
-	ALLOC_OBJ(oi, OBJITER_MAGIC);
-	if (oi == NULL)
-		return (oi);
-	oi->oc = oc;
-	oi->obj = obj;
-	oi->wrk = wrk;
-	oi->bo = HSH_RefBusy(oc);
-	return (oi);
-}
-
-enum objiter_status
-ObjIter(struct objcore *oc, void *oix, void **p, ssize_t *l)
-{
-	struct objiter *oi;
+	struct storage *st;
+	struct storage *checkpoint = NULL;
+	ssize_t checkpoint_len = 0;
+	ssize_t len = 0;
+	int ret = 0;
 	ssize_t ol;
 	ssize_t nl;
 	ssize_t sl;
+	void *p;
+	ssize_t l;
 	const struct storeobj_methods *om = obj_getmethods(oc);
 
-	AN(oix);
-	AN(p);
-	AN(l);
+	if (om->objiterator != NULL)
+		return (om->objiterator(wrk, oc, priv, func));
 
-	if (om->objiter != NULL)
-		return (om->objiter(oc, oix, p, l));
+	obj = obj_getobj(wrk, oc);
+	CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
 
-	CAST_OBJ_NOTNULL(oi, oix, OBJITER_MAGIC);
-	CHECK_OBJ_NOTNULL(oi->obj, OBJECT_MAGIC);
-	*p = NULL;
-	*l = 0;
+	bo = HSH_RefBusy(oc);
 
-	if (oi->bo == NULL) {
-		if (oi->st == NULL)
-			oi->st = VTAILQ_FIRST(&oi->obj->list);
-		else
-			oi->st = VTAILQ_NEXT(oi->st, list);
-		while(oi->st != NULL && oi->st->len == 0)
-			oi->st = VTAILQ_NEXT(oi->st, list);
-		if (oi->st != NULL) {
-			*p = oi->st->ptr;
-			*l = oi->st->len;
-			assert(*l > 0);
-			return (OIS_DATA);
+	if (bo == NULL) {
+		VTAILQ_FOREACH(st, &obj->list, list)
+			if (func(priv, 0, st->ptr, st->len))
+				return (-1);
+		return (0);
+	}
+
+	p = NULL;
+	l = 0;
+
+	while (1) {
+		ol = len;
+		nl = VBO_waitlen(wrk, bo, ol);
+		if (bo->state == BOS_FAILED) {
+			ret = -1;
+			break;
 		}
-		return (OIS_DONE);
-	} else {
-		ol = oi->len;
-		while (1) {
-			nl = VBO_waitlen(oi->wrk, oi->bo, ol);
-			if (nl != ol)
+		if (nl == ol) {
+			if (bo->state == BOS_FINISHED)
 				break;
-			if (oi->bo->state == BOS_FINISHED)
-				return (OIS_DONE);
-			if (oi->bo->state == BOS_FAILED)
-				return (OIS_ERROR);
+			continue;
 		}
-		Lck_Lock(&oi->bo->mtx);
-		AZ(VTAILQ_EMPTY(&oi->obj->list));
-		if (oi->checkpoint == NULL) {
-			oi->st = VTAILQ_FIRST(&oi->obj->list);
+		Lck_Lock(&bo->mtx);
+		AZ(VTAILQ_EMPTY(&obj->list));
+		if (checkpoint == NULL) {
+			st = VTAILQ_FIRST(&obj->list);
 			sl = 0;
 		} else {
-			oi->st = oi->checkpoint;
-			sl = oi->checkpoint_len;
-			ol -= oi->checkpoint_len;
+			st = checkpoint;
+			sl = checkpoint_len;
+			ol -= checkpoint_len;
 		}
-		while (oi->st != NULL) {
-			if (oi->st->len > ol) {
-				*p = oi->st->ptr + ol;
-				*l = oi->st->len - ol;
-				oi->len += *l;
+		while (st != NULL) {
+			if (st->len > ol) {
+				p = st->ptr + ol;
+				l = st->len - ol;
+				len += l;
 				break;
 			}
-			ol -= oi->st->len;
+			ol -= st->len;
 			assert(ol >= 0);
-			nl -= oi->st->len;
+			nl -= st->len;
 			assert(nl > 0);
-			sl += oi->st->len;
-			oi->st = VTAILQ_NEXT(oi->st, list);
-			if (VTAILQ_NEXT(oi->st, list) != NULL) {
-				oi->checkpoint = oi->st;
-				oi->checkpoint_len = sl;
+			sl += st->len;
+			st = VTAILQ_NEXT(st, list);
+			if (VTAILQ_NEXT(st, list) != NULL) {
+				checkpoint = st;
+				checkpoint_len = sl;
 			}
 		}
-		CHECK_OBJ_NOTNULL(oi->obj, OBJECT_MAGIC);
-		CHECK_OBJ_NOTNULL(oi->st, STORAGE_MAGIC);
-		oi->st = VTAILQ_NEXT(oi->st, list);
-		if (oi->st != NULL && oi->st->len == 0)
-			oi->st = NULL;
-		Lck_Unlock(&oi->bo->mtx);
-		assert(*l > 0 || oi->bo->state == BOS_FINISHED);
-		return (oi->st != NULL ? OIS_DATA : OIS_STREAM);
+		CHECK_OBJ_NOTNULL(obj, OBJECT_MAGIC);
+		CHECK_OBJ_NOTNULL(st, STORAGE_MAGIC);
+		st = VTAILQ_NEXT(st, list);
+		if (st != NULL && st->len == 0)
+			st = NULL;
+		Lck_Unlock(&bo->mtx);
+		assert(l > 0 || bo->state == BOS_FINISHED);
+		if (func(priv, st != NULL ? 0 : 1, p, l)) {
+			ret = -1;
+			break;
+		}
 	}
-}
-
-void
-ObjIterEnd(struct objcore *oc, void **oix)
-{
-	struct objiter *oi;
-	const struct storeobj_methods *om = obj_getmethods(oc);
-
-	AN(oix);
-
-	if (om->objiterend != NULL) {
-		om->objiterend(oc, oix);
-		return;
-	}
-
-	CAST_OBJ_NOTNULL(oi, (*oix), OBJITER_MAGIC);
-	*oix = NULL;
-	CHECK_OBJ_NOTNULL(oi->obj, OBJECT_MAGIC);
-	if (oi->bo != NULL) {
-		if (oi->oc->flags & OC_F_PASS)
-			oi->bo->abandon = 1;
-		VBO_DerefBusyObj(oi->wrk, &oi->bo);
-	}
-	FREE_OBJ(oi);
+	if (oc->flags & OC_F_PASS)
+		bo->abandon = 1;
+	VBO_DerefBusyObj(wrk, &bo);
+	return (ret);
 }
 
 /*--------------------------------------------------------------------

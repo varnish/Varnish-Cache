@@ -47,33 +47,25 @@
  * return length or -1 on error
  */
 
-ssize_t
-VRB_Iterate(struct req *req, req_body_iter_f *func, void *priv)
+int
+VRB_Iterate(struct req *req, objiterate_f *func, void *priv)
 {
 	char buf[8192];
-	ssize_t l, ll = 0;
-	void *p;
+	ssize_t l;
 	int i;
 	struct vfp_ctx *vfc;
 	enum vfp_status vfps = VFP_ERROR;
-	void *oi;
-	enum objiter_status ois;
+	int ret = 0;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	AN(func);
 
 	switch(req->req_body_status) {
 	case REQ_BODY_CACHED:
-		oi = ObjIterBegin(req->wrk, req->body_oc);
-		AN(oi);
-		do {
-			ois = ObjIter(req->body_oc, oi, &p, &l);
-			ll += l;
-			if (l > 0 && func(req, priv, p, l))
-				break;
-		} while (ois == OIS_DATA);
-		ObjIterEnd(req->body_oc, &oi);
-		return (ois == OIS_DONE ? ll : -1);
+
+		if (ObjIterate(req->wrk, req->body_oc, priv, func))
+			return (-1);
+		return (0);
 	case REQ_BODY_NONE:
 		return (0);
 	case REQ_BODY_WITH_LEN:
@@ -120,16 +112,15 @@ VRB_Iterate(struct req *req, req_body_iter_f *func, void *priv)
 		vfps = VFP_Suck(vfc, buf, &l);
 		if (vfps == VFP_ERROR) {
 			req->req_body_status = REQ_BODY_FAIL;
-			ll = -1;
+			ret = -1;
 			break;
 		} else if (l > 0) {
 			req->req_bodybytes += l;
 			req->acct.req_bodybytes += l;
-			ll += l;
-			l = func(req, priv, buf, l);
+			l = func(priv, 1, buf, l);
 			if (l) {
 				req->req_body_status = REQ_BODY_FAIL;
-				ll = -1;
+				ret = -1;
 				break;
 			}
 		}
@@ -137,7 +128,7 @@ VRB_Iterate(struct req *req, req_body_iter_f *func, void *priv)
 	VFP_Close(vfc);
 	VSLb_ts_req(req, "ReqBody", VTIM_real());
 
-	return (ll);
+	return (ret);
 }
 
 /*----------------------------------------------------------------------
@@ -146,12 +137,12 @@ VRB_Iterate(struct req *req, req_body_iter_f *func, void *priv)
  * For HTTP1 we have no such luck, and we just iterate it into oblivion.
  */
 
-static int __match_proto__(req_body_iter_f)
-httpq_req_body_discard(struct req *req, void *priv, void *ptr, size_t len)
+static int __match_proto__(objiterate_f)
+httpq_req_body_discard(void *priv, int flush, const void *ptr, ssize_t len)
 {
 
-	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	(void)priv;
+	(void)flush;
 	(void)ptr;
 	(void)len;
 	return (0);
