@@ -456,7 +456,9 @@ vcc_destroy_source(struct source *sp)
  *
  */
 
-static struct vsb *vcc_include_path(const struct vcc *tl, const char *fn) {
+static struct vsb *
+vcc_include_path(const struct vcc *tl, const char *fn)
+{
 	struct vsb *vsb;
 	char *p, *relp;
 	const char *fsrc;
