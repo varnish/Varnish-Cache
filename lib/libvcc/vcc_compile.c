@@ -464,33 +464,29 @@ vcc_include_path(const struct vcc *tl, const char *fn)
 	const char *fsrc;
 	vsb = VSB_new_auto();
 	AN(vsb);
-	VSB_clear(vsb);
-	/* absolute paths .. are relative to / */
-	if (fn[0] == '/') {
-		fsrc = fn + 1;
-		goto dirname;
-	}
 
 	/* relative paths are relative to vcl_dir,
-	 * unless they start with './', in which case relative to  includers source path */
+	 * unless they start with './', in which case relative to includers source path */
 	relp = tl->vcl_dir;
 	if (fn[0] == '.' && fn[1] == '/') {
 		if (tl->src->path)
 			relp = tl->src->path;
+		VSB_cat(vsb, relp);
+		/* including source may have a relative prefix we need to add */
+		fsrc = tl->src->name;
+		if (fsrc[0] == '/') {
+			VSB_finish(vsb);
+			return vsb;
+		}
+	} else if (fn[0] == '/') {
+		/* absolute paths .. are relative to / */
+		fsrc = fn + 1;
 	} else {
 		VSB_cat(vsb, tl->vcl_dir);
 		VSB_finish(vsb);
 		return vsb;
 	}
 
-	VSB_cat(vsb, relp);
-	/* including source may have a relative prefix we need to add */
-	fsrc = tl->src->name;
-	if (fsrc[0] == '/') {
-		VSB_finish(vsb);
-		return vsb;
-	}
-dirname:
 	p = strrchr(fsrc, '/');
 	if (p == NULL) {
 		VSB_finish(vsb);
