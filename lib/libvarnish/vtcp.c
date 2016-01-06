@@ -249,7 +249,37 @@ VTCP_connected(int s)
 }
 
 int
-VTCP_connect(const struct suckaddr *name, int msec)
+VTCP_bindany(int s, int pf)
+{
+	int i, val;
+
+	val = 1;
+	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val) != 0) {
+		return (-1);
+	}
+
+	if (pf == PF_INET) {
+		struct sockaddr_in addr;
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = INADDR_ANY;
+		addr.sin_port = htons(0);
+		i = bind(s, (struct sockaddr *)&addr, sizeof addr);
+	}
+	else if (pf == PF_INET6) {
+		struct sockaddr_in6 addr;
+		addr.sin6_family = AF_INET6;
+		addr.sin6_addr = in6addr_any;
+		addr.sin6_port = htons(0);
+		i = bind(s, (struct sockaddr *)&addr, sizeof addr);
+	} else {
+		return (-1);
+	}
+
+	return (i);
+}
+
+int
+VTCP_connect(const struct suckaddr *name, int msec, unsigned bindany)
 {
 	int s, i;
 	struct pollfd fds[1];
@@ -264,45 +294,64 @@ VTCP_connect(const struct suckaddr *name, int msec)
 	AN(sa);
 	AN(sl);
 
-	s = socket(sa->sa_family, SOCK_STREAM, 0);
-	if (s < 0)
-		return (s);
+	for (int retry = 0; retry < 3; retry++) {
+		s = socket(sa->sa_family, SOCK_STREAM, 0);
+		if (s < 0)
+			return (s);
 
-	/* Set the socket non-blocking */
-	if (msec != 0)
-		(void)VTCP_nonblocking(s);
+		/* Set the socket non-blocking */
+		if (msec != 0)
+			(void)VTCP_nonblocking(s);
 
-	i = connect(s, sa, sl);
-	if (i == 0)
-		return (s);
-	if (errno != EINPROGRESS) {
-		AZ(close(s));
-		return (-1);
+		/* Switch to the bind before connect logic */
+		if (bindany)
+			if (VTCP_bindany(s, sa->sa_family) != 0)
+				return (-1);
+
+		i = connect(s, sa, sl);
+		if (msec == 0) {
+			if (i == 0)
+				return (s);
+			if (errno == EADDRNOTAVAIL) {
+				AZ(close(s));
+				continue;
+			}
+		}
+		if (errno != EINPROGRESS) {
+			AZ(close(s));
+			return (-1);
+		}
+
+		if (msec < 0) {
+			/*
+			 * Caller is responsible for waiting and
+			 * calling VTCP_connected
+			 */
+			return (s);
+		}
+
+		assert(msec > 0);
+		/* Exercise our patience, polling for write */
+		fds[0].fd = s;
+		fds[0].events = POLLWRNORM;
+		fds[0].revents = 0;
+		i = poll(fds, 1, msec);
+
+		if (i == 0) {
+			/* Timeout */
+			i = -1;
+			errno = ETIMEDOUT;
+			AZ(close(s));
+		} else {
+			i = VTCP_connected(s);
+		}
+		if (i >= 0)
+			return (s);
+		if (errno != EADDRNOTAVAIL && errno != ETIMEDOUT) {
+			return (-1);
+		}
 	}
-
-	if (msec < 0) {
-		/*
-		 * Caller is responsible for waiting and
-		 * calling VTCP_connected
-		 */
-		return (s);
-	}
-
-	assert(msec > 0);
-	/* Exercise our patience, polling for write */
-	fds[0].fd = s;
-	fds[0].events = POLLWRNORM;
-	fds[0].revents = 0;
-	i = poll(fds, 1, msec);
-
-	if (i == 0) {
-		/* Timeout, close and give up */
-		AZ(close(s));
-		errno = ETIMEDOUT;
-		return (-1);
-	}
-
-	return (VTCP_connected(s));
+	return (-1);
 }
 
 /*--------------------------------------------------------------------
@@ -350,7 +399,7 @@ vtcp_open_callback(void *priv, const struct suckaddr *sa)
 {
 	double *p = priv;
 
-	return (VTCP_connect(sa, (int)floor(*p * 1e3)));
+	return (VTCP_connect(sa, (int)floor(*p * 1e3), 0));
 }
 
 int

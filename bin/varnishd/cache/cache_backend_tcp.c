@@ -223,21 +223,23 @@ VBT_Open(const struct tcp_pool *tp, double tmo, const struct suckaddr **sa)
 {
 	int s;
 	int msec;
+	unsigned bindany;
 
 	CHECK_OBJ_NOTNULL(tp, TCP_POOL_MAGIC);
 
 	msec = (int)floor(tmo * 1000.0);
+	bindany = cache_param->connect_bindany;
 	if (cache_param->prefer_ipv6) {
 		*sa = tp->ip6;
-		s = VTCP_connect(tp->ip6, msec);
+		s = VTCP_connect(tp->ip6, msec, bindany);
 		if (s >= 0)
 			return(s);
 	}
 	*sa = tp->ip4;
-	s = VTCP_connect(tp->ip4, msec);
+	s = VTCP_connect(tp->ip4, msec, bindany);
 	if (s < 0 && !cache_param->prefer_ipv6) {
 		*sa = tp->ip6;
-		s = VTCP_connect(tp->ip6, msec);
+		s = VTCP_connect(tp->ip6, msec, bindany);
 	}
 	return(s);
 }
