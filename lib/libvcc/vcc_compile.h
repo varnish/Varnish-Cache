@@ -139,6 +139,9 @@ struct symbol {
 	/* SYM_VAR */
 	const struct var		*var;
 	unsigned			r_methods;
+
+	/* SYM_VMOD */
+	const char 			*path;
 };
 
 VTAILQ_HEAD(tokenhead, token);

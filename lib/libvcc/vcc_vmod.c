@@ -48,7 +48,7 @@ vcc_ParseImport(struct vcc *tl)
 	struct token *mod, *t1;
 	struct inifin *ifp;
 	const char * const *spec;
-	struct symbol *sym;
+	struct symbol *sym = NULL;
 	const struct symbol *osym;
 	const char *p;
 	// int *modlen;
@@ -68,21 +68,14 @@ vcc_ParseImport(struct vcc *tl)
 		vcc_ErrWhere2(tl, t1, tl->t);
 		return;
 	}
-	if (osym != NULL) {
-		VSB_printf(tl->sb, "Module %.*s already imported.\n",
-		    PF(mod));
-		vcc_ErrWhere2(tl, t1, tl->t);
-		VSB_printf(tl->sb, "Previous import was here:\n");
-		vcc_ErrWhere2(tl, osym->def_b, osym->def_e);
-		return;
+	if (osym == NULL) {
+		bprintf(fn, "%.*s", PF(mod));
+		sym = VCC_AddSymbolStr(tl, fn, SYM_VMOD);
+		ERRCHK(tl);
+		AN(sym);
+		sym->def_b = t1;
+		sym->def_e = tl->t;
 	}
-
-	bprintf(fn, "%.*s", PF(mod));
-	sym = VCC_AddSymbolStr(tl, fn, SYM_VMOD);
-	ERRCHK(tl);
-	AN(sym);
-	sym->def_b = t1;
-	sym->def_e = tl->t;
 
 	if (tl->t->tok == ID) {
 		if (!tl->unsafe_path) {
@@ -106,6 +99,21 @@ vcc_ParseImport(struct vcc *tl)
 	}
 
 	SkipToken(tl, ';');
+	if (osym != NULL) {
+		AN(osym->path);
+		if (strcmp(osym->path, fn) != 0) {
+			VSB_printf(tl->sb, "Warning: Module %.*s imported from different location.\n",
+			    PF(mod));
+			vcc_ErrWhere2(tl, t1, tl->t);
+			VSB_printf(tl->sb, "Previous import was here:\n");
+			vcc_ErrWhere2(tl, osym->def_b, osym->def_e);
+			tl->err = 0; // reset error; this is just a warning
+		}
+		return;
+	} else {
+		AN(sym);
+		sym->path = strdup(fn);
+	}
 
 	hdl = dlopen(fn, RTLD_NOW | RTLD_LOCAL);
 	if (hdl == NULL) {
