@@ -422,7 +422,7 @@ EmitStruct(const struct vcc *tl)
 /*--------------------------------------------------------------------*/
 
 static struct source *
-vcc_new_source(const char *b, const char *e, const char *name)
+vcc_new_source(const char *b, const char *e, const char *name, const char *path)
 {
 	struct source *sp;
 
@@ -434,6 +434,10 @@ vcc_new_source(const char *b, const char *e, const char *name)
 	AN(sp->name);
 	sp->b = b;
 	sp->e = e;
+	if (path != NULL) {
+		sp->path = strdup(path);
+		AN(sp->path);
+	}
 	return (sp);
 }
 
@@ -447,6 +451,53 @@ vcc_destroy_source(struct source *sp)
 	free(sp);
 }
 
+/*--------------------------------------------------------------------
+ * Include files relative to source's path or vcl_dir
+ *
+ */
+
+static struct vsb *
+vcc_include_path(const struct vcc *tl, const char *fn)
+{
+	struct vsb *vsb;
+	char *p, *relp;
+	const char *fsrc;
+	vsb = VSB_new_auto();
+	AN(vsb);
+
+	/* relative paths are relative to vcl_dir,
+	 * unless they start with './', in which case relative to includers source path */
+	relp = tl->vcl_dir;
+	if (fn[0] == '.' && fn[1] == '/') {
+		if (tl->src->path)
+			relp = tl->src->path;
+		VSB_cat(vsb, relp);
+		/* including source may have a relative prefix we need to add */
+		fsrc = tl->src->name;
+		if (fsrc[0] == '/') {
+			VSB_finish(vsb);
+			return vsb;
+		}
+	} else if (fn[0] == '/') {
+		/* absolute paths .. are relative to / */
+		fsrc = fn + 1;
+	} else {
+		VSB_cat(vsb, tl->vcl_dir);
+		VSB_finish(vsb);
+		return vsb;
+	}
+
+	p = strrchr(fsrc, '/');
+	if (p == NULL) {
+		VSB_finish(vsb);
+		return vsb;
+	}
+	VSB_putc(vsb, '/');
+	VSB_bcat(vsb, fsrc, p - fsrc);
+	VSB_finish(vsb);
+	return vsb;
+}
+
 /*--------------------------------------------------------------------*/
 
 static struct source *
@@ -454,19 +505,23 @@ vcc_file_source(const struct vcc *tl, struct vsb *sb, const char *fn)
 {
 	char *f;
 	struct source *sp;
+	struct vsb *fb;
 
 	if (!tl->unsafe_path && strchr(fn, '/') != NULL) {
 		VSB_printf(sb, "Include path is unsafe '%s'\n", fn);
 		return (NULL);
 	}
-	f = VFIL_readfile(tl->vcl_dir, fn, NULL);
+	fb = vcc_include_path(tl, fn);
+	f = VFIL_readfile(VSB_data(fb), fn, NULL);
 	if (f == NULL) {
 		VSB_printf(sb, "Cannot read file '%s': %s\n",
 		    fn, strerror(errno));
+		VSB_delete(fb);
 		return (NULL);
 	}
-	sp = vcc_new_source(f, NULL, fn);
+	sp = vcc_new_source(f, NULL, fn, VSB_data(fb));
 	sp->freeit = f;
+	VSB_delete(fb);
 	return (sp);
 }
 
@@ -649,7 +704,7 @@ vcc_CompileSource(const struct vcc *tl0, struct vsb *sb, struct source *sp)
 		return (vcc_DestroyTokenList(tl, NULL));
 
 	/* Register and lex the builtin VCL */
-	sp = vcc_new_source(tl->builtin_vcl, NULL, "Builtin");
+	sp = vcc_new_source(tl->builtin_vcl, NULL, "Builtin", NULL);
 	assert(sp != NULL);
 	VTAILQ_INSERT_TAIL(&tl->sources, sp, list);
 	sp->idx = tl->nsources++;
@@ -764,7 +819,7 @@ VCC_Compile(const struct vcc *tl, struct vsb *sb, const char *b)
 	struct source *sp;
 	char *r;
 
-	sp = vcc_new_source(b, NULL, "input");
+	sp = vcc_new_source(b, NULL, "input", NULL);
 	if (sp == NULL)
 		return (NULL);
 	r = vcc_CompileSource(tl, sb, sp);
