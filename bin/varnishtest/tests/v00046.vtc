@@ -1,0 +1,22 @@
+varnishtest "Test backend source code path"
+
+server s1 {
+	rxreq
+	expect remote.ip == "127.0.0.1"
+	txresp
+} -start
+
+varnish v1 -vcl+backend { } -start
+
+varnish v1 -vcl {
+	backend b1 {
+		.host = "${s1_addr}";
+		.port = "${s1_port}";
+		.source = "127.0.0.1";
+	}
+}
+
+client c1 {
+        txreq
+	rxresp
+} -run

@@ -113,9 +113,11 @@ VRT_new_backend(VRT_CTX, const struct vrt_backend *vrt)
 	Lck_Lock(&backends_mtx);
 	VTAILQ_INSERT_TAIL(&backends, b, list);
 	VSC_C_main->n_backend++;
-	b->tcp_pool = VBT_Ref(vrt->ipv4_suckaddr, vrt->ipv6_suckaddr);
+	b->tcp_pool = VBT_Ref(vrt->ipv4_suckaddr, vrt->ipv6_suckaddr,
+	    vrt->ipv4_src_suckaddr, vrt->ipv6_src_suckaddr);
 	if (vbp != NULL) {
-		tp = VBT_Ref(vrt->ipv4_suckaddr, vrt->ipv6_suckaddr);
+		tp = VBT_Ref(vrt->ipv4_suckaddr, vrt->ipv6_suckaddr, vrt->ipv4_src_suckaddr,
+		    vrt->ipv6_src_suckaddr);
 		assert(b->tcp_pool == tp);
 	}
 	Lck_Unlock(&backends_mtx);

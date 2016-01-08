@@ -209,6 +209,10 @@ are available:
   port
     The port on the backend that Varnish should connect to.
 
+  source
+    The source address to be used for the backend connection. IP 
+    address or a hostname that resolves to a single IP address.
+
   host_header
     A host header to add.
 
