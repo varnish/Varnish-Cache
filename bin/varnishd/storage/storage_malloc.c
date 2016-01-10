@@ -66,6 +66,8 @@ sma_alloc(const struct stevedore *st, size_t size)
 	struct sma *sma = NULL;
 	void *p;
 
+	assert(size != 0);
+
 	CAST_OBJ_NOTNULL(sma_sc, st->priv, SMA_SC_MAGIC);
 	Lck_Lock(&sma_sc->sma_mtx);
 	sma_sc->stats->c_req++;
