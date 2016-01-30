@@ -540,7 +540,7 @@ static void
 print_duration(WINDOW *w, time_t t)
 {
 
-	wprintw(w, "%4lu+%02lu:%02lu:%02lu",
+	wprintw(w, "%4d+%02d:%02d:%02d",
 	    t / 86400, (t % 86400) / 3600, (t % 3600) / 60, t % 60);
 }
 
