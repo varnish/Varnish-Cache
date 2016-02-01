@@ -131,8 +131,13 @@ nobase_pkginclude_HEADERS = \
 
 varnishd_CFLAGS = \
 	@PCRE_CFLAGS@ \
+	@ASAN_CFLAGS@ \
+	@MSAN_CFLAGS@ \
+	@TSAN_CFLAGS@ \
+	@UBSAN_CFLAGS@ \
+	@COVERAGE_CFLAGS@ \
 	-DVARNISHD_IS_NOT_A_VMOD \
-        -DVARNISH_STATE_DIR='"${VARNISH_STATE_DIR}"' \
+	-DVARNISH_STATE_DIR='"${VARNISH_STATE_DIR}"' \
 	-DVARNISH_VMOD_DIR='"${pkglibdir}/vmods"' \
 	-DVARNISH_VCL_DIR='"${varnishconfdir}"'
 
@@ -143,6 +148,11 @@ varnishd_LDADD = \
 	$(top_builddir)/lib/libvarnishcompat/libvarnishcompat.la \
 	$(top_builddir)/lib/libvcc/libvcc.la \
 	$(top_builddir)/lib/libvgz/libvgz.la \
+	@ASAN_LDFLAGS@ \
+	@MSAN_LDFLAGS@ \
+	@TSAN_LDFLAGS@ \
+	@UBSAN_LDFLAGS@ \
+	@COVERAGE_LDFLAGS@ \
 	@JEMALLOC_LDADD@ \
 	@PCRE_LIBS@ \
 	${DL_LIBS} ${PTHREAD_LIBS} ${NET_LIBS} ${LIBM} ${LIBUMEM}
