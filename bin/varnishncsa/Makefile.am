@@ -20,9 +20,21 @@ varnishncsa_SOURCES = \
 	$(top_srcdir)/lib/libvarnish/vtim.c \
 	$(top_srcdir)/lib/libvarnish/vsb.c
 
+varnishncsa_CFLAGS = \
+	@ASAN_CFLAGS@ \
+	@MSAN_CFLAGS@ \
+	@TSAN_CFLAGS@ \
+	@UBSAN_CFLAGS@ \
+	@COVERAGE_CFLAGS@
+
 varnishncsa_LDADD = \
 	$(top_builddir)/lib/libvarnishcompat/libvarnishcompat.la \
 	$(top_builddir)/lib/libvarnishapi/libvarnishapi.la \
+	@ASAN_LDFLAGS@ \
+	@MSAN_LDFLAGS@ \
+	@TSAN_LDFLAGS@ \
+	@UBSAN_LDFLAGS@ \
+	@COVERAGE_LDFLAGS@ \
 	${RT_LIBS} ${LIBM}
 
 noinst_PROGRAMS = varnishncsa_opt2rst
