@@ -136,6 +136,27 @@ if a lot of them fails, and in particular if the `b00000.vtc` test
 fails, something is horribly wrong, and you will get nowhere without
 figuring out what.
 
+A Note About i[3456]86
+''''''''''''''''''''''
+
+Varnish is written in C and makes heavy use of double-precision floating point
+arithmetic. On i386, i486, and i586, the floating point unit (the 387) is not
+IEEE754 compliant, and at least gcc and clang seem to have taken this to mean it
+is fine to break certain guarantees the C standard requires of a conforming
+implementation. On i686, which can do floating point arithmetic with SSE
+registers, both gcc and clang default to using the 387 for FP operations.
+
+If you encounter many failing tests in which Varnish fails to start or exhibits
+significant problems with timeouts while running tests, you have built with gcc
+or clang, and you are running Varnish on these architectures, you can try the
+following::
+
+	sh CFLAGS="-ffloat-store -fexcess-precision=standard" configure
+	make
+
+On these architectures, we *highly* recommend you run tests with `make check` to
+catch any possible problems related to this up-front.
+
 Installing
 ----------
 
