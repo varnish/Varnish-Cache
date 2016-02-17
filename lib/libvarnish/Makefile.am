@@ -36,8 +36,11 @@ libvarnish_la_SOURCES = \
 	vsha256.c \
 	vss.c
 
-libvarnish_la_CFLAGS = -DVARNISH_STATE_DIR='"${VARNISH_STATE_DIR}"'
-libvarnish_la_LIBADD = ${RT_LIBS} ${NET_LIBS} ${LIBM} @PCRE_LIBS@
+libvarnish_la_CFLAGS = \
+	-DVARNISH_STATE_DIR='"${VARNISH_STATE_DIR}"' \
+	@SAN_CFLAGS@
+libvarnish_la_LIBADD = ${RT_LIBS} ${NET_LIBS} ${LIBM} @PCRE_LIBS@ \
+	@SAN_LDFLAGS@
 
 if ENABLE_TESTS
 TESTS = vnum_c_test

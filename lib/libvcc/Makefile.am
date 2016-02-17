@@ -8,7 +8,11 @@ AM_CPPFLAGS = \
 
 pkglib_LTLIBRARIES = libvcc.la
 
-libvcc_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version
+libvcc_la_CFLAGS = \
+	@SAN_CFLAGS@
+
+libvcc_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version \
+	@SAN_LDFLAGS@
 
 libvcc_la_SOURCES = \
 	vcc_compile.h \

@@ -279,6 +279,35 @@ if test "$ac_cv_have_viz" = no; then
 fi
 CFLAGS="${save_CFLAGS}"
 
+UBSAN_CFLAGS=
+UBSAN_LDFLAGS=
+AC_ARG_ENABLE(ubsan,
+	AS_HELP_STRING([--enable-ubsan],[enable undefined behavior sanitizer (default is NO)]),
+	UBSAN_FLAGS="-fsanitize=undefined")
+
+TSAN_CFLAGS=
+TSAN_LDFLAGS=
+AC_ARG_ENABLE(tsan,
+	AS_HELP_STRING([--enable-tsan],[enable thread sanitizer (default is NO)]),
+	TSAN_FLAGS="-fsanitize=thread")
+
+ASAN_CFLAGS=
+ASAN_LDFLAGS=
+AC_ARG_ENABLE(asan,
+	AS_HELP_STRING([--enable-asan],[enable address sanitizer (default is NO)]),
+	ASAN_FLAGS="-fsanitize=address")
+
+MSAN_CFLAGS=
+MSAN_LDFLAGS=
+AC_ARG_ENABLE(msan,
+	AS_HELP_STRING([--enable-msan],[enable memory sanitizer (default is NO)]),
+	MSAN_FLAGS="-fsanitize=memory")
+
+SAN_CFLAGS="-fPIC ${UBSAN_FLAGS} ${TSAN_FLAGS} ${ASAN_FLAGS} ${MSAN_FLAGS} -fPIE -fno-omit-frame-pointer"
+AC_SUBST(SAN_CFLAGS)
+SAN_LDFLAGS="${UBSAN_FLAGS} ${TSAN_FLAGS} ${ASAN_FLAGS} ${MSAN_FLAGS} -pie"
+AC_SUBST(SAN_LDFLAGS)
+
 # Use jemalloc on Linux
 JEMALLOC_LDADD=
 AC_ARG_WITH([jemalloc],

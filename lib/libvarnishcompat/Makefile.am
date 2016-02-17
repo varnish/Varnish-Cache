@@ -8,7 +8,11 @@ AM_LDFLAGS  = $(AM_LT_LDFLAGS)
 
 pkglib_LTLIBRARIES = libvarnishcompat.la
 
-libvarnishcompat_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version
+libvarnishcompat_la_CFLAGS = \
+	@SAN_CFLAGS@
+
+libvarnishcompat_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version \
+	@SAN_LDFLAGS@
 
 libvarnishcompat_la_SOURCES = \
 	daemon.c \

@@ -16,10 +16,14 @@ varnishhist_SOURCES = varnishhist.c \
 	$(top_srcdir)/lib/libvarnish/flopen.c \
 	$(top_srcdir)/lib/libvarnishtools/vut.c
 
+varnishhist_CFLAGS = \
+	@SAN_CFLAGS@
+
 varnishhist_LDADD = \
 	$(top_builddir)/lib/libvarnishcompat/libvarnishcompat.la \
 	$(top_builddir)/lib/libvarnishapi/libvarnishapi.la \
 	-lm \
+	@SAN_LDFLAGS@ \
 	@CURSES_LIB@ ${RT_LIBS} ${PTHREAD_LIBS}
 
 noinst_PROGRAMS = varnishhist_opt2rst

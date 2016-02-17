@@ -13,7 +13,11 @@ vmodtool = $(top_srcdir)/lib/libvcc/vmodtool.py
 vmodtoolargs = --strict
 vmod_LTLIBRARIES = libvmod_std.la
 
-libvmod_std_la_LDFLAGS = $(AM_LDFLAGS) -module -export-dynamic -avoid-version -shared
+libvmod_std_la_CFLAGS = \
+	@SAN_CFLAGS@
+
+libvmod_std_la_LDFLAGS = $(AM_LDFLAGS) -module -export-dynamic -avoid-version -shared \
+	@SAN_LDFLAGS@
 
 libvmod_std_la_SOURCES = \
 	vmod_std.c \
