@@ -29,6 +29,10 @@ Change it to::
                -S /etc/varnish/secret \
                -s malloc,256m"
 
+Since April 2015, Debian (v8) and Ubuntu (v15.04) are using systemd as 
+a default init system. You should edit `/lib/systemd/system/varnish.service` 
+file instead.
+
 Red Hat Enterprise Linux / CentOS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
