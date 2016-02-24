@@ -40,8 +40,6 @@ Create new file `/etc/systemd/system/varnish.service.d/customexec.conf`
   ExecStart=
   ExecStart=/usr/sbin/varnishd -a :80 -T localhost:6082 -f /etc/varnish/default.vcl -S /etc/varnish/secret -s malloc,256m
 
-Reload systemctl (`systemctl daemon-reload`) before restarting Varnish.
-
 
 Red Hat Enterprise Linux / CentOS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
