@@ -341,7 +341,6 @@ RES_StreamStart(struct sess *sp)
 	sctx = sp->wrk->sctx;
 	CHECK_OBJ_NOTNULL(sctx, STREAM_CTX_MAGIC);
 
-	AZ(sp->wrk->res_mode & RES_ESI_CHILD);
 	AN(sp->wantbody);
 
 	WRW_Reserve(sp->wrk, &sp->fd);
@@ -358,8 +357,12 @@ RES_StreamStart(struct sess *sp)
 		    "Content-Length: %s", sp->wrk->h_content_length);
 	}
 
-	sp->wrk->acct_tmp.hdrbytes +=
-	    http_Write(sp->wrk, sp->wrk->resp, 1);
+	/*
+	 * Send HTTP protocol header, unless interior ESI object
+	 */
+	if (!(sp->wrk->res_mode & RES_ESI_CHILD))
+		sp->wrk->acct_tmp.hdrbytes +=
+		    http_Write(sp->wrk, sp->wrk->resp, 1);
 
 	if (sp->wrk->res_mode & RES_CHUNKED)
 		WRW_Chunked(sp->wrk);
