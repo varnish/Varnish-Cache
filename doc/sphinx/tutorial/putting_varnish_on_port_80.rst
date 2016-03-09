@@ -9,8 +9,8 @@ First we stop varnish: ``service varnish stop``
 
 Now we need to edit the configuration file that starts Varnish.
 
-Debian/Ubuntu
-~~~~~~~~~~~~~
+Debian/Ubuntu (old)
+~~~~~~~~~~~~~~~~~~~
 
 On Debian/Ubuntu this is `/etc/default/varnish`. In the file you'll find
 some text that looks like this::
@@ -28,6 +28,18 @@ Change it to::
                -f /etc/varnish/default.vcl \
                -S /etc/varnish/secret \
                -s malloc,256m"
+
+Debian (v8+) / Ubuntu (v15.04+)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Since April 2015, Debian and Ubuntu are using systemd as a default init system. 
+
+Create new file `/etc/systemd/system/varnish.service.d/customexec.conf`
+
+  [Service]
+  ExecStart=
+  ExecStart=/usr/sbin/varnishd -a :80 -T localhost:6082 -f /etc/varnish/default.vcl -S /etc/varnish/secret -s malloc,256m
+
 
 Red Hat Enterprise Linux / CentOS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
